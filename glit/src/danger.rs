@@ -36,9 +36,9 @@ pub fn use_color() -> bool {
 fn ansi_for(level: DangerLevel) -> Option<&'static str> {
     match level {
         DangerLevel::Safe => None,
-        DangerLevel::Caution => Some("\x1b[33m"),       // yellow
-        DangerLevel::Destructive => Some("\x1b[31m"),   // red
-        DangerLevel::Irreversible => Some("\x1b[1;31m"),// bold red
+        DangerLevel::Caution => Some("\x1b[33m"), // yellow
+        DangerLevel::Destructive => Some("\x1b[31m"), // red
+        DangerLevel::Irreversible => Some("\x1b[1;31m"), // bold red
     }
 }
 
@@ -101,9 +101,15 @@ pub fn intent_danger(op: &ScopedWriteOp, ctx: &RepoContext) -> DangerLevel {
             }
         }
 
-        W::Reset { mode: ResetMode::Soft } => DangerLevel::Caution,
-        W::Reset { mode: ResetMode::Mixed } => DangerLevel::Caution,
-        W::Reset { mode: ResetMode::Hard } => DangerLevel::Destructive,
+        W::Reset {
+            mode: ResetMode::Soft,
+        } => DangerLevel::Caution,
+        W::Reset {
+            mode: ResetMode::Mixed,
+        } => DangerLevel::Caution,
+        W::Reset {
+            mode: ResetMode::Hard,
+        } => DangerLevel::Destructive,
 
         W::PullRebase { .. } => {
             if ctx.has_uncommitted() {
@@ -165,9 +171,15 @@ pub fn step_danger(step: &PipelineStep, ctx: &RepoContext) -> DangerLevel {
         P::Push { .. } => DangerLevel::Caution,
 
         // Reset depends on mode.
-        P::Reset { mode: ResetMode::Soft } => DangerLevel::Caution,
-        P::Reset { mode: ResetMode::Mixed } => DangerLevel::Caution,
-        P::Reset { mode: ResetMode::Hard } => DangerLevel::Destructive,
+        P::Reset {
+            mode: ResetMode::Soft,
+        } => DangerLevel::Caution,
+        P::Reset {
+            mode: ResetMode::Mixed,
+        } => DangerLevel::Caution,
+        P::Reset {
+            mode: ResetMode::Hard,
+        } => DangerLevel::Destructive,
 
         // Pull-rebase potentially rewrites work in progress.
         P::PullRebase { .. } => {
@@ -239,14 +251,21 @@ mod tests {
 
     #[test]
     fn safe_pull_when_clean() {
-        let op = ScopedWriteOp::Pull { remote: "origin".to_string() };
+        let op = ScopedWriteOp::Pull {
+            remote: "origin".to_string(),
+        };
         assert_eq!(intent_danger(&op, &ctx_clean("feat/x")), DangerLevel::Safe);
     }
 
     #[test]
     fn caution_pull_when_dirty() {
-        let op = ScopedWriteOp::Pull { remote: "origin".to_string() };
-        assert_eq!(intent_danger(&op, &ctx_dirty("feat/x")), DangerLevel::Caution);
+        let op = ScopedWriteOp::Pull {
+            remote: "origin".to_string(),
+        };
+        assert_eq!(
+            intent_danger(&op, &ctx_dirty("feat/x")),
+            DangerLevel::Caution
+        );
     }
 
     #[test]
@@ -254,12 +273,17 @@ mod tests {
         let op = ScopedWriteOp::Commit {
             message: CommitMessage::Provided("x".to_string()),
         };
-        assert_eq!(intent_danger(&op, &ctx_clean("feat/x")), DangerLevel::Caution);
+        assert_eq!(
+            intent_danger(&op, &ctx_clean("feat/x")),
+            DangerLevel::Caution
+        );
     }
 
     #[test]
     fn hard_reset_destructive() {
-        let op = ScopedWriteOp::Reset { mode: ResetMode::Hard };
+        let op = ScopedWriteOp::Reset {
+            mode: ResetMode::Hard,
+        };
         assert_eq!(
             intent_danger(&op, &ctx_clean("feat/x")),
             DangerLevel::Destructive
@@ -268,7 +292,9 @@ mod tests {
 
     #[test]
     fn force_push_irreversible_on_main() {
-        let op = ScopedWriteOp::ForcePush { remote: "origin".to_string() };
+        let op = ScopedWriteOp::ForcePush {
+            remote: "origin".to_string(),
+        };
         assert_eq!(
             intent_danger(&op, &ctx_clean("main")),
             DangerLevel::Irreversible
@@ -277,7 +303,9 @@ mod tests {
 
     #[test]
     fn force_push_destructive_on_personal_branch() {
-        let op = ScopedWriteOp::ForcePush { remote: "origin".to_string() };
+        let op = ScopedWriteOp::ForcePush {
+            remote: "origin".to_string(),
+        };
         assert_eq!(
             intent_danger(&op, &ctx_clean("feat/personal-thing")),
             DangerLevel::Destructive

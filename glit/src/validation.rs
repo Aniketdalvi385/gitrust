@@ -275,7 +275,9 @@ impl Validator for DefaultValidator {
         //     If a prior step in this pipeline is an Add, assume it will stage something
         //     (we can't pre-execute it), so only check when Commit has no preceding Add.
         let has_prior_add = |idx: usize| -> bool {
-            steps[..idx].iter().any(|s| matches!(s, PipelineStep::Add { .. }))
+            steps[..idx]
+                .iter()
+                .any(|s| matches!(s, PipelineStep::Add { .. }))
         };
         for (i, step) in steps.iter().enumerate() {
             if matches!(step, PipelineStep::Commit { .. }) && !has_prior_add(i) {
@@ -382,7 +384,10 @@ impl Validator for DefaultValidator {
     ) -> String {
         let use_color = crate::danger::use_color();
         let (node, connector) = if use_color {
-            (crate::copy::TIMELINE_RUNNING, crate::copy::TIMELINE_CONNECTOR)
+            (
+                crate::copy::TIMELINE_RUNNING,
+                crate::copy::TIMELINE_CONNECTOR,
+            )
         } else {
             (
                 crate::copy::TIMELINE_RUNNING_ASCII,
@@ -429,11 +434,19 @@ impl Validator for DefaultValidator {
             if let PipelineStep::Add { files } = step {
                 if !files.is_empty() && files.len() <= 5 {
                     for f in files {
-                        out.push_str(&format!("  {}     {}\n", dim(connector), dim(&format!("+ {}", f))));
+                        out.push_str(&format!(
+                            "  {}     {}\n",
+                            dim(connector),
+                            dim(&format!("+ {}", f))
+                        ));
                     }
                 } else if files.len() > 5 {
                     for f in files.iter().take(3) {
-                        out.push_str(&format!("  {}     {}\n", dim(connector), dim(&format!("+ {}", f))));
+                        out.push_str(&format!(
+                            "  {}     {}\n",
+                            dim(connector),
+                            dim(&format!("+ {}", f))
+                        ));
                     }
                     out.push_str(&format!(
                         "  {}     {}\n",
@@ -537,11 +550,9 @@ fn has_submodules(repo: &Repository) -> bool {
 
 fn is_likely_binary(path: &str) -> bool {
     let binary_extensions = [
-        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".webp",
-        ".zip", ".tar", ".gz", ".bz2", ".7z",
-        ".exe", ".dll", ".so", ".dylib",
-        ".pdf", ".doc", ".docx",
-        ".woff", ".woff2", ".ttf", ".otf",
+        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".webp", ".zip", ".tar", ".gz", ".bz2",
+        ".7z", ".exe", ".dll", ".so", ".dylib", ".pdf", ".doc", ".docx", ".woff", ".woff2", ".ttf",
+        ".otf",
     ];
     let lower = path.to_lowercase();
     binary_extensions.iter().any(|ext| lower.ends_with(ext))
@@ -556,7 +567,9 @@ fn post_check_add(
     files: &[String],
     _pre_state: &PreStepState,
 ) -> anyhow::Result<PostCheckResult> {
-    let index = repo.index().context("Failed to read index for post-check")?;
+    let index = repo
+        .index()
+        .context("Failed to read index for post-check")?;
 
     let missing: Vec<&String> = files
         .iter()
@@ -692,7 +705,11 @@ pub fn format_step_label(step: &PipelineStep) -> (&'static str, String) {
             };
             ("commit", format!("\"{}\"", preview))
         }
-        PipelineStep::Push { remote, branch, set_upstream } => {
+        PipelineStep::Push {
+            remote,
+            branch,
+            set_upstream,
+        } => {
             let detail = if *set_upstream {
                 format!("→ {}/{} (set upstream)", remote, branch)
             } else {
@@ -719,19 +736,20 @@ pub fn format_step_label(step: &PipelineStep) -> (&'static str, String) {
             let detail = path.clone().unwrap_or_default();
             ("diff", detail)
         }
-        PipelineStep::AddRemote { name, url } => {
-            ("add remote", format!("{} {}", name, url))
-        }
+        PipelineStep::AddRemote { name, url } => ("add remote", format!("{} {}", name, url)),
         PipelineStep::RemoveRemote { name } => ("remove remote", name.clone()),
-        PipelineStep::Undo { undone_sha, undone_summary, .. } => {
-            ("undo", format!("{} \"{}\"", undone_sha, undone_summary))
-        }
+        PipelineStep::Undo {
+            undone_sha,
+            undone_summary,
+            ..
+        } => ("undo", format!("{} \"{}\"", undone_sha, undone_summary)),
         PipelineStep::PullRebase { remote, branch } => {
             ("rebase", format!("onto {}/{}", remote, branch))
         }
-        PipelineStep::ForcePush { remote, branch } => {
-            ("force push", format!("→ {}/{} (with-lease)", remote, branch))
-        }
+        PipelineStep::ForcePush { remote, branch } => (
+            "force push",
+            format!("→ {}/{} (with-lease)", remote, branch),
+        ),
         PipelineStep::DiscardLocal { remote, branch } => {
             ("discard local", format!("take {}/{}", remote, branch))
         }
@@ -945,11 +963,15 @@ mod tests {
     fn test_format_step_label_uses_glit_verbs() {
         let cases = [
             (
-                PipelineStep::Add { files: vec!["a.rs".to_string()] },
+                PipelineStep::Add {
+                    files: vec!["a.rs".to_string()],
+                },
                 "stage",
             ),
             (
-                PipelineStep::Commit { message: "fix".to_string() },
+                PipelineStep::Commit {
+                    message: "fix".to_string(),
+                },
                 "commit",
             ),
             (
@@ -966,7 +988,10 @@ mod tests {
             let (verb, _detail) = format_step_label(&step);
             assert_eq!(verb, expected_verb, "step did not produce expected verb");
             // No raw "git " prefix anywhere
-            assert!(!verb.starts_with("git "), "verb should not start with 'git '");
+            assert!(
+                !verb.starts_with("git "),
+                "verb should not start with 'git '"
+            );
         }
     }
 
@@ -977,9 +1002,7 @@ mod tests {
 
         std::fs::write(dir.path().join("new_file.rs"), "fn main() {}").unwrap();
         let mut index = repo.index().unwrap();
-        index
-            .add_path(std::path::Path::new("new_file.rs"))
-            .unwrap();
+        index.add_path(std::path::Path::new("new_file.rs")).unwrap();
         index.write().unwrap();
 
         let v = DefaultValidator;
@@ -1076,8 +1099,15 @@ mod tests {
         // main commit as a child of base, advancing the current branch; leaves
         // workdir+index at "main\n" so the tree is clean for `git rebase`.
         let tree_main = repo.find_tree(write_tree("main\n")).unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "main", &tree_main, &[&base_commit])
-            .unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "main",
+            &tree_main,
+            &[&base_commit],
+        )
+        .unwrap();
 
         // Real git so the rebase state files are produced faithfully.
         let out = std::process::Command::new("git")
@@ -1165,8 +1195,15 @@ mod tests {
             .unwrap();
 
         let tree_ours = repo.find_tree(stage("ours\n")).unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "ours", &tree_ours, &[&base_commit])
-            .unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "ours",
+            &tree_ours,
+            &[&base_commit],
+        )
+        .unwrap();
 
         let their_ac = repo.find_annotated_commit(theirs).unwrap();
         repo.merge(&[&their_ac], None, None).unwrap();
@@ -1179,7 +1216,10 @@ mod tests {
 
         // Capture pre-state while still mid-merge, then land the merge commit.
         let pre = capture_pre_step_state(&repo);
-        assert!(pre.was_merging, "pre-state should record the in-progress merge");
+        assert!(
+            pre.was_merging,
+            "pre-state should record the in-progress merge"
+        );
         Git2Operations.commit(&repo, "merge theirs").unwrap();
 
         let v = DefaultValidator;
@@ -1252,7 +1292,7 @@ mod tests {
     // function → no fixtures, fully deterministic.
     #[test]
     fn test_situation_gate_matrix() {
-        use crate::commands::{CommitMessage, ReadOnlyOp};
+        use crate::commands::{CommitMessage, FileSelection, ReadOnlyOp, SyncStrategy};
 
         let mk = |tag: &str| -> IntentType {
             match tag {
@@ -1271,6 +1311,35 @@ mod tests {
                 "branch" => IntentType::ScopedWrite(ScopedWriteOp::Branch { name: "x".into() }),
                 "pull" => IntentType::ScopedWrite(ScopedWriteOp::Pull {
                     remote: "origin".into(),
+                }),
+                // Destructive / fall-through ops — never exercised before, so a
+                // mis-categorization in the is_*_like predicates used to pass CI
+                // green (finding #12). Pin them here.
+                "force" => IntentType::ScopedWrite(ScopedWriteOp::ForcePush {
+                    remote: "origin".into(),
+                }),
+                "discard" => IntentType::ScopedWrite(ScopedWriteOp::DiscardLocal {
+                    remote: "origin".into(),
+                }),
+                "pullrebase" => IntentType::ScopedWrite(ScopedWriteOp::PullRebase {
+                    remote: "origin".into(),
+                }),
+                "reset" => IntentType::ScopedWrite(ScopedWriteOp::Reset {
+                    mode: ResetMode::Hard,
+                }),
+                "undo" => IntentType::ScopedWrite(ScopedWriteOp::Undo),
+                "stash" => IntentType::ScopedWrite(ScopedWriteOp::Stash),
+                "add" => IntentType::ScopedWrite(ScopedWriteOp::Add {
+                    files: FileSelection::All,
+                }),
+                "acp" => IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush {
+                    feature_hint: "x".into(),
+                }),
+                "commitpush" => IntentType::FeaturePipeline(FeaturePipelineOp::CommitPush {
+                    message: CommitMessage::Provided("m".into()),
+                }),
+                "sync" => IntentType::FeaturePipeline(FeaturePipelineOp::Sync {
+                    strategy: SyncStrategy::Rebase,
                 }),
                 _ => unreachable!(),
             }
@@ -1291,61 +1360,502 @@ mod tests {
             (RepoSituation::EmptyRepo, "push", Some("commits yet")),
             (RepoSituation::EmptyRepo, "pull", Some("commits yet")),
             (RepoSituation::EmptyRepo, "checkout", Some("commits yet")),
-            (RepoSituation::DetachedHead { stranded_commits: 0 }, "ro", None),
-            (RepoSituation::DetachedHead { stranded_commits: 0 }, "checkout", None),
-            (RepoSituation::DetachedHead { stranded_commits: 0 }, "branch", None),
-            (RepoSituation::DetachedHead { stranded_commits: 0 }, "commit", Some("Checkout a branch")),
-            (RepoSituation::DetachedHead { stranded_commits: 0 }, "push", Some("Checkout a branch")),
-            (RepoSituation::DetachedHead { stranded_commits: 0 }, "pull", Some("Checkout a branch")),
-            (RepoSituation::DetachedHead { stranded_commits: 2 }, "ro", None),
-            (RepoSituation::DetachedHead { stranded_commits: 2 }, "branch", None),
-            (RepoSituation::DetachedHead { stranded_commits: 2 }, "checkout", Some("not on any branch")),
-            (RepoSituation::DetachedHead { stranded_commits: 2 }, "commit", Some("Checkout a branch")),
-            (RepoSituation::DetachedHead { stranded_commits: 2 }, "push", Some("Checkout a branch")),
-            (RepoSituation::MidMerge { conflicts: vec!["f".into()], resolved: false }, "ro", None),
-            (RepoSituation::MidMerge { conflicts: vec!["f".into()], resolved: false }, "commit", Some("merge is in progress")),
-            (RepoSituation::MidMerge { conflicts: vec!["f".into()], resolved: false }, "push", Some("merge is in progress")),
-            (RepoSituation::MidMerge { conflicts: vec!["f".into()], resolved: false }, "checkout", Some("merge is in progress")),
-            (RepoSituation::MidMerge { conflicts: vec!["f".into()], resolved: false }, "pull", Some("merge is in progress")),
-            (RepoSituation::MidMerge { conflicts: vec![], resolved: true }, "ro", None),
-            (RepoSituation::MidMerge { conflicts: vec![], resolved: true }, "commit", None),
-            (RepoSituation::MidMerge { conflicts: vec![], resolved: true }, "push", Some("merge is in progress")),
-            (RepoSituation::MidMerge { conflicts: vec![], resolved: true }, "checkout", Some("merge is in progress")),
-            (RepoSituation::MidMerge { conflicts: vec![], resolved: true }, "branch", Some("merge is in progress")),
-            (RepoSituation::MidRebase { current: 1, total: 3, conflicted: vec!["f".into()] }, "ro", None),
+            (
+                RepoSituation::DetachedHead {
+                    stranded_commits: 0,
+                },
+                "ro",
+                None,
+            ),
+            (
+                RepoSituation::DetachedHead {
+                    stranded_commits: 0,
+                },
+                "checkout",
+                None,
+            ),
+            (
+                RepoSituation::DetachedHead {
+                    stranded_commits: 0,
+                },
+                "branch",
+                None,
+            ),
+            (
+                RepoSituation::DetachedHead {
+                    stranded_commits: 0,
+                },
+                "commit",
+                Some("Checkout a branch"),
+            ),
+            (
+                RepoSituation::DetachedHead {
+                    stranded_commits: 0,
+                },
+                "push",
+                Some("Checkout a branch"),
+            ),
+            (
+                RepoSituation::DetachedHead {
+                    stranded_commits: 0,
+                },
+                "pull",
+                Some("Checkout a branch"),
+            ),
+            (
+                RepoSituation::DetachedHead {
+                    stranded_commits: 2,
+                },
+                "ro",
+                None,
+            ),
+            (
+                RepoSituation::DetachedHead {
+                    stranded_commits: 2,
+                },
+                "branch",
+                None,
+            ),
+            (
+                RepoSituation::DetachedHead {
+                    stranded_commits: 2,
+                },
+                "checkout",
+                Some("not on any branch"),
+            ),
+            (
+                RepoSituation::DetachedHead {
+                    stranded_commits: 2,
+                },
+                "commit",
+                Some("Checkout a branch"),
+            ),
+            (
+                RepoSituation::DetachedHead {
+                    stranded_commits: 2,
+                },
+                "push",
+                Some("Checkout a branch"),
+            ),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec!["f".into()],
+                    resolved: false,
+                },
+                "ro",
+                None,
+            ),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec!["f".into()],
+                    resolved: false,
+                },
+                "commit",
+                Some("merge is in progress"),
+            ),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec!["f".into()],
+                    resolved: false,
+                },
+                "push",
+                Some("merge is in progress"),
+            ),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec!["f".into()],
+                    resolved: false,
+                },
+                "checkout",
+                Some("merge is in progress"),
+            ),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec!["f".into()],
+                    resolved: false,
+                },
+                "pull",
+                Some("merge is in progress"),
+            ),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec![],
+                    resolved: true,
+                },
+                "ro",
+                None,
+            ),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec![],
+                    resolved: true,
+                },
+                "commit",
+                None,
+            ),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec![],
+                    resolved: true,
+                },
+                "push",
+                Some("merge is in progress"),
+            ),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec![],
+                    resolved: true,
+                },
+                "checkout",
+                Some("merge is in progress"),
+            ),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec![],
+                    resolved: true,
+                },
+                "branch",
+                Some("merge is in progress"),
+            ),
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "ro",
+                None,
+            ),
             // Read-only ops stay Allowed even in a blocking state — pins the
             // ReadOnly(_) short-circuit so a future reclassification of Log/Diff
             // out of ReadOnlyOp would fail here rather than silently regress.
-            (RepoSituation::MidRebase { current: 1, total: 3, conflicted: vec!["f".into()] }, "log", None),
-            (RepoSituation::MidRebase { current: 1, total: 3, conflicted: vec!["f".into()] }, "diff", None),
-            (RepoSituation::MidRebase { current: 1, total: 3, conflicted: vec!["f".into()] }, "commit", Some("rebase is in progress")),
-            (RepoSituation::MidRebase { current: 1, total: 3, conflicted: vec!["f".into()] }, "push", Some("rebase is in progress")),
-            (RepoSituation::MidRebase { current: 1, total: 3, conflicted: vec!["f".into()] }, "checkout", Some("rebase is in progress")),
-            (RepoSituation::MidRebase { current: 1, total: 3, conflicted: vec!["f".into()] }, "pull", Some("rebase is in progress")),
-            (RepoSituation::MidCherryPick { conflicted: vec![] }, "ro", None),
-            (RepoSituation::MidCherryPick { conflicted: vec![] }, "commit", Some("cherry-pick is in progress")),
-            (RepoSituation::MidCherryPick { conflicted: vec![] }, "push", Some("cherry-pick is in progress")),
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "log",
+                None,
+            ),
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "diff",
+                None,
+            ),
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "commit",
+                Some("rebase is in progress"),
+            ),
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "push",
+                Some("rebase is in progress"),
+            ),
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "checkout",
+                Some("rebase is in progress"),
+            ),
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "pull",
+                Some("rebase is in progress"),
+            ),
+            (
+                RepoSituation::MidCherryPick { conflicted: vec![] },
+                "ro",
+                None,
+            ),
+            (
+                RepoSituation::MidCherryPick { conflicted: vec![] },
+                "commit",
+                Some("cherry-pick is in progress"),
+            ),
+            (
+                RepoSituation::MidCherryPick { conflicted: vec![] },
+                "push",
+                Some("cherry-pick is in progress"),
+            ),
             (RepoSituation::MidRevert { conflicted: vec![] }, "ro", None),
-            (RepoSituation::MidRevert { conflicted: vec![] }, "commit", Some("revert is in progress")),
+            (
+                RepoSituation::MidRevert { conflicted: vec![] },
+                "commit",
+                Some("revert is in progress"),
+            ),
             (RepoSituation::MidBisect, "ro", None),
-            (RepoSituation::MidBisect, "commit", Some("bisect is in progress")),
-            (RepoSituation::MidBisect, "push", Some("bisect is in progress")),
-            (RepoSituation::Diverged { ahead: 1, behind: 1 }, "ro", None),
-            (RepoSituation::Diverged { ahead: 1, behind: 1 }, "commit", None),
-            (RepoSituation::Diverged { ahead: 1, behind: 1 }, "pull", None),
-            (RepoSituation::Diverged { ahead: 1, behind: 1 }, "push", Some("diverged")),
-            (RepoSituation::RemoteRewritten { old_tip: z, new_tip: z }, "ro", None),
-            (RepoSituation::RemoteRewritten { old_tip: z, new_tip: z }, "commit", None),
-            (RepoSituation::RemoteRewritten { old_tip: z, new_tip: z }, "checkout", None),
-            (RepoSituation::RemoteRewritten { old_tip: z, new_tip: z }, "pull", Some("remote history changed")),
-            (RepoSituation::RemoteRewritten { old_tip: z, new_tip: z }, "push", Some("remote history changed")),
+            (
+                RepoSituation::MidBisect,
+                "commit",
+                Some("bisect is in progress"),
+            ),
+            (
+                RepoSituation::MidBisect,
+                "push",
+                Some("bisect is in progress"),
+            ),
+            (
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1,
+                },
+                "ro",
+                None,
+            ),
+            (
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1,
+                },
+                "commit",
+                None,
+            ),
+            (
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1,
+                },
+                "pull",
+                None,
+            ),
+            (
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1,
+                },
+                "push",
+                Some("diverged"),
+            ),
+            (
+                RepoSituation::RemoteRewritten {
+                    old_tip: z,
+                    new_tip: z,
+                },
+                "ro",
+                None,
+            ),
+            (
+                RepoSituation::RemoteRewritten {
+                    old_tip: z,
+                    new_tip: z,
+                },
+                "commit",
+                None,
+            ),
+            (
+                RepoSituation::RemoteRewritten {
+                    old_tip: z,
+                    new_tip: z,
+                },
+                "checkout",
+                None,
+            ),
+            (
+                RepoSituation::RemoteRewritten {
+                    old_tip: z,
+                    new_tip: z,
+                },
+                "pull",
+                Some("remote history changed"),
+            ),
+            (
+                RepoSituation::RemoteRewritten {
+                    old_tip: z,
+                    new_tip: z,
+                },
+                "push",
+                Some("remote history changed"),
+            ),
             (RepoSituation::StaleLock { age_secs: 600 }, "ro", None),
             (RepoSituation::StaleLock { age_secs: 600 }, "log", None),
             (RepoSituation::StaleLock { age_secs: 600 }, "diff", None),
-            (RepoSituation::StaleLock { age_secs: 600 }, "commit", Some("index.lock")),
-            (RepoSituation::StaleLock { age_secs: 600 }, "push", Some("index.lock")),
-            (RepoSituation::StaleLock { age_secs: 600 }, "checkout", Some("index.lock")),
-            (RepoSituation::StaleLock { age_secs: 600 }, "pull", Some("index.lock")),
+            (
+                RepoSituation::StaleLock { age_secs: 600 },
+                "commit",
+                Some("index.lock"),
+            ),
+            (
+                RepoSituation::StaleLock { age_secs: 600 },
+                "push",
+                Some("index.lock"),
+            ),
+            (
+                RepoSituation::StaleLock { age_secs: 600 },
+                "checkout",
+                Some("index.lock"),
+            ),
+            (
+                RepoSituation::StaleLock { age_secs: 600 },
+                "pull",
+                Some("index.lock"),
+            ),
+            // ---- Destructive / fall-through op coverage (finding #12) ----
+            // push-like family (Push/ForcePush/AddCommitPush/CommitPush) blocks
+            // wherever plain push blocks.
+            (
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1,
+                },
+                "force",
+                Some("diverged"),
+            ),
+            (
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1,
+                },
+                "acp",
+                Some("diverged"),
+            ),
+            (
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1,
+                },
+                "commitpush",
+                Some("diverged"),
+            ),
+            (
+                RepoSituation::RemoteRewritten {
+                    old_tip: z,
+                    new_tip: z,
+                },
+                "force",
+                Some("remote history changed"),
+            ),
+            (
+                RepoSituation::RemoteRewritten {
+                    old_tip: z,
+                    new_tip: z,
+                },
+                "commitpush",
+                Some("remote history changed"),
+            ),
+            (RepoSituation::EmptyRepo, "acp", Some("commits yet")),
+            (RepoSituation::EmptyRepo, "commitpush", Some("commits yet")),
+            // reconcile family (Pull/PullRebase/DiscardLocal/Sync) blocks under a
+            // rewritten remote. Under plain divergence it is still Allowed (the
+            // rebase-vs-merge ChoiceGate is Phase 12; destructive DiscardLocal/Reset
+            // in a diverged tree stay guarded by danger.rs type-to-confirm — the
+            // known matrix gap in finding #11, ticketed, encoded here as current
+            // behavior so a future tightening trips this row).
+            (
+                RepoSituation::RemoteRewritten {
+                    old_tip: z,
+                    new_tip: z,
+                },
+                "discard",
+                Some("remote history changed"),
+            ),
+            (
+                RepoSituation::RemoteRewritten {
+                    old_tip: z,
+                    new_tip: z,
+                },
+                "pullrebase",
+                Some("remote history changed"),
+            ),
+            (
+                RepoSituation::RemoteRewritten {
+                    old_tip: z,
+                    new_tip: z,
+                },
+                "sync",
+                Some("remote history changed"),
+            ),
+            (
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1,
+                },
+                "discard",
+                None,
+            ),
+            (
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1,
+                },
+                "pullrebase",
+                None,
+            ),
+            (
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1,
+                },
+                "sync",
+                None,
+            ),
+            // fall-through writes (Reset/Undo/Stash) block in every in-progress
+            // state and on an empty repo, but are neither push-like nor reconcile,
+            // so a rewritten remote leaves them Allowed.
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "reset",
+                Some("rebase is in progress"),
+            ),
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "stash",
+                Some("rebase is in progress"),
+            ),
+            (
+                RepoSituation::MidBisect,
+                "reset",
+                Some("bisect is in progress"),
+            ),
+            (RepoSituation::EmptyRepo, "reset", Some("commits yet")),
+            (RepoSituation::EmptyRepo, "undo", Some("commits yet")),
+            (
+                RepoSituation::RemoteRewritten {
+                    old_tip: z,
+                    new_tip: z,
+                },
+                "reset",
+                None,
+            ),
+            // commit-like Add is the staging step allowed on an empty repo and on
+            // a resolved merge.
+            (RepoSituation::EmptyRepo, "add", None),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec![],
+                    resolved: true,
+                },
+                "add",
+                None,
+            ),
         ];
 
         for (situation, tag, expect) in &rows {

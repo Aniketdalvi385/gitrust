@@ -70,7 +70,11 @@ mod tests {
         let hooks_dir = repo.path().join("hooks");
         std::fs::create_dir_all(&hooks_dir).unwrap();
         let hook = hooks_dir.join("pre-commit");
-        std::fs::write(&hook, "#!/bin/sh\necho 'blocked by pre-commit hook' >&2\nexit 1\n").unwrap();
+        std::fs::write(
+            &hook,
+            "#!/bin/sh\necho 'blocked by pre-commit hook' >&2\nexit 1\n",
+        )
+        .unwrap();
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         // Stage a change to commit.

@@ -164,8 +164,12 @@ mod tests {
         // The match in `explain()` is exhaustive — this test just exercises
         // each variant once so we'd notice runtime panics or empty strings.
         let ops = vec![
-            ScopedWriteOp::Add { files: FileSelection::All },
-            ScopedWriteOp::Commit { message: CommitMessage::Provided("x".into()) },
+            ScopedWriteOp::Add {
+                files: FileSelection::All,
+            },
+            ScopedWriteOp::Commit {
+                message: CommitMessage::Provided("x".into()),
+            },
             ScopedWriteOp::AddAndCommit {
                 message: CommitMessage::Provided("x".into()),
                 files: FileSelection::All,
@@ -174,19 +178,40 @@ mod tests {
             ScopedWriteOp::Checkout { target: "x".into() },
             ScopedWriteOp::Stash,
             ScopedWriteOp::StashPop,
-            ScopedWriteOp::Reset { mode: ResetMode::Soft },
-            ScopedWriteOp::Reset { mode: ResetMode::Mixed },
-            ScopedWriteOp::Reset { mode: ResetMode::Hard },
-            ScopedWriteOp::Pull { remote: "origin".into() },
-            ScopedWriteOp::Push { remote: "origin".into() },
+            ScopedWriteOp::Reset {
+                mode: ResetMode::Soft,
+            },
+            ScopedWriteOp::Reset {
+                mode: ResetMode::Mixed,
+            },
+            ScopedWriteOp::Reset {
+                mode: ResetMode::Hard,
+            },
+            ScopedWriteOp::Pull {
+                remote: "origin".into(),
+            },
+            ScopedWriteOp::Push {
+                remote: "origin".into(),
+            },
             ScopedWriteOp::Init,
             ScopedWriteOp::DeleteRepo,
-            ScopedWriteOp::AddRemote { name: "origin".into(), url: "x".into() },
-            ScopedWriteOp::RemoveRemote { name: "origin".into() },
+            ScopedWriteOp::AddRemote {
+                name: "origin".into(),
+                url: "x".into(),
+            },
+            ScopedWriteOp::RemoveRemote {
+                name: "origin".into(),
+            },
             ScopedWriteOp::Undo,
-            ScopedWriteOp::PullRebase { remote: "origin".into() },
-            ScopedWriteOp::ForcePush { remote: "origin".into() },
-            ScopedWriteOp::DiscardLocal { remote: "origin".into() },
+            ScopedWriteOp::PullRebase {
+                remote: "origin".into(),
+            },
+            ScopedWriteOp::ForcePush {
+                remote: "origin".into(),
+            },
+            ScopedWriteOp::DiscardLocal {
+                remote: "origin".into(),
+            },
         ];
         for op in &ops {
             let e = explain(op);
@@ -198,7 +223,9 @@ mod tests {
     #[test]
     fn force_push_safety_mentions_force_with_lease() {
         // Snapshot drift test: the explanation must mention the actual safety flag.
-        let e = explain(&ScopedWriteOp::ForcePush { remote: "origin".into() });
+        let e = explain(&ScopedWriteOp::ForcePush {
+            remote: "origin".into(),
+        });
         let safety = e.safety.expect("force_push must have safety").0;
         assert!(
             safety.contains("--force-with-lease"),
@@ -210,9 +237,15 @@ mod tests {
     #[test]
     fn destructive_ops_have_recovery() {
         let destructive = vec![
-            ScopedWriteOp::Reset { mode: ResetMode::Hard },
-            ScopedWriteOp::ForcePush { remote: "origin".into() },
-            ScopedWriteOp::DiscardLocal { remote: "origin".into() },
+            ScopedWriteOp::Reset {
+                mode: ResetMode::Hard,
+            },
+            ScopedWriteOp::ForcePush {
+                remote: "origin".into(),
+            },
+            ScopedWriteOp::DiscardLocal {
+                remote: "origin".into(),
+            },
         ];
         for op in &destructive {
             let e = explain(op);

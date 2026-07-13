@@ -18,22 +18,43 @@ pub enum RepoSituation {
     NotARepo,
     /// Detached HEAD in an otherwise-clean repo. `stranded_commits` counts
     /// commits reachable from HEAD but from no local branch (S20/S21).
-    DetachedHead { stranded_commits: u32 },
+    DetachedHead {
+        stranded_commits: u32,
+    },
     /// Mid-merge: `MERGE_HEAD` present. `resolved` = index has no conflicts
     /// (the merge-aware commit from Phase 9.2 is the way out). S16/S17.
-    MidMerge { conflicts: Vec<String>, resolved: bool },
+    MidMerge {
+        conflicts: Vec<String>,
+        resolved: bool,
+    },
     /// Mid-rebase (S12/S18). `current`/`total` from the rebase state dir.
-    MidRebase { current: u32, total: u32, conflicted: Vec<String> },
-    MidCherryPick { conflicted: Vec<String> }, // S19
-    MidRevert { conflicted: Vec<String> },
+    MidRebase {
+        current: u32,
+        total: u32,
+        conflicted: Vec<String>,
+    },
+    MidCherryPick {
+        conflicted: Vec<String>,
+    }, // S19
+    MidRevert {
+        conflicted: Vec<String>,
+    },
     MidBisect, // S23 — read-only + refer to `git bisect`
     /// Local and upstream have both advanced (ahead > 0 AND behind > 0). S9.
-    Diverged { ahead: u32, behind: u32 },
+    Diverged {
+        ahead: u32,
+        behind: u32,
+    },
     /// The tracking ref's history was rewritten under us (old tip is not an
     /// ancestor of the new tip). S14.
-    RemoteRewritten { old_tip: git2::Oid, new_tip: git2::Oid },
+    RemoteRewritten {
+        old_tip: git2::Oid,
+        new_tip: git2::Oid,
+    },
     /// A stale `.git/index.lock` (older than the threshold) is blocking writes. S22.
-    StaleLock { age_secs: u64 },
+    StaleLock {
+        age_secs: u64,
+    },
 }
 
 // =============================================================================
@@ -52,53 +73,91 @@ pub enum IntentType {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ReadOnlyOp {
     Status,
-    Log { count: u8 },
-    Diff { path: Option<String> },
+    Log {
+        count: u8,
+    },
+    Diff {
+        path: Option<String>,
+    },
     Remotes,
     Branches,
     Config,
     /// Show full metadata for a single commit. `target` defaults to HEAD when None.
-    Show { target: Option<String> },
+    Show {
+        target: Option<String>,
+    },
     /// Run `git fetch` against a remote, then show fresh status. Network operation.
     /// Used for "am I up to date" / "check remote" queries — answers them honestly
     /// instead of returning stale ahead/behind based on the last fetch.
-    FetchStatus { remote: String },
+    FetchStatus {
+        remote: String,
+    },
     /// Fetch + simulate a 3-way merge in memory. Tells the user whether a pull
     /// would conflict, BEFORE they pull. Network operation, but never modifies
     /// the working tree.
-    MergePreview { remote: String },
+    MergePreview {
+        remote: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ScopedWriteOp {
-    Add { files: FileSelection },
-    Commit { message: CommitMessage },
-    Branch { name: String },
-    Checkout { target: String },
+    Add {
+        files: FileSelection,
+    },
+    Commit {
+        message: CommitMessage,
+    },
+    Branch {
+        name: String,
+    },
+    Checkout {
+        target: String,
+    },
     Stash,
     StashPop,
-    Reset { mode: ResetMode },
-    Pull { remote: String },
+    Reset {
+        mode: ResetMode,
+    },
+    Pull {
+        remote: String,
+    },
     Init,
     DeleteRepo,
-    AddRemote { name: String, url: String },
-    RemoveRemote { name: String },
+    AddRemote {
+        name: String,
+        url: String,
+    },
+    RemoveRemote {
+        name: String,
+    },
     /// "commit all my files" / "commit the readme" — stage then commit in one step.
     /// `files` controls what gets staged: All = everything, Explicit = named files.
-    AddAndCommit { message: CommitMessage, files: FileSelection },
+    AddAndCommit {
+        message: CommitMessage,
+        files: FileSelection,
+    },
     /// "publish current branch" / "push" — push existing commits without staging.
     /// `set_upstream` is decided at build time based on whether the branch is tracking.
-    Push { remote: String },
+    Push {
+        remote: String,
+    },
     /// "undo last commit" — soft-reset HEAD to its parent, files stay staged.
     Undo,
     /// `git pull --rebase` — replays local commits on top of remote.
-    PullRebase { remote: String },
+    PullRebase {
+        remote: String,
+    },
     /// `git push --force-with-lease` — overwrites the remote branch
     /// (safe variant: refuses if remote moved since last fetch).
-    ForcePush { remote: String },
+    ForcePush {
+        remote: String,
+    },
     /// `git fetch && git reset --hard origin/<branch>` — discards local commits
     /// in favor of the remote. Highly destructive.
-    DiscardLocal { remote: String },
+    DiscardLocal {
+        remote: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -144,20 +203,45 @@ pub struct IntentResult {
 /// every field is a concrete, resolved value — no `Current`, `Pattern`, or `Draft`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum PipelineStep {
-    Add { files: Vec<String> },
-    Commit { message: String },
-    Push { remote: String, branch: String, set_upstream: bool },
-    Pull { remote: String },
-    Branch { name: String },
-    Checkout { target: String },
+    Add {
+        files: Vec<String>,
+    },
+    Commit {
+        message: String,
+    },
+    Push {
+        remote: String,
+        branch: String,
+        set_upstream: bool,
+    },
+    Pull {
+        remote: String,
+    },
+    Branch {
+        name: String,
+    },
+    Checkout {
+        target: String,
+    },
     Stash,
     StashPop,
-    Reset { mode: ResetMode },
-    Log { count: u8 },
+    Reset {
+        mode: ResetMode,
+    },
+    Log {
+        count: u8,
+    },
     Status,
-    Diff { path: Option<String> },
-    AddRemote { name: String, url: String },
-    RemoveRemote { name: String },
+    Diff {
+        path: Option<String>,
+    },
+    AddRemote {
+        name: String,
+        url: String,
+    },
+    RemoveRemote {
+        name: String,
+    },
     /// Soft-reset HEAD to `to_oid` (parent of the commit being undone). Files stay staged.
     /// Both `undone_summary` and `undone_sha` are captured at build time for the summary line.
     /// `to_oid` is the parent commit's full SHA (40-char hex).
@@ -167,11 +251,20 @@ pub enum PipelineStep {
         undone_sha: String,
     },
     /// Run `git pull --rebase <remote> <branch>` as a subprocess.
-    PullRebase { remote: String, branch: String },
+    PullRebase {
+        remote: String,
+        branch: String,
+    },
     /// Run `git push --force-with-lease <remote> <branch>` as a subprocess.
-    ForcePush { remote: String, branch: String },
+    ForcePush {
+        remote: String,
+        branch: String,
+    },
     /// Run `git fetch <remote>` then `git reset --hard <remote>/<branch>` as a subprocess.
-    DiscardLocal { remote: String, branch: String },
+    DiscardLocal {
+        remote: String,
+        branch: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -282,7 +375,10 @@ pub enum GateType {
         danger: crate::danger::DangerLevel,
     },
     /// Multi-option select for disambiguation. Each label is shown to the user.
-    Choose { message: String, options: Vec<String> },
+    Choose {
+        message: String,
+        options: Vec<String>,
+    },
 }
 
 /// User's response to a gate.

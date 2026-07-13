@@ -136,10 +136,7 @@ pub fn try_canonical(query: &str) -> Option<IntentType> {
             remote: "origin".to_string(),
         }),
         // Pull --rebase
-        "rebase"
-        | "pull rebase"
-        | "pull with rebase"
-        | "rebase onto origin"
+        "rebase" | "pull rebase" | "pull with rebase" | "rebase onto origin"
         | "rebase my commits" => IntentType::ScopedWrite(ScopedWriteOp::PullRebase {
             remote: "origin".to_string(),
         }),
@@ -171,8 +168,7 @@ pub fn try_canonical(query: &str) -> Option<IntentType> {
 /// Returns at most 2 alternates distinct from `top`.
 pub fn alternates_for(top: &IntentType, ctx: &RepoContext) -> Vec<IntentType> {
     let mut alts: Vec<IntentType> = Vec::new();
-    let has_unstaged =
-        !ctx.status.modified.is_empty() || !ctx.status.untracked.is_empty();
+    let has_unstaged = !ctx.status.modified.is_empty() || !ctx.status.untracked.is_empty();
     let has_staged = !ctx.status.staged.is_empty();
 
     match top {
@@ -238,7 +234,9 @@ pub fn intent_label(intent: &IntentType) -> String {
         IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush { feature_hint }) => {
             format!("Push '{}' changes (file selection)", feature_hint)
         }
-        IntentType::FeaturePipeline(FeaturePipelineOp::Sync { .. }) => "Sync with upstream".to_string(),
+        IntentType::FeaturePipeline(FeaturePipelineOp::Sync { .. }) => {
+            "Sync with upstream".to_string()
+        }
         IntentType::NeedsClarification(q) => format!("Rephrase: {}", q),
         other => format!("{:?}", other),
     }
@@ -261,7 +259,8 @@ pub async fn classify_intent(
         *CLASSIFIER_PROMPT, context_block, query
     );
 
-    let raw = call_ollama_with_schema(&prompt, &SYSTEM_PROMPT, config, 0.0, classifier_schema()).await?;
+    let raw =
+        call_ollama_with_schema(&prompt, &SYSTEM_PROMPT, config, 0.0, classifier_schema()).await?;
     let cleaned = json_repair(&raw);
 
     let ri: RawIntent = serde_json::from_str(&cleaned)
@@ -332,15 +331,13 @@ fn build_intent_type(ri: &RawIntent, query: &str) -> anyhow::Result<IntentType> 
                         ri.remote_name.clone()
                     },
                 },
-                "merge_preview" | "predict_merge" | "preview_merge" => {
-                    ReadOnlyOp::MergePreview {
-                        remote: if ri.remote_name.is_empty() {
-                            "origin".to_string()
-                        } else {
-                            ri.remote_name.clone()
-                        },
-                    }
-                }
+                "merge_preview" | "predict_merge" | "preview_merge" => ReadOnlyOp::MergePreview {
+                    remote: if ri.remote_name.is_empty() {
+                        "origin".to_string()
+                    } else {
+                        ri.remote_name.clone()
+                    },
+                },
                 _ => ReadOnlyOp::Status,
             };
             Ok(IntentType::ReadOnly(op))
@@ -1042,9 +1039,18 @@ mod tests {
 
     #[test]
     fn test_canonical_branch_variants() {
-        for q in &["branch", "branches", "list branches", "show branches", "current branch"] {
+        for q in &[
+            "branch",
+            "branches",
+            "list branches",
+            "show branches",
+            "current branch",
+        ] {
             assert!(
-                matches!(try_canonical(q), Some(IntentType::ReadOnly(ReadOnlyOp::Branches))),
+                matches!(
+                    try_canonical(q),
+                    Some(IntentType::ReadOnly(ReadOnlyOp::Branches))
+                ),
                 "canonical match failed for {:?}",
                 q
             );
@@ -1075,10 +1081,27 @@ mod tests {
     #[test]
     fn test_canonical_full_whitelist() {
         for q in &[
-            "status", "st", "log", "diff", "remotes", "remote", "remote -v",
-            "branch", "branches", "list branches", "show branches", "current branch",
-            "config", "user", "whoami", "push", "publish", "pull", "stash",
-            "stash pop", "pop",
+            "status",
+            "st",
+            "log",
+            "diff",
+            "remotes",
+            "remote",
+            "remote -v",
+            "branch",
+            "branches",
+            "list branches",
+            "show branches",
+            "current branch",
+            "config",
+            "user",
+            "whoami",
+            "push",
+            "publish",
+            "pull",
+            "stash",
+            "stash pop",
+            "pop",
         ] {
             assert!(try_canonical(q).is_some(), "canonical missed: {:?}", q);
         }

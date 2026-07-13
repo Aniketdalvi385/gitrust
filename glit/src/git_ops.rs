@@ -71,7 +71,13 @@ pub trait GitOperations {
     /// libgit2 never executes hooks). On failure returns a `ClassifiedFailure`
     /// (e.g. `HookRejected`) so the executor can offer class-aware recovery.
     fn commit_system(&self, repo: &Repository, message: &str) -> anyhow::Result<git2::Oid>;
-    fn push(&self, repo: &Repository, remote: &str, branch: &str, set_upstream: bool) -> anyhow::Result<()>;
+    fn push(
+        &self,
+        repo: &Repository,
+        remote: &str,
+        branch: &str,
+        set_upstream: bool,
+    ) -> anyhow::Result<()>;
     fn pull(&self, repo: &Repository, remote: &str) -> anyhow::Result<()>;
     fn create_branch(&self, repo: &Repository, name: &str) -> anyhow::Result<()>;
     fn checkout(&self, repo: &Repository, target: &str) -> anyhow::Result<()>;
@@ -91,11 +97,7 @@ pub trait GitOperations {
     fn get_user_config(&self, repo: &Repository) -> anyhow::Result<(String, String)>;
     fn add_remote(&self, repo: &Repository, name: &str, url: &str) -> anyhow::Result<()>;
     fn remove_remote(&self, repo: &Repository, name: &str) -> anyhow::Result<()>;
-    fn get_commit_details(
-        &self,
-        repo: &Repository,
-        target: &str,
-    ) -> anyhow::Result<CommitDetails>;
+    fn get_commit_details(&self, repo: &Repository, target: &str) -> anyhow::Result<CommitDetails>;
     fn undo_last_commit(&self, repo: &Repository, parent_oid: git2::Oid) -> anyhow::Result<()>;
     /// Update remote-tracking refs without merging into the working tree.
     /// Network operation — uses the same credential callbacks as push.
@@ -103,11 +105,7 @@ pub trait GitOperations {
     /// Predict the outcome of pulling the current branch from `remote_name`.
     /// Does NOT modify the working tree or index — pure in-memory analysis.
     /// Caller is expected to have already fetched.
-    fn predict_pull(
-        &self,
-        repo: &Repository,
-        remote_name: &str,
-    ) -> anyhow::Result<MergePreview>;
+    fn predict_pull(&self, repo: &Repository, remote_name: &str) -> anyhow::Result<MergePreview>;
     /// Files that the user has modified locally AND the incoming merge will
     /// also touch — these block a pull even when the 3-way merge is clean.
     fn dirty_overlap_for_pull(
@@ -116,12 +114,7 @@ pub trait GitOperations {
         remote_name: &str,
     ) -> anyhow::Result<DirtyOverlap>;
     /// `git pull --rebase` — shells out to git for full conflict-resolution UX.
-    fn pull_rebase(
-        &self,
-        repo: &Repository,
-        remote: &str,
-        branch: &str,
-    ) -> anyhow::Result<()>;
+    fn pull_rebase(&self, repo: &Repository, remote: &str, branch: &str) -> anyhow::Result<()>;
     /// `git push --force-with-lease` — safe force-push.
     fn force_push_with_lease(
         &self,
@@ -192,7 +185,10 @@ pub enum FailureClass {
     Network,
     /// Hook (pre-commit, pre-push, etc.) refused the operation. `output` carries
     /// the captured hook/git stderr so the failure message can show the cause.
-    HookRejected { hook: Option<String>, output: String },
+    HookRejected {
+        hook: Option<String>,
+        output: String,
+    },
     /// `.git/index.lock` is held by another process.
     LockHeld,
     /// Fall-through: original stderr text preserved verbatim.
@@ -203,14 +199,14 @@ impl FailureClass {
     /// One-line plain-English description for the error block header.
     pub fn what(&self) -> String {
         match self {
-            FailureClass::DirtyTreeBlocksMerge { .. } =>
-                "uncommitted edits would be overwritten by the merge".into(),
-            FailureClass::NonFastForward =>
-                "push rejected — remote has commits you don't have".into(),
-            FailureClass::AuthFailed =>
-                "couldn't authenticate to the remote".into(),
-            FailureClass::Network =>
-                "couldn't reach the remote".into(),
+            FailureClass::DirtyTreeBlocksMerge { .. } => {
+                "uncommitted edits would be overwritten by the merge".into()
+            }
+            FailureClass::NonFastForward => {
+                "push rejected — remote has commits you don't have".into()
+            }
+            FailureClass::AuthFailed => "couldn't authenticate to the remote".into(),
+            FailureClass::Network => "couldn't reach the remote".into(),
             FailureClass::HookRejected { hook, output } => {
                 let who = match hook {
                     Some(h) => format!("the {} hook refused the operation", h),
@@ -223,8 +219,9 @@ impl FailureClass {
                     format!("{}:\n{}", who, out)
                 }
             }
-            FailureClass::LockHeld =>
-                ".git/index.lock is held — another git process is running".into(),
+            FailureClass::LockHeld => {
+                ".git/index.lock is held — another git process is running".into()
+            }
             FailureClass::Unknown(_) => "command failed".into(),
         }
     }
@@ -232,25 +229,25 @@ impl FailureClass {
     /// One actionable next step the user can take.
     pub fn fix(&self) -> String {
         match self {
-            FailureClass::DirtyTreeBlocksMerge { files } if files.len() == 1 =>
-                format!("commit or stash your edits to {} first", files[0]),
-            FailureClass::DirtyTreeBlocksMerge { files } =>
-                format!(
-                    "commit or stash your edits to {} file(s) first",
-                    files.len()
-                ),
-            FailureClass::NonFastForward =>
-                "glit \"pull\" to reconcile, then push again".into(),
-            FailureClass::AuthFailed =>
-                "verify with: git -C . ls-remote (this uses your system git's credentials)".into(),
-            FailureClass::Network =>
-                "check your connection, then retry".into(),
-            FailureClass::HookRejected { .. } =>
-                "see hook output above; fix the cause and retry".into(),
-            FailureClass::LockHeld =>
-                "wait for the other git process or delete .git/index.lock if stale".into(),
-            FailureClass::Unknown(_) =>
-                "see the error above for context".into(),
+            FailureClass::DirtyTreeBlocksMerge { files } if files.len() == 1 => {
+                format!("commit or stash your edits to {} first", files[0])
+            }
+            FailureClass::DirtyTreeBlocksMerge { files } => format!(
+                "commit or stash your edits to {} file(s) first",
+                files.len()
+            ),
+            FailureClass::NonFastForward => "glit \"pull\" to reconcile, then push again".into(),
+            FailureClass::AuthFailed => {
+                "verify with: git -C . ls-remote (this uses your system git's credentials)".into()
+            }
+            FailureClass::Network => "check your connection, then retry".into(),
+            FailureClass::HookRejected { .. } => {
+                "see hook output above; fix the cause and retry".into()
+            }
+            FailureClass::LockHeld => {
+                "wait for the other git process or delete .git/index.lock if stale".into()
+            }
+            FailureClass::Unknown(_) => "see the error above for context".into(),
         }
     }
 }
@@ -486,7 +483,10 @@ impl GitOperations for Git2Operations {
         for file in files {
             // Reject path traversal
             if file.contains("..") || std::path::Path::new(file).is_absolute() {
-                anyhow::bail!("Invalid file path: {}. Paths must be relative and within the repo.", file);
+                anyhow::bail!(
+                    "Invalid file path: {}. Paths must be relative and within the repo.",
+                    file
+                );
             }
             index
                 .add_path(std::path::Path::new(file))
@@ -513,11 +513,13 @@ impl GitOperations for Git2Operations {
             anyhow::bail!("Commit message cannot be empty");
         }
 
-        let sig = repo
-            .signature()
-            .context("Git user not configured. Run: git config user.name && git config user.email")?;
+        let sig = repo.signature().context(
+            "Git user not configured. Run: git config user.name && git config user.email",
+        )?;
         let mut index = repo.index().context("Failed to read index")?;
-        let tree_oid = index.write_tree().context("Failed to write tree from index")?;
+        let tree_oid = index
+            .write_tree()
+            .context("Failed to write tree from index")?;
         let tree = repo
             .find_tree(tree_oid)
             .context("Failed to find tree object")?;
@@ -595,7 +597,13 @@ impl GitOperations for Git2Operations {
             .context("commit succeeded but HEAD could not be resolved")
     }
 
-    fn push(&self, repo: &Repository, remote_name: &str, branch: &str, set_upstream: bool) -> anyhow::Result<()> {
+    fn push(
+        &self,
+        repo: &Repository,
+        remote_name: &str,
+        branch: &str,
+        set_upstream: bool,
+    ) -> anyhow::Result<()> {
         // Shell out to system git so the user's credential helper, ssh-agent,
         // and ~/.ssh/config all apply. libgit2's credential layer needs an
         // explicit callback per request and silently fails when no key matches.
@@ -623,9 +631,7 @@ impl GitOperations for Git2Operations {
         // now rather than blaming the local hook.
         let has_remote_markers = {
             let l = combined.to_lowercase();
-            l.contains("remote:")
-                || l.contains("! [rejected]")
-                || l.contains("! [remote rejected]")
+            l.contains("remote:") || l.contains("! [rejected]") || l.contains("! [remote rejected]")
         };
         if has_remote_markers {
             if matches!(class, FailureClass::HookRejected { .. }) {
@@ -674,8 +680,9 @@ impl GitOperations for Git2Operations {
         let commit = head
             .peel_to_commit()
             .context("HEAD does not point to a commit")?;
-        repo.branch(name, &commit, false)
-            .with_context(|| format!("Failed to create branch '{}'. Does it already exist?", name))?;
+        repo.branch(name, &commit, false).with_context(|| {
+            format!("Failed to create branch '{}'. Does it already exist?", name)
+        })?;
         Ok(())
     }
 
@@ -727,8 +734,7 @@ impl GitOperations for Git2Operations {
     }
 
     fn stash_pop(&self, repo: &mut Repository) -> anyhow::Result<()> {
-        repo.stash_pop(0, None)
-            .context("No stash entries to pop")?;
+        repo.stash_pop(0, None).context("No stash entries to pop")?;
         Ok(())
     }
 
@@ -796,7 +802,11 @@ impl GitOperations for Git2Operations {
         for branch_result in repo.branches(None).context("Failed to list branches")? {
             let (branch, _) = branch_result.context("Failed to read branch")?;
             if let Some(name) = branch.name()? {
-                let marker = if current.as_deref() == Some(name) { "* " } else { "  " };
+                let marker = if current.as_deref() == Some(name) {
+                    "* "
+                } else {
+                    "  "
+                };
                 branches.push(format!("{}{}", marker, name));
             }
         }
@@ -805,14 +815,22 @@ impl GitOperations for Git2Operations {
 
     fn get_user_config(&self, repo: &Repository) -> anyhow::Result<(String, String)> {
         let config = repo.config().context("Failed to read git config")?;
-        let name = config.get_string("user.name").unwrap_or_else(|_| "(not set)".to_string());
-        let email = config.get_string("user.email").unwrap_or_else(|_| "(not set)".to_string());
+        let name = config
+            .get_string("user.name")
+            .unwrap_or_else(|_| "(not set)".to_string());
+        let email = config
+            .get_string("user.email")
+            .unwrap_or_else(|_| "(not set)".to_string());
         Ok((name, email))
     }
 
     fn add_remote(&self, repo: &Repository, name: &str, url: &str) -> anyhow::Result<()> {
-        repo.remote(name, url)
-            .with_context(|| format!("Failed to add remote '{}' ({}). Does it already exist?", name, url))?;
+        repo.remote(name, url).with_context(|| {
+            format!(
+                "Failed to add remote '{}' ({}). Does it already exist?",
+                name, url
+            )
+        })?;
         Ok(())
     }
 
@@ -822,11 +840,7 @@ impl GitOperations for Git2Operations {
         Ok(())
     }
 
-    fn get_commit_details(
-        &self,
-        repo: &Repository,
-        target: &str,
-    ) -> anyhow::Result<CommitDetails> {
+    fn get_commit_details(&self, repo: &Repository, target: &str) -> anyhow::Result<CommitDetails> {
         let target = if target.is_empty() { "HEAD" } else { target };
         let obj = repo
             .revparse_single(target)
@@ -866,8 +880,7 @@ impl GitOperations for Git2Operations {
                 let patch = git2::Patch::from_diff(&diff, i).ok().flatten();
                 let (additions, deletions) = match patch {
                     Some(p) => {
-                        let (_ctx, adds, dels) =
-                            p.line_stats().unwrap_or((0, 0, 0));
+                        let (_ctx, adds, dels) = p.line_stats().unwrap_or((0, 0, 0));
                         (adds, dels)
                     }
                     None => (0, 0),
@@ -918,11 +931,7 @@ impl GitOperations for Git2Operations {
         }))
     }
 
-    fn predict_pull(
-        &self,
-        repo: &Repository,
-        remote_name: &str,
-    ) -> anyhow::Result<MergePreview> {
+    fn predict_pull(&self, repo: &Repository, remote_name: &str) -> anyhow::Result<MergePreview> {
         // Resolve current branch
         let head = match repo.head() {
             Ok(h) => h,
@@ -1089,12 +1098,7 @@ impl GitOperations for Git2Operations {
         })
     }
 
-    fn pull_rebase(
-        &self,
-        repo: &Repository,
-        remote: &str,
-        branch: &str,
-    ) -> anyhow::Result<()> {
+    fn pull_rebase(&self, repo: &Repository, remote: &str, branch: &str) -> anyhow::Result<()> {
         run_git_in_repo(repo, &["pull", "--rebase", remote, branch])
     }
 
@@ -1161,10 +1165,7 @@ impl GitOperations for Git2Operations {
 
         if snippet.is_empty() {
             // Try HEAD-to-index diff (for staged changes)
-            let head_tree = repo
-                .head()
-                .ok()
-                .and_then(|h| h.peel_to_tree().ok());
+            let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
 
             let mut diff_opts2 = git2::DiffOptions::new();
             diff_opts2.pathspec(path);
@@ -1214,7 +1215,11 @@ pub fn execute_step(
             }
         }
         PipelineStep::Commit { message } => ops.commit(repo, message).map(|_| ()),
-        PipelineStep::Push { remote, branch, set_upstream } => ops.push(repo, remote, branch, *set_upstream),
+        PipelineStep::Push {
+            remote,
+            branch,
+            set_upstream,
+        } => ops.push(repo, remote, branch, *set_upstream),
         PipelineStep::Pull { remote } => ops.pull(repo, remote),
         PipelineStep::Branch { name } => ops.create_branch(repo, name),
         PipelineStep::Checkout { target } => ops.checkout(repo, target),
@@ -1303,7 +1308,10 @@ Aborting";
         let class = classify_git_stderr(stderr);
         match class {
             FailureClass::DirtyTreeBlocksMerge { files } => {
-                assert_eq!(files, vec!["README.md".to_string(), "src/main.rs".to_string()]);
+                assert_eq!(
+                    files,
+                    vec!["README.md".to_string(), "src/main.rs".to_string()]
+                );
             }
             other => panic!("expected DirtyTreeBlocksMerge, got {:?}", other),
         }
@@ -1358,7 +1366,9 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
         // word, not a question. Keep this loose — just guard against
         // accidentally introducing prompts ("Do you want to…?") as fixes.
         let cases = [
-            FailureClass::DirtyTreeBlocksMerge { files: vec!["a".into()] },
+            FailureClass::DirtyTreeBlocksMerge {
+                files: vec!["a".into()],
+            },
             FailureClass::NonFastForward,
             FailureClass::AuthFailed,
             FailureClass::Network,
@@ -1372,7 +1382,11 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
         for c in cases {
             let fix = c.fix();
             assert!(!fix.is_empty(), "fix for {:?} was empty", c);
-            assert!(!fix.contains('?'), "fix for {:?} shouldn't be a question", c);
+            assert!(
+                !fix.contains('?'),
+                "fix for {:?} shouldn't be a question",
+                c
+            );
         }
     }
 
@@ -1381,9 +1395,7 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
         let file_path = dir.path().join("test.txt");
         std::fs::write(&file_path, "hello").unwrap();
         let mut index = repo.index().unwrap();
-        index
-            .add_path(std::path::Path::new("test.txt"))
-            .unwrap();
+        index.add_path(std::path::Path::new("test.txt")).unwrap();
         index.write().unwrap();
         let tree_oid = index.write_tree().unwrap();
         {
@@ -1405,10 +1417,9 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
         ops.add(&repo, &["new.txt".to_string()]).unwrap();
 
         let statuses = repo.statuses(None).unwrap();
-        let has_staged = statuses.iter().any(|e| {
-            e.path() == Some("new.txt")
-                && e.status().contains(git2::Status::INDEX_NEW)
-        });
+        let has_staged = statuses
+            .iter()
+            .any(|e| e.path() == Some("new.txt") && e.status().contains(git2::Status::INDEX_NEW));
         assert!(has_staged, "new.txt should be staged");
     }
 
@@ -1419,7 +1430,10 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
         let ops = Git2Operations;
         let result = ops.add(&repo, &["../etc/passwd".to_string()]);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid file path"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid file path"));
     }
 
     #[test]
@@ -1450,9 +1464,7 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
         // Modify and stage
         std::fs::write(dir.path().join("test.txt"), "modified").unwrap();
         let mut index = repo.index().unwrap();
-        index
-            .add_path(std::path::Path::new("test.txt"))
-            .unwrap();
+        index.add_path(std::path::Path::new("test.txt")).unwrap();
         index.write().unwrap();
 
         let ops = Git2Operations;
@@ -1473,10 +1485,7 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
         let ops = Git2Operations;
         let result = ops.commit(&repo, "should fail");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("HEAD is detached"));
+        assert!(result.unwrap_err().to_string().contains("HEAD is detached"));
     }
 
     #[test]
@@ -1527,15 +1536,8 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
         let tree = repo.find_tree(tree_oid).unwrap();
         let sig = git2::Signature::now("Test", "test@test.com").unwrap();
         let parent = repo.head().unwrap().peel_to_commit().unwrap();
-        repo.commit(
-            Some("HEAD"),
-            &sig,
-            &sig,
-            "second commit",
-            &tree,
-            &[&parent],
-        )
-        .unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "second commit", &tree, &[&parent])
+            .unwrap();
 
         let ops = Git2Operations;
         let entries = ops.log(&repo, 5).unwrap();
@@ -1684,7 +1686,8 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
         let base = repo.head().unwrap().peel_to_commit().unwrap();
 
         // Simulate remote: create a commit modifying b.txt off the base.
-        let remote_oid = commit_with_content(&repo, "b.txt", "remote content\n", "remote", Some(&base));
+        let remote_oid =
+            commit_with_content(&repo, "b.txt", "remote content\n", "remote", Some(&base));
         let remote_commit = repo.find_commit(remote_oid).unwrap();
         repo.reference(
             "refs/remotes/origin/master",
@@ -1706,7 +1709,10 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
         let ops = Git2Operations;
         let preview = ops.predict_pull(&repo, "origin").unwrap();
         match preview {
-            MergePreview::CleanMerge { local_commits, remote_commits } => {
+            MergePreview::CleanMerge {
+                local_commits,
+                remote_commits,
+            } => {
                 assert_eq!(local_commits, 1);
                 assert_eq!(remote_commits, 1);
             }
@@ -1735,7 +1741,11 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
         let preview = ops.predict_pull(&repo, "origin").unwrap();
         match preview {
             MergePreview::Conflicts { files, .. } => {
-                assert!(files.iter().any(|f| f == "test.txt"), "expected test.txt in conflicts, got {:?}", files);
+                assert!(
+                    files.iter().any(|f| f == "test.txt"),
+                    "expected test.txt in conflicts, got {:?}",
+                    files
+                );
             }
             other => panic!("Expected Conflicts, got {:?}", other),
         }
@@ -1816,8 +1826,15 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
 
         // `ours` on the current branch: another child of base, conflicting edit
         let tree_ours = repo.find_tree(stage("ours\n")).unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "ours", &tree_ours, &[&base_commit])
-            .unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "ours",
+            &tree_ours,
+            &[&base_commit],
+        )
+        .unwrap();
 
         // Start a real merge of `theirs` — conflicts, sets MERGE_HEAD.
         let their_ac = repo.find_annotated_commit(theirs).unwrap();
@@ -1928,7 +1945,11 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
         let hooks_dir = repo.path().join("hooks");
         std::fs::create_dir_all(&hooks_dir).unwrap();
         let hook = hooks_dir.join("pre-push");
-        std::fs::write(&hook, "#!/bin/sh\necho 'HOOK: blocked by pre-push' >&2\nexit 1\n").unwrap();
+        std::fs::write(
+            &hook,
+            "#!/bin/sh\necho 'HOOK: blocked by pre-push' >&2\nexit 1\n",
+        )
+        .unwrap();
         std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
 
         let branch = repo.head().unwrap().shorthand().unwrap().to_string();

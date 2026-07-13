@@ -86,7 +86,11 @@ pub async fn is_ollama_reachable(config: &Config) -> bool {
         Err(_) => return false,
     };
 
-    client.get(&url).send().await.map_or(false, |r| r.status().is_success())
+    client
+        .get(&url)
+        .send()
+        .await
+        .map_or(false, |r| r.status().is_success())
 }
 
 async fn is_model_pulled(config: &Config, model: &str) -> anyhow::Result<bool> {
@@ -108,7 +112,10 @@ async fn is_model_pulled(config: &Config, model: &str) -> anyhow::Result<bool> {
     let found = models.iter().any(|m| {
         m["name"]
             .as_str()
-            .map(|n| n == model || n.starts_with(&format!("{}:", model.split(':').next().unwrap_or(model))))
+            .map(|n| {
+                n == model
+                    || n.starts_with(&format!("{}:", model.split(':').next().unwrap_or(model)))
+            })
             .unwrap_or(false)
     });
     Ok(found)
@@ -125,11 +132,17 @@ fn install_ollama() -> anyhow::Result<()> {
             run_visible("brew", &["install", "ollama"])
         } else {
             println!("  Running: curl -fsSL https://ollama.com/install.sh | sh");
-            run_visible("sh", &["-c", "curl -fsSL https://ollama.com/install.sh | sh"])
+            run_visible(
+                "sh",
+                &["-c", "curl -fsSL https://ollama.com/install.sh | sh"],
+            )
         }
     } else if cfg!(target_os = "linux") {
         println!("  Running: curl -fsSL https://ollama.com/install.sh | sh");
-        run_visible("sh", &["-c", "curl -fsSL https://ollama.com/install.sh | sh"])
+        run_visible(
+            "sh",
+            &["-c", "curl -fsSL https://ollama.com/install.sh | sh"],
+        )
     } else {
         Err(anyhow!(
             "Auto-install not supported on this OS. \

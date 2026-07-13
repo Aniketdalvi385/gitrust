@@ -33,7 +33,16 @@ use clap::{Parser, Subcommand};
 ///   glit --recover
 ///   glit              # opens interactive REPL
 #[derive(Parser, Debug)]
-#[command(name = "glit", about = "Agentic Git CLI", version)]
+// `disable_help_subcommand`: we define an explicit `Help` subcommand (canonical
+// phrases), which collides with clap's auto-generated `help` and trips a
+// debug-only assertion ("command name 'help' is duplicated") that panics the
+// debug binary at startup. Disabling clap's generated one leaves ours.
+#[command(
+    name = "glit",
+    about = "Agentic Git CLI",
+    version,
+    disable_help_subcommand = true
+)]
 struct Cli {
     #[command(subcommand)]
     command: Option<Command>,
@@ -227,7 +236,11 @@ fn check_ollama_or_guide() {
 }
 
 /// REPL loop — read queries from the user interactively.
-async fn run_repl(config: &config::Config, auto_confirm: bool, show_all: bool) -> anyhow::Result<()> {
+async fn run_repl(
+    config: &config::Config,
+    auto_confirm: bool,
+    show_all: bool,
+) -> anyhow::Result<()> {
     use inquire::Text;
 
     println!("GLit — Agentic Git CLI  (Ctrl-C or empty input to exit)");

@@ -38,24 +38,18 @@ pub fn build_manifest(
         };
 
         let status = entry.status();
-        let change_type = if status.intersects(
-            git2::Status::INDEX_NEW | git2::Status::WT_NEW,
-        ) {
+        let change_type = if status.intersects(git2::Status::INDEX_NEW | git2::Status::WT_NEW) {
             ChangeType::Added
-        } else if status.intersects(
-            git2::Status::INDEX_DELETED | git2::Status::WT_DELETED,
-        ) {
+        } else if status.intersects(git2::Status::INDEX_DELETED | git2::Status::WT_DELETED) {
             ChangeType::Deleted
-        } else if status.intersects(
-            git2::Status::INDEX_RENAMED | git2::Status::WT_RENAMED,
-        ) {
+        } else if status.intersects(git2::Status::INDEX_RENAMED | git2::Status::WT_RENAMED) {
             ChangeType::Renamed
         } else {
             ChangeType::Modified
         };
 
-        let snippet = get_whitespace_ignored_diff(repo, &path, max_lines_per_file)
-            .unwrap_or_default();
+        let snippet =
+            get_whitespace_ignored_diff(repo, &path, max_lines_per_file).unwrap_or_default();
         let line_count = snippet.lines().count();
 
         manifests.push(FileManifest {

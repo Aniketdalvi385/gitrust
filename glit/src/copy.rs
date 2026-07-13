@@ -39,8 +39,7 @@ pub const PLAN_KEYMAP_LEGEND: &str = "[Enter] run · [q] cancel";
 pub const PLAN_DONE_FOOTER: &str = "Done";
 pub const PLAN_NEXT_HINT: &str = "Next: glit \"status\" · undo with `glit recover`";
 
-pub const PLAN_CANCELED_FMT: &str =
-    "↪ Canceled · staged work preserved · snapshot @ {sha7}";
+pub const PLAN_CANCELED_FMT: &str = "↪ Canceled · staged work preserved · snapshot @ {sha7}";
 
 // =============================================================================
 // In-progress-operation / detached-HEAD pre-check blocks (Phase 9.1 — S12)

@@ -69,9 +69,15 @@ pub async fn run_agent(
         let empty_ctx = crate::context::RepoContext::empty();
         let classifier = OllamaClassifier;
         let started = std::time::Instant::now();
-        let intent_result =
-            clarification_loop(&classifier, &empty_ctx, query, config, &*gate, config.max_iters)
-                .await?;
+        let intent_result = clarification_loop(
+            &classifier,
+            &empty_ctx,
+            query,
+            config,
+            &*gate,
+            config.max_iters,
+        )
+        .await?;
         let elapsed = if intent_result.engine == crate::commands::Engine::Llm {
             Some(started.elapsed())
         } else {
@@ -97,9 +103,7 @@ pub async fn run_agent(
             "⚠  An interrupted pipeline was found (captured at {}).",
             snapshot.captured_at
         );
-        println!(
-            "   Run 'glit --recover' to restore the repository to its pre-pipeline state."
-        );
+        println!("   Run 'glit --recover' to restore the repository to its pre-pipeline state.");
         println!("   Or delete ~/.glit/snapshots/ to ignore it.\n");
     }
 
@@ -107,15 +111,25 @@ pub async fn run_agent(
     // hit a deep-in-the-pipeline failure on first commit without this.
     ensure_git_identity(&repo, &*gate)?;
 
-    // Layer 0: build repo context
-    let context = context::build_context(&repo)
-        .unwrap_or_else(|_| crate::context::RepoContext::empty());
+    // Layer 0: build repo context. Fail CLOSED — if we can't read repo state we
+    // cannot safely gate writes, so abort rather than fall back to empty(), whose
+    // NotARepo situation would make situation_gate allow every write (the
+    // fail-open bug). build_context only errors when the status/index read itself
+    // fails; empty, detached, and mid-operation repos all build successfully.
+    let context = context::build_context(&repo)?;
 
     // Layer 1: classify intent (with clarification loop)
     let classifier = OllamaClassifier;
     let classify_started = std::time::Instant::now();
-    let intent_result =
-        clarification_loop(&classifier, &context, query, config, &*gate, config.max_iters).await?;
+    let intent_result = clarification_loop(
+        &classifier,
+        &context,
+        query,
+        config,
+        &*gate,
+        config.max_iters,
+    )
+    .await?;
     let llm_elapsed = if intent_result.engine == crate::commands::Engine::Llm {
         Some(classify_started.elapsed())
     } else {
@@ -139,8 +153,11 @@ pub async fn run_agent(
                 // Preserve the Phase 9 interactive way-out (branch-here / switch-back).
                 return handle_detached_head_rescue(&mut repo, &*gate).await;
             }
-            eprintln!("✗  {}", message);
-            return Ok(());
+            // Return the refusal as an Err so it exits non-zero (main() renders
+            // `✗ {e}` and exits 1; the REPL prints and continues), matching the
+            // execution-layer block in run_pre_checks. Returning Ok exited 0 and
+            // let scripts read a refused, never-executed op as success.
+            return Err(anyhow::anyhow!("{}", message));
         }
         crate::validation::SituationVerdict::Redirect { .. } => { /* Phase 12+ */ }
     }
@@ -223,9 +240,7 @@ async fn clarification_loop(
             _ => {
                 // Mid-confidence: offer a deterministic disambiguation menu.
                 if result.confidence < 0.75 && result.confidence >= 0.4 {
-                    if let Some(chosen) =
-                        maybe_disambiguate(&result.intent, context, gate)?
-                    {
+                    if let Some(chosen) = maybe_disambiguate(&result.intent, context, gate)? {
                         return Ok(crate::commands::IntentResult {
                             intent: chosen,
                             confidence: 1.0,
@@ -299,7 +314,9 @@ fn handle_read_only(
                 if ctx.last_commit != "(no commits yet)" && ctx.last_commit != "(unavailable)" {
                     println!("Last commit: {}", ctx.last_commit);
                 }
-                println!("  → Try: glit \"log\" for history, or glit \"show\" for full commit details.");
+                println!(
+                    "  → Try: glit \"log\" for history, or glit \"show\" for full commit details."
+                );
             } else {
                 println!("{}", snippet);
             }
@@ -345,7 +362,10 @@ fn handle_read_only(
         ReadOnlyOp::FetchStatus { remote } => {
             // Honest "am I up to date" — fetch first, then re-read context.
             if !crate::context::remote_exists(repo, &remote) {
-                println!("No remote '{}' configured. Try: glit \"add remote origin <url>\"", remote);
+                println!(
+                    "No remote '{}' configured. Try: glit \"add remote origin <url>\"",
+                    remote
+                );
                 return Ok(());
             }
             print!("Fetching {}… ", remote);
@@ -371,7 +391,10 @@ fn handle_read_only(
                 println!("Last commit: {}", fresh.last_commit);
             }
             if fresh.behind > 0 {
-                println!("\n→ {} commit(s) on remote you don't have. Run: glit \"pull\"", fresh.behind);
+                println!(
+                    "\n→ {} commit(s) on remote you don't have. Run: glit \"pull\"",
+                    fresh.behind
+                );
             } else if fresh.ahead > 0 {
                 println!("\n→ {} unpushed commit(s). Run: glit \"push\"", fresh.ahead);
             } else if fresh.upstream.is_some() {
@@ -473,7 +496,11 @@ fn print_dirty_overlap_block(dirty: &crate::git_ops::DirtyOverlap, conflicts_pre
 
 /// Print a `git show`-style block for a single commit.
 fn print_commit_details(d: &crate::git_ops::CommitDetails, requested_ref: &str) {
-    let head_marker = if requested_ref == "HEAD" { " (HEAD)" } else { "" };
+    let head_marker = if requested_ref == "HEAD" {
+        " (HEAD)"
+    } else {
+        ""
+    };
     println!("commit {}{}", d.sha, head_marker);
     if !d.email.is_empty() {
         println!("Author: {} <{}>", d.author, d.email);
@@ -526,7 +553,11 @@ fn print_branches_enriched(repo: &git2::Repository) -> anyhow::Result<()> {
             None => continue,
         };
         any = true;
-        let marker = if current.as_deref() == Some(name.as_str()) { "*" } else { " " };
+        let marker = if current.as_deref() == Some(name.as_str()) {
+            "*"
+        } else {
+            " "
+        };
 
         // Upstream / ahead-behind info
         let detail = match branch.upstream() {
@@ -584,7 +615,9 @@ async fn handle_merge_preview(
     println!("✓");
 
     let preview = git_ops.predict_pull(repo, remote)?;
-    let dirty = git_ops.dirty_overlap_for_pull(repo, remote).unwrap_or_default();
+    let dirty = git_ops
+        .dirty_overlap_for_pull(repo, remote)
+        .unwrap_or_default();
     print_merge_preview(&preview, &dirty);
 
     // Open the picker in two cases:
@@ -594,18 +627,24 @@ async fn handle_merge_preview(
     //      overwritten by merge". The user must commit or stash first.
     let has_dirty = !dirty.overlapping_files.is_empty();
     let (local_commits, _remote_commits) = match (&preview, has_dirty) {
-        (crate::git_ops::MergePreview::Conflicts {
-            local_commits,
-            remote_commits,
-            ..
-        }, _) => (*local_commits, *remote_commits),
+        (
+            crate::git_ops::MergePreview::Conflicts {
+                local_commits,
+                remote_commits,
+                ..
+            },
+            _,
+        ) => (*local_commits, *remote_commits),
         (crate::git_ops::MergePreview::FastForward { remote_commits }, true) => {
             (0usize, *remote_commits)
         }
-        (crate::git_ops::MergePreview::CleanMerge {
-            local_commits,
-            remote_commits,
-        }, true) => (*local_commits, *remote_commits),
+        (
+            crate::git_ops::MergePreview::CleanMerge {
+                local_commits,
+                remote_commits,
+            },
+            true,
+        ) => (*local_commits, *remote_commits),
         _ => return Ok(()),
     };
 
@@ -619,10 +658,7 @@ async fn handle_merge_preview(
             s.to_string()
         }
     };
-    let dest_marker = crate::danger::colorize(
-        crate::danger::DangerLevel::Destructive,
-        "⚠⚠",
-    );
+    let dest_marker = crate::danger::colorize(crate::danger::DangerLevel::Destructive, "⚠⚠");
 
     if has_dirty {
         labels.push(format!(
@@ -739,7 +775,7 @@ async fn build_scoped_steps(
             let resolved = match files {
                 FileSelection::All => {
                     // Stage all tracked+modified files
-                    vec![]  // empty = add_all in git_ops
+                    vec![] // empty = add_all in git_ops
                 }
                 FileSelection::Explicit(fs) => fs,
                 FileSelection::Pattern(pat) => {
@@ -778,7 +814,10 @@ async fn build_scoped_steps(
                             return Ok(vec![]);
                         }
                         ResolutionOutcome::AmbiguousFeature { options } => {
-                            println!("  Ambiguous feature. Did you mean one of: {}", options.join(", "));
+                            println!(
+                                "  Ambiguous feature. Did you mean one of: {}",
+                                options.join(", ")
+                            );
                             return Ok(vec![]);
                         }
                     }
@@ -790,11 +829,7 @@ async fn build_scoped_steps(
         ScopedWriteOp::Commit { message } => {
             // Plain commit = only staged → generate message from index-vs-HEAD diff.
             let final_msg = resolve_or_generate_commit_message(
-                repo,
-                message,
-                /*include_workdir=*/ false,
-                config,
-                gate,
+                repo, message, /*include_workdir=*/ false, config, gate,
             )
             .await?;
             if final_msg.is_empty() {
@@ -822,10 +857,7 @@ async fn build_scoped_steps(
                 Ok(()) => name,
                 Err(reason) => {
                     let suggestion = sanitize_branch_name(&name);
-                    println!(
-                        "  Branch name '{}' is not valid: {}",
-                        name, reason
-                    );
+                    println!("  Branch name '{}' is not valid: {}", name, reason);
                     let resp = gate.prompt(&GateType::Choose {
                         message: "Choose what to do:".to_string(),
                         options: vec![
@@ -895,12 +927,17 @@ async fn build_scoped_steps(
                 return Err(anyhow::anyhow!("No branch to force-push."));
             }
             // Type-to-confirm — destructive to anyone else watching the remote.
-            let op_for_explain = ScopedWriteOp::ForcePush { remote: remote.clone() };
+            let op_for_explain = ScopedWriteOp::ForcePush {
+                remote: remote.clone(),
+            };
             let ctx_for_danger = crate::context::build_context(repo)
                 .unwrap_or_else(|_| crate::context::RepoContext::empty());
             let resp = gate.prompt(&GateType::TypeToConfirm {
                 expected: branch.clone(),
-                message: format!("Type '{}' to confirm force-push to {}/{}:", branch, remote, branch),
+                message: format!(
+                    "Type '{}' to confirm force-push to {}/{}:",
+                    branch, remote, branch
+                ),
                 explanation: Some(crate::explain::explain(&op_for_explain)),
                 danger: crate::danger::intent_danger(&op_for_explain, &ctx_for_danger),
             })?;
@@ -920,7 +957,9 @@ async fn build_scoped_steps(
                 use crate::context;
                 context::build_context(repo).map(|c| c.ahead).unwrap_or(0)
             };
-            let op_for_explain = ScopedWriteOp::DiscardLocal { remote: remote.clone() };
+            let op_for_explain = ScopedWriteOp::DiscardLocal {
+                remote: remote.clone(),
+            };
             let ctx_for_danger = crate::context::build_context(repo)
                 .unwrap_or_else(|_| crate::context::RepoContext::empty());
             let resp = gate.prompt(&GateType::TypeToConfirm {
@@ -962,17 +1001,13 @@ async fn build_scoped_steps(
         ScopedWriteOp::AddAndCommit { message, files } => {
             use crate::commands::FileSelection;
             let add_files: Vec<String> = match files {
-                FileSelection::All => vec![],   // empty = add_all
+                FileSelection::All => vec![], // empty = add_all
                 FileSelection::Explicit(fs) => fs,
-                FileSelection::Pattern(_) => vec![],   // fall back to add_all
+                FileSelection::Pattern(_) => vec![], // fall back to add_all
             };
             // add_commit = stage then commit → generate message from full HEAD→workdir diff.
             let final_msg = resolve_or_generate_commit_message(
-                repo,
-                message,
-                /*include_workdir=*/ true,
-                config,
-                gate,
+                repo, message, /*include_workdir=*/ true, config, gate,
             )
             .await?;
             if final_msg.is_empty() {
@@ -997,7 +1032,7 @@ async fn build_scoped_steps(
 
         ScopedWriteOp::DeleteRepo => {
             delete_repo(repo, gate)?;
-            Ok(vec![])  // .git is gone; pipeline executor won't run
+            Ok(vec![]) // .git is gone; pipeline executor won't run
         }
 
         ScopedWriteOp::Push { remote } => {
@@ -1016,7 +1051,10 @@ async fn build_scoped_steps(
             let set_upstream = !has_upstream;
 
             let label = if set_upstream {
-                format!("Publish '{}' to {} (set upstream tracking)?", branch, remote)
+                format!(
+                    "Publish '{}' to {} (set upstream tracking)?",
+                    branch, remote
+                )
             } else {
                 format!("Push '{}' to {}?", branch, remote)
             };
@@ -1025,7 +1063,11 @@ async fn build_scoped_steps(
                 println!("  Aborted.");
                 return Ok(vec![]);
             }
-            Ok(vec![PipelineStep::Push { remote, branch, set_upstream }])
+            Ok(vec![PipelineStep::Push {
+                remote,
+                branch,
+                set_upstream,
+            }])
         }
 
         ScopedWriteOp::Reset { mode } => {
@@ -1080,8 +1122,15 @@ async fn handle_feature_pipeline(
 
             // Confirm before pulling
             let resp = gate.prompt(&GateType::SimpleConfirm {
-                message: format!("Sync: pull from {}/{} ({})?", remote, branch,
-                    match strategy { SyncStrategy::Merge => "merge", SyncStrategy::Rebase => "rebase" }),
+                message: format!(
+                    "Sync: pull from {}/{} ({})?",
+                    remote,
+                    branch,
+                    match strategy {
+                        SyncStrategy::Merge => "merge",
+                        SyncStrategy::Rebase => "rebase",
+                    }
+                ),
             })?;
             if !matches!(resp, GateResponse::Confirmed) {
                 println!("  Aborted.");
@@ -1102,15 +1151,16 @@ async fn add_commit_push_pipeline(
     show_all: bool,
 ) -> anyhow::Result<()> {
     // Build manifest and resolve files
-    let manifests = manifest::build_manifest(repo, 25)
-        .context("Failed to build file manifest")?;
+    let manifests = manifest::build_manifest(repo, 25).context("Failed to build file manifest")?;
 
     if manifests.is_empty() {
         println!("  Nothing modified in the repository.");
         return Ok(());
     }
 
-    let resolution = TwoPassResolver.resolve(&manifests, feature_hint, config).await?;
+    let resolution = TwoPassResolver
+        .resolve(&manifests, feature_hint, config)
+        .await?;
 
     let files = match resolution {
         ResolutionOutcome::Found(cr) => {
@@ -1195,11 +1245,7 @@ async fn commit_push_pipeline(
 ) -> anyhow::Result<()> {
     // commit_push only commits already-staged files → use index-vs-HEAD diff.
     let final_msg = resolve_or_generate_commit_message(
-        repo,
-        message,
-        /*include_workdir=*/ false,
-        config,
-        gate,
+        repo, message, /*include_workdir=*/ false, config, gate,
     )
     .await?;
     if final_msg.is_empty() {
@@ -1213,7 +1259,11 @@ async fn commit_push_pipeline(
     let set_upstream = !branch_has_upstream(repo, &branch);
     let steps = vec![
         PipelineStep::Commit { message: final_msg },
-        PipelineStep::Push { remote, branch, set_upstream },
+        PipelineStep::Push {
+            remote,
+            branch,
+            set_upstream,
+        },
     ];
 
     execute_pipeline(repo, steps, config, gate).await
@@ -1250,7 +1300,10 @@ async fn handle_nothing_to_push(
     // add → commit → push sequence themselves.
     println!();
     println!("  Nothing committed yet — `push` alone won't ship your local edits.");
-    println!("  {}", dim("(you have uncommitted changes; push needs a commit first)"));
+    println!(
+        "  {}",
+        dim("(you have uncommitted changes; push needs a commit first)")
+    );
     println!();
 
     let labels = vec![
@@ -1284,7 +1337,9 @@ async fn handle_nothing_to_push(
             let set_upstream = !branch_has_upstream(repo, &branch);
             vec![
                 PipelineStep::Add { files: vec![] },
-                PipelineStep::Commit { message: "update".to_string() },
+                PipelineStep::Commit {
+                    message: "update".to_string(),
+                },
                 PipelineStep::Push {
                     remote: remote.clone(),
                     branch,
@@ -1294,7 +1349,9 @@ async fn handle_nothing_to_push(
         }
         1 => vec![
             PipelineStep::Add { files: vec![] },
-            PipelineStep::Commit { message: "update".to_string() },
+            PipelineStep::Commit {
+                message: "update".to_string(),
+            },
         ],
         _ => return Ok(()),
     };
@@ -1351,7 +1408,9 @@ async fn handle_classified_recovery(
                     ),
                     pipeline: Some(vec![
                         PipelineStep::Stash,
-                        PipelineStep::Pull { remote: remote.clone() },
+                        PipelineStep::Pull {
+                            remote: remote.clone(),
+                        },
                         PipelineStep::StashPop,
                     ]),
                     info: None,
@@ -1363,8 +1422,12 @@ async fn handle_classified_recovery(
                     ),
                     pipeline: Some(vec![
                         PipelineStep::Add { files: vec![] },
-                        PipelineStep::Commit { message: "update".to_string() },
-                        PipelineStep::Pull { remote: remote.clone() },
+                        PipelineStep::Commit {
+                            message: "update".to_string(),
+                        },
+                        PipelineStep::Pull {
+                            remote: remote.clone(),
+                        },
                     ]),
                     info: None,
                 },
@@ -1393,7 +1456,9 @@ async fn handle_classified_recovery(
         FC::Network => vec![
             RecoveryOption {
                 label: format!("Retry pull   {}", dim("try the same step again")),
-                pipeline: Some(vec![PipelineStep::Pull { remote: remote.clone() }]),
+                pipeline: Some(vec![PipelineStep::Pull {
+                    remote: remote.clone(),
+                }]),
                 info: None,
             },
             RecoveryOption {
@@ -1478,7 +1543,10 @@ async fn handle_classified_recovery(
                 println!("  {}", dim("Retry the original command when ready."));
             }
             "hook" => {
-                println!("  {}", dim("Hook output was printed above the failure block."));
+                println!(
+                    "  {}",
+                    dim("Hook output was printed above the failure block.")
+                );
             }
             _ => {}
         }
@@ -1594,9 +1662,9 @@ async fn execute_pipeline(
     let mut last_error: Option<anyhow::Error> = None;
     let mut no_local_change = false;
     let mut failed_push: Option<(String, String)> = None; // (remote, branch) when a Push step fails
-    // Classified network/merge failure captured during the step loop. When
-    // set, the executor renders a class-aware picker instead of the generic
-    // anyhow chain.
+                                                          // Classified network/merge failure captured during the step loop. When
+                                                          // set, the executor renders a class-aware picker instead of the generic
+                                                          // anyhow chain.
     let mut classified: Option<(crate::git_ops::FailureClass, String, String)> = None; // (class, raw_stderr, step_verb)
     let glit_debug = std::env::var("GLIT_DEBUG").is_ok();
 
@@ -1657,7 +1725,11 @@ async fn execute_pipeline(
                     Ok(PostCheckResult::Verified) => (green(glyph_done), None, None),
                     Ok(PostCheckResult::Warning(w)) => (green(glyph_done), Some(w.clone()), None),
                     Ok(PostCheckResult::Failed(f)) => (red(glyph_fail), None, Some(f.clone())),
-                    Err(e) => (green(glyph_done), Some(format!("post-check error: {}", e)), None),
+                    Err(e) => (
+                        green(glyph_done),
+                        Some(format!("post-check error: {}", e)),
+                        None,
+                    ),
                 };
 
                 // Rewrite the line with final glyph + marker at the end.
@@ -1711,7 +1783,10 @@ async fn execute_pipeline(
                         eprintln!(
                             "  {}  {}",
                             dim("│"),
-                            dim(&format!("(git: {})", failure.raw_stderr.trim().replace('\n', " · ")))
+                            dim(&format!(
+                                "(git: {})",
+                                failure.raw_stderr.trim().replace('\n', " · ")
+                            ))
                         );
                     }
                     let (verb, _) = crate::validation::format_step_label(step);
@@ -1782,10 +1857,7 @@ async fn execute_pipeline(
             done_line.push_str(&format!(" · on {}", post_ctx.branch));
         }
         if post_ctx.upstream.is_some() {
-            done_line.push_str(&format!(
-                ", ↑{} ↓{}",
-                post_ctx.ahead, post_ctx.behind
-            ));
+            done_line.push_str(&format!(", ↑{} ↓{}", post_ctx.ahead, post_ctx.behind));
         }
         println!("  {} {}", green("✓"), green(&done_line));
         println!("  {}", dim(crate::copy::PLAN_NEXT_HINT));
@@ -1818,9 +1890,7 @@ async fn execute_pipeline(
     // resolution menu the user gets from `glit "safe to pull"`. The local
     // commit is already safe; the user just needs to decide how to reconcile.
     if let Some((remote, _branch)) = failed_push {
-        eprintln!(
-            "\nPush was rejected because the remote has commits you don't have."
-        );
+        eprintln!("\nPush was rejected because the remote has commits you don't have.");
         eprintln!("Let's figure out how to reconcile…\n");
         // Recursive across async fn boundary — box the future so the
         // compiler doesn't need to figure out the indefinite size.
@@ -1851,10 +1921,7 @@ pub fn execute_recovery() -> anyhow::Result<()> {
         .check_for_interrupted()?
         .ok_or_else(|| anyhow::anyhow!("No interrupted pipeline found in ~/.glit/snapshots/"))?;
 
-    println!(
-        "Found interrupted pipeline from {}.",
-        snapshot.captured_at
-    );
+    println!("Found interrupted pipeline from {}.", snapshot.captured_at);
     println!("Restoring repository to pre-pipeline state...\n");
 
     let repo_path = find_repo_root()?;
@@ -2010,8 +2077,7 @@ fn delete_repo(repo: &git2::Repository, gate: &dyn ConfirmationGate) -> anyhow::
     }
 
     print!("  Removing {} … ", display);
-    std::fs::remove_dir_all(&git_dir)
-        .with_context(|| format!("Failed to remove {}", display))?;
+    std::fs::remove_dir_all(&git_dir).with_context(|| format!("Failed to remove {}", display))?;
     println!("✓");
     println!("\nRepository deleted. Directory is no longer tracked by git.");
     Ok(())
@@ -2031,7 +2097,10 @@ fn init_repo(gate: &dyn ConfirmationGate) -> anyhow::Result<()> {
     git2::Repository::init(&cwd)
         .map_err(|e| anyhow::anyhow!("Failed to initialize repository: {}", e))?;
     println!("✓");
-    println!("\nInitialized empty git repository in {}/.git/", cwd.display());
+    println!(
+        "\nInitialized empty git repository in {}/.git/",
+        cwd.display()
+    );
     Ok(())
 }
 
@@ -2106,7 +2175,10 @@ async fn handle_detached_head_rescue(
 
     println!();
     println!("⚠  You are in DETACHED HEAD state.");
-    println!("   Currently at commit {} — not on any branch.", current_sha);
+    println!(
+        "   Currently at commit {} — not on any branch.",
+        current_sha
+    );
     println!("   Any commit you make here will be orphaned (lose-able) unless you save it.");
     println!();
 
@@ -2128,7 +2200,10 @@ async fn handle_detached_head_rescue(
             let name = name.trim().to_string();
             if let Err(r) = validate_branch_name(&name) {
                 let suggestion = sanitize_branch_name(&name);
-                println!("  '{}' isn't a valid branch name ({}). Using '{}'.", name, r, suggestion);
+                println!(
+                    "  '{}' isn't a valid branch name ({}). Using '{}'.",
+                    name, r, suggestion
+                );
                 let git_ops = Git2Operations;
                 git_ops.create_branch(repo, &suggestion)?;
                 git_ops.checkout(repo, &suggestion)?;
@@ -2190,9 +2265,7 @@ fn validate_branch_name(name: &str) -> Result<(), String> {
         return Err("contains '@{' (reserved sequence)".to_string());
     }
     for ch in name.chars() {
-        if matches!(ch, '~' | '^' | ':' | '?' | '*' | '[' | '\\' | '\x7f')
-            || (ch as u32) < 0x20
-        {
+        if matches!(ch, '~' | '^' | ':' | '?' | '*' | '[' | '\\' | '\x7f') || (ch as u32) < 0x20 {
             return Err(format!("contains invalid character '{}'", ch));
         }
     }
@@ -2221,7 +2294,9 @@ fn sanitize_branch_name(raw: &str) -> String {
     while out.contains("..") {
         out = out.replace("..", ".");
     }
-    let trimmed = out.trim_matches(|c| matches!(c, '-' | '.' | '/')).to_string();
+    let trimmed = out
+        .trim_matches(|c| matches!(c, '-' | '.' | '/'))
+        .to_string();
     if trimmed.is_empty() {
         "branch".to_string()
     } else {
@@ -2349,7 +2424,11 @@ fn maybe_disambiguate(
         .iter()
         .enumerate()
         .map(|(i, intent)| {
-            let prefix = if i == 0 { "(top guess) " } else { "(maybe)     " };
+            let prefix = if i == 0 {
+                "(top guess) "
+            } else {
+                "(maybe)     "
+            };
             format!("{}{}", prefix, crate::intent::intent_label(intent))
         })
         .collect();
@@ -2401,12 +2480,12 @@ fn summarize_step(
                 _ => Some(format!("→ Committed: {}", first_line)),
             }
         }
-        P::Push { remote, branch, set_upstream } => {
-            let suffix = if *set_upstream {
-                " (upstream set)"
-            } else {
-                ""
-            };
+        P::Push {
+            remote,
+            branch,
+            set_upstream,
+        } => {
+            let suffix = if *set_upstream { " (upstream set)" } else { "" };
             let mut line = if pre.ahead > 0 {
                 format!(
                     "→ Pushed {} commit(s) to {}/{}{}",
@@ -2469,16 +2548,19 @@ fn summarize_step(
         }
         P::StashPop => Some("→ Restored stashed changes (stash entry removed)".to_string()),
         P::Reset { mode } => Some(format!("→ Reset ({:?})", mode).to_lowercase()),
-        P::Undo { undone_summary, undone_sha, .. } => Some(format!(
+        P::Undo {
+            undone_summary,
+            undone_sha,
+            ..
+        } => Some(format!(
             "→ Undid commit {} \"{}\" (files re-staged)",
             undone_sha, undone_summary
         )),
-        P::PullRebase { remote, branch } => {
-            Some(format!("→ Rebased onto {}/{}", remote, branch))
-        }
-        P::ForcePush { remote, branch } => {
-            Some(format!("→ Force-pushed to {}/{} (with-lease)", remote, branch))
-        }
+        P::PullRebase { remote, branch } => Some(format!("→ Rebased onto {}/{}", remote, branch)),
+        P::ForcePush { remote, branch } => Some(format!(
+            "→ Force-pushed to {}/{} (with-lease)",
+            remote, branch
+        )),
         P::DiscardLocal { remote, branch } => Some(format!(
             "→ Reset local to {}/{} — any unpushed work is gone (recoverable via reflog)",
             remote, branch
@@ -2699,7 +2781,10 @@ mod tests {
     #[test]
     fn test_sanitize_branch_name_replaces_spaces() {
         assert_eq!(sanitize_branch_name("fix login"), "fix-login");
-        assert_eq!(sanitize_branch_name("Big Feature  Name"), "Big-Feature-Name");
+        assert_eq!(
+            sanitize_branch_name("Big Feature  Name"),
+            "Big-Feature-Name"
+        );
         assert_eq!(sanitize_branch_name("foo..bar"), "foo.bar");
         assert_eq!(sanitize_branch_name("-leading-"), "leading");
         assert_eq!(sanitize_branch_name("feat/login bug"), "feat/login-bug");
@@ -2710,12 +2795,7 @@ mod tests {
 
     #[test]
     fn test_step_name_coverage() {
-        assert_eq!(
-            step_name(&PipelineStep::Add {
-                files: vec![]
-            }),
-            "git add"
-        );
+        assert_eq!(step_name(&PipelineStep::Add { files: vec![] }), "git add");
         assert_eq!(
             step_name(&PipelineStep::Commit {
                 message: "test".to_string()
@@ -2739,9 +2819,11 @@ mod tests {
         let gate = MockGate {
             response: GateResponse::TextProvided("feat: my feature".to_string()),
         };
-        let result =
-            resolve_commit_message(CommitMessage::Provided("feat: my feature".to_string()), &gate)
-                .unwrap();
+        let result = resolve_commit_message(
+            CommitMessage::Provided("feat: my feature".to_string()),
+            &gate,
+        )
+        .unwrap();
         assert_eq!(result, "feat: my feature");
     }
 
@@ -2778,7 +2860,10 @@ mod tests {
             unrelated: vec![],
         };
         let result = gate
-            .prompt(&GateType::FileMultiSelect { classification, show_all: false })
+            .prompt(&GateType::FileMultiSelect {
+                classification,
+                show_all: false,
+            })
             .unwrap();
         match result {
             GateResponse::FilesSelected(files) => {

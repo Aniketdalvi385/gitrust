@@ -107,22 +107,33 @@ pub fn describe_situation(s: &RepoSituation) -> Option<String> {
     use RepoSituation as S;
     match s {
         S::Normal | S::EmptyRepo | S::NotARepo => None,
-        S::DetachedHead { stranded_commits: 0 } => Some("detached HEAD".to_string()),
+        S::DetachedHead {
+            stranded_commits: 0,
+        } => Some("detached HEAD".to_string()),
         S::DetachedHead { stranded_commits } => Some(format!(
             "detached HEAD ({} commit(s) not on any branch)",
             stranded_commits
         )),
-        S::MidMerge { resolved: false, conflicts } => Some(format!(
+        S::MidMerge {
+            resolved: false,
+            conflicts,
+        } => Some(format!(
             "merge in progress (conflicts in {} file(s))",
             conflicts.len()
         )),
         S::MidMerge { resolved: true, .. } => {
             Some("merge in progress (conflicts resolved — ready to commit)".to_string())
         }
-        S::MidRebase { current, total, conflicted } if conflicted.is_empty() => {
-            Some(format!("rebase in progress ({}/{})", current, total))
-        }
-        S::MidRebase { current, total, conflicted } => Some(format!(
+        S::MidRebase {
+            current,
+            total,
+            conflicted,
+        } if conflicted.is_empty() => Some(format!("rebase in progress ({}/{})", current, total)),
+        S::MidRebase {
+            current,
+            total,
+            conflicted,
+        } => Some(format!(
             "rebase in progress ({}/{}, conflicts in {} file(s))",
             current,
             total,
@@ -162,7 +173,10 @@ pub fn detect_situation(repo: &Repository) -> RepoSituation {
                 conflicts,
             };
         }
-        RS::Rebase | RS::RebaseInteractive | RS::RebaseMerge | RS::ApplyMailbox
+        RS::Rebase
+        | RS::RebaseInteractive
+        | RS::RebaseMerge
+        | RS::ApplyMailbox
         | RS::ApplyMailboxOrRebase => {
             let (current, total) = rebase_progress(repo);
             return RepoSituation::MidRebase {
@@ -198,7 +212,11 @@ pub fn detect_situation(repo: &Repository) -> RepoSituation {
     }
 
     // 5/6. Remote-rewritten vs diverged (need the current branch name).
-    if let Some(branch) = repo.head().ok().and_then(|h| h.shorthand().map(String::from)) {
+    if let Some(branch) = repo
+        .head()
+        .ok()
+        .and_then(|h| h.shorthand().map(String::from))
+    {
         if let Some((old_tip, new_tip)) = detect_remote_rewritten(repo, &branch) {
             return RepoSituation::RemoteRewritten { old_tip, new_tip };
         }
@@ -288,7 +306,7 @@ fn detect_remote_rewritten(repo: &Repository, branch: &str) -> Option<(git2::Oid
         return None;
     }
     match repo.graph_descendant_of(new_tip, old_tip) {
-        Ok(true) => None,                    // fast-forward — not a rewrite
+        Ok(true) => None, // fast-forward — not a rewrite
         Ok(false) => Some((old_tip, new_tip)),
         Err(_) => None,
     }
@@ -703,7 +721,13 @@ mod tests {
         repo
     }
 
-    fn commit_file(repo: &Repository, path: &str, content: &str, msg: &str, update_ref: &str) -> git2::Oid {
+    fn commit_file(
+        repo: &Repository,
+        path: &str,
+        content: &str,
+        msg: &str,
+        update_ref: &str,
+    ) -> git2::Oid {
         let wd = repo.workdir().unwrap();
         std::fs::write(wd.join(path), content).unwrap();
         let mut index = repo.index().unwrap();
@@ -730,7 +754,9 @@ mod tests {
     fn test_detect_situation_mid_merge_unresolved_then_resolved() {
         let dir = TempDir::new().unwrap();
         let repo = init_with_identity(&dir);
-        let base = repo.find_commit(commit_file(&repo, "f.txt", "base\n", "base", "HEAD")).unwrap();
+        let base = repo
+            .find_commit(commit_file(&repo, "f.txt", "base\n", "base", "HEAD"))
+            .unwrap();
         // theirs off base
         commit_file(&repo, "f.txt", "theirs\n", "theirs", "refs/heads/theirs");
         // ours off base on the current branch
@@ -744,7 +770,10 @@ mod tests {
         repo.merge(&[&their_ac], None, None).unwrap();
 
         match detect_situation(&repo) {
-            RepoSituation::MidMerge { resolved, conflicts } => {
+            RepoSituation::MidMerge {
+                resolved,
+                conflicts,
+            } => {
                 assert!(!resolved, "should be unresolved");
                 assert!(conflicts.iter().any(|p| p == "f.txt"));
             }
@@ -767,9 +796,12 @@ mod tests {
         // Divergent same-line edits, then a real `git rebase` that conflicts.
         let dir = TempDir::new().unwrap();
         let repo = init_with_identity(&dir);
-        let base = repo.find_commit(commit_file(&repo, "f.txt", "base\n", "base", "HEAD")).unwrap();
+        let base = repo
+            .find_commit(commit_file(&repo, "f.txt", "base\n", "base", "HEAD"))
+            .unwrap();
         commit_file(&repo, "f.txt", "feature\n", "feature", "refs/heads/feature");
-        repo.reset(base.as_object(), git2::ResetType::Hard, None).unwrap();
+        repo.reset(base.as_object(), git2::ResetType::Hard, None)
+            .unwrap();
         commit_file(&repo, "f.txt", "main\n", "main", "HEAD");
         let out = std::process::Command::new("git")
             .args(["rebase", "feature"])
@@ -780,7 +812,9 @@ mod tests {
 
         let repo = Repository::open(dir.path()).unwrap();
         match detect_situation(&repo) {
-            RepoSituation::MidRebase { total, conflicted, .. } => {
+            RepoSituation::MidRebase {
+                total, conflicted, ..
+            } => {
                 assert!(total >= 1, "expected a total step count");
                 assert!(conflicted.iter().any(|p| p == "f.txt"));
             }
@@ -800,7 +834,9 @@ mod tests {
         commit_file(&repo, "f.txt", "3\n", "c3", "HEAD");
         assert_eq!(
             detect_situation(&repo),
-            RepoSituation::DetachedHead { stranded_commits: 2 }
+            RepoSituation::DetachedHead {
+                stranded_commits: 2
+            }
         );
     }
 
@@ -834,17 +870,22 @@ mod tests {
         // ancestor of the new tip).
         let dir = TempDir::new().unwrap();
         let repo = init_with_identity(&dir);
-        let base = repo.find_commit(commit_file(&repo, "f.txt", "base\n", "base", "HEAD")).unwrap();
+        let base = repo
+            .find_commit(commit_file(&repo, "f.txt", "base\n", "base", "HEAD"))
+            .unwrap();
         // Two divergent commits off base: "old remote" and "new remote".
         let old_remote = commit_file(&repo, "f.txt", "old\n", "old", "refs/heads/tmp_old");
-        repo.reset(base.as_object(), git2::ResetType::Hard, None).unwrap();
+        repo.reset(base.as_object(), git2::ResetType::Hard, None)
+            .unwrap();
         let new_remote = commit_file(&repo, "g.txt", "new\n", "new", "refs/heads/tmp_new");
 
         // Point the tracking ref at old, then move it to new (recording reflog).
         let branch = repo.head().unwrap().shorthand().unwrap().to_string();
         let tracking = format!("refs/remotes/origin/{}", branch);
-        repo.reference(&tracking, old_remote, true, "set old").unwrap();
-        repo.reference(&tracking, new_remote, true, "force-push rewrite").unwrap();
+        repo.reference(&tracking, old_remote, true, "set old")
+            .unwrap();
+        repo.reference(&tracking, new_remote, true, "force-push rewrite")
+            .unwrap();
 
         match detect_situation(&repo) {
             RepoSituation::RemoteRewritten { old_tip, new_tip } => {

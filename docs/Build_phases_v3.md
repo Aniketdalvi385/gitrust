@@ -82,7 +82,7 @@ The state machine that eliminates the "wrong advice from unrecognized state" fai
 - `prompts.rs`: classifier vocabulary + canonical fast-path entries: "abort rebase", "continue rebase", "abort merge", "abort cherry-pick". Safe to whitelist: with Phase 10's gate, they're only valid in their states.
 - Update the §13 matrix rows so Mid\* situations allow exactly these ops + status/diff.
 
-**Verification:** tempdir tests — conflicted rebase → resolve → `RebaseContinue` succeeds and lands on the rebased tip; `RebaseAbort` restores the original HEAD oid; `MergeAbort` restores; Continue with unresolved conflicts is Blocked with the file list. `cargo test` green.
+**Verification:** tempdir tests — conflicted rebase → resolve → `RebaseContinue` succeeds and lands on the rebased tip; `RebaseAbort` restores the original HEAD oid; `MergeAbort` restores; Continue with unresolved conflicts is Blocked with the file list. `cargo test` green; `cargo fmt --check` passes.
 
 ---
 
@@ -101,7 +101,7 @@ The scenario that started this whole redesign — "I committed, fetched, and the
 - `Sync { strategy }` intent resolves its target branch via `origin/HEAD` (default-branch detection) and reuses the same ChoiceGate (S13).
 - Migrate the Phase 10 `DetachedHead` write-block off its `agent.rs` special-case (`if matches!(…DetachedHead…)` → `handle_detached_head_rescue`) onto `SituationVerdict::Redirect { suggested_intent }`, so the gate—not `agent.rs`—drives the branch-here / switch-back way-out.
 
-**Verification:** integration test reproducing the audited scenario — bare remote + two clones, diverge to `[ahead 1, behind 1]`, run the reconcile pipeline with a mocked gate choosing Rebase → assert final ahead/behind `0 0` on push and **both** changes present in the tree. Second test: Merge path → merge commit with 2 parents. Third: conflicting rebase path → situation transitions to `MidRebase`, pipeline pauses without error spew, snapshot exists.
+**Verification:** integration test reproducing the audited scenario — bare remote + two clones, diverge to `[ahead 1, behind 1]`, run the reconcile pipeline with a mocked gate choosing Rebase → assert final ahead/behind `0 0` on push and **both** changes present in the tree. Second test: Merge path → merge commit with 2 parents. Third: conflicting rebase path → situation transitions to `MidRebase`, pipeline pauses without error spew, snapshot exists. `cargo fmt --check` passes.
 
 ---
 
@@ -113,7 +113,7 @@ The scenario that started this whole redesign — "I committed, fetched, and the
 - `Unstage` uses index manipulation scoped to paths (restore-staged semantics), never `Reset` modes.
 - Danger grading: Amend/Squash inherit Hard-adjacent danger _only_ when `PushedCommitRewrite` fires; otherwise medium.
 
-**Verification:** mocked-gate tests — an undo phrase can never reach `Reset::Hard` without the ChoiceGate having offered all four options (assert on gate invocation); amend on a pushed commit triggers the escalation path; `SquashLastN(3)` turns 3 commits into 1 with an identical tree oid; `Revert` produces a commit whose tree equals the pre-target tree; force path emits `--force-with-lease` (assert on the subprocess args).
+**Verification:** mocked-gate tests — an undo phrase can never reach `Reset::Hard` without the ChoiceGate having offered all four options (assert on gate invocation); amend on a pushed commit triggers the escalation path; `SquashLastN(3)` turns 3 commits into 1 with an identical tree oid; `Revert` produces a commit whose tree equals the pre-target tree; force path emits `--force-with-lease` (assert on the subprocess args). `cargo fmt --check` passes.
 
 ---
 
@@ -127,7 +127,7 @@ The scenario that started this whole redesign — "I committed, fetched, and the
 - Checkout guard (S21): pre-check `WouldStrandCommits { n }` when leaving a detached HEAD that has commits unreachable from any branch → gate offers `CreateBranchAt` first.
 - Housekeeping fix while in this file: persist the repo workdir path inside `PipelineSnapshot` and filter `check_for_interrupted` by it (prevents worktree/multi-repo recovery cross-talk, S56).
 
-**Verification:** tempdir tests — commit on a branch, delete the branch, forensic scan finds the commit, restore creates `rescue/*` at the right oid with current HEAD untouched; dropped stash surfaces in the scan; `Clean` writes the trash copy before deletion (assert file exists in trash and is byte-identical); Reset::Hard backs up the dirty delta; checkout from detached-with-2-commits raises the guard; snapshots from repo A never prompt recovery in repo B.
+**Verification:** tempdir tests — commit on a branch, delete the branch, forensic scan finds the commit, restore creates `rescue/*` at the right oid with current HEAD untouched; dropped stash surfaces in the scan; `Clean` writes the trash copy before deletion (assert file exists in trash and is byte-identical); Reset::Hard backs up the dirty delta; checkout from detached-with-2-commits raises the guard; snapshots from repo A never prompt recovery in repo B. `cargo fmt --check` passes.
 
 ---
 

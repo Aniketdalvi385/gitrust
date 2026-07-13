@@ -30,9 +30,10 @@ impl ConfirmationGate for InquireGate {
                 }
             }
 
-            GateType::FileMultiSelect { classification, show_all } => {
-                prompt_file_multiselect(classification, *show_all)
-            }
+            GateType::FileMultiSelect {
+                classification,
+                show_all,
+            } => prompt_file_multiselect(classification, *show_all),
 
             GateType::EditableText { initial, label } => {
                 let result = Text::new(label)
@@ -201,10 +202,7 @@ fn prompt_file_multiselect(
 ///      Risks:     <risks>
 ///      Recovery:  <recovery>     (when Some)
 ///      Safety:    <safety>       (when Some)
-fn print_explanation_block(
-    danger: crate::danger::DangerLevel,
-    exp: &crate::explain::Explanation,
-) {
+fn print_explanation_block(danger: crate::danger::DangerLevel, exp: &crate::explain::Explanation) {
     let marker = crate::danger::colored_marker(danger);
     let label_text = crate::danger::label(danger);
     let label_colored = crate::danger::colorize(danger, label_text);
@@ -312,7 +310,7 @@ impl ConfirmationGate for MockGate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::{ClassifiedFile, ClassificationResult, GateResponse, GateType};
+    use crate::commands::{ClassificationResult, ClassifiedFile, GateResponse, GateType};
 
     #[test]
     fn test_auto_confirm_gate_none() {
@@ -350,7 +348,10 @@ mod tests {
             }],
         };
         let result = gate
-            .prompt(&GateType::FileMultiSelect { classification, show_all: false })
+            .prompt(&GateType::FileMultiSelect {
+                classification,
+                show_all: false,
+            })
             .unwrap();
         match result {
             GateResponse::FilesSelected(files) => {
@@ -412,7 +413,10 @@ mod tests {
             unrelated: vec![],
         };
         let result = gate
-            .prompt(&GateType::FileMultiSelect { classification, show_all: false })
+            .prompt(&GateType::FileMultiSelect {
+                classification,
+                show_all: false,
+            })
             .unwrap();
         match result {
             GateResponse::FilesSelected(files) => {

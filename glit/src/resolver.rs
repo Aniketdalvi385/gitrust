@@ -157,7 +157,10 @@ fn build_classification_block(manifests: &[&FileManifest]) -> String {
         } else {
             f.diff_snippet.clone()
         };
-        block += &format!("FILE {} [{:?}] {}\n{}\n---\n", i, f.change_type, f.path, snippet);
+        block += &format!(
+            "FILE {} [{:?}] {}\n{}\n---\n",
+            i, f.change_type, f.path, snippet
+        );
     }
     block
 }
@@ -166,10 +169,14 @@ fn parse_classification_response(
     json_str: &str,
     manifests: &[&FileManifest],
 ) -> anyhow::Result<ClassificationResult> {
-    let v: serde_json::Value =
-        serde_json::from_str(json_str).context("LLM returned unparseable JSON for classification")?;
+    let v: serde_json::Value = serde_json::from_str(json_str)
+        .context("LLM returned unparseable JSON for classification")?;
 
-    fn extract_files(v: &serde_json::Value, key: &str, manifests: &[&FileManifest]) -> Vec<ClassifiedFile> {
+    fn extract_files(
+        v: &serde_json::Value,
+        key: &str,
+        manifests: &[&FileManifest],
+    ) -> Vec<ClassifiedFile> {
         let mut result = Vec::new();
         if let Some(arr) = v[key].as_array() {
             for item in arr {
@@ -239,11 +246,9 @@ pub fn validate_explicit_files(
 
 fn is_likely_binary(path: &str) -> bool {
     let binary_extensions = [
-        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".webp",
-        ".zip", ".tar", ".gz", ".bz2", ".7z",
-        ".exe", ".dll", ".so", ".dylib",
-        ".pdf", ".doc", ".docx",
-        ".woff", ".woff2", ".ttf", ".otf",
+        ".png", ".jpg", ".jpeg", ".gif", ".ico", ".bmp", ".webp", ".zip", ".tar", ".gz", ".bz2",
+        ".7z", ".exe", ".dll", ".so", ".dylib", ".pdf", ".doc", ".docx", ".woff", ".woff2", ".ttf",
+        ".otf",
     ];
     let lower = path.to_lowercase();
     binary_extensions.iter().any(|ext| lower.ends_with(ext))
@@ -334,12 +339,16 @@ mod tests {
         let repo = git2::Repository::init(dir.path()).unwrap();
         std::fs::write(dir.path().join("existing.txt"), "hello").unwrap();
 
-        let (valid, errors) =
-            validate_explicit_files(&repo, &["existing.txt".to_string(), "missing.txt".to_string()]);
+        let (valid, errors) = validate_explicit_files(
+            &repo,
+            &["existing.txt".to_string(), "missing.txt".to_string()],
+        );
 
         // existing.txt should be in status (untracked), missing.txt not
         assert!(valid.contains(&"existing.txt".to_string()));
-        assert!(errors.iter().any(|e| matches!(e, FileValidationError::NotInRepo(p) if p == "missing.txt")));
+        assert!(errors
+            .iter()
+            .any(|e| matches!(e, FileValidationError::NotInRepo(p) if p == "missing.txt")));
     }
 
     #[test]

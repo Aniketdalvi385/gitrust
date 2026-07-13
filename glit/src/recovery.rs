@@ -51,7 +51,11 @@ impl FileRecoveryManager {
 
 impl RecoveryManager for FileRecoveryManager {
     fn capture_snapshot(&self, repo: &Repository) -> anyhow::Result<PipelineSnapshot> {
-        let head_oid = repo.head().ok().and_then(|h| h.target()).map(|o| o.to_string());
+        let head_oid = repo
+            .head()
+            .ok()
+            .and_then(|h| h.target())
+            .map(|o| o.to_string());
 
         let mut index = repo.index().context("Failed to read index")?;
         let index_oid = index
@@ -77,8 +81,8 @@ impl RecoveryManager for FileRecoveryManager {
 
         // Persist to disk BEFORE any step executes
         let path = Self::snapshot_path(&snapshot.pipeline_id)?;
-        let json = serde_json::to_string_pretty(&snapshot)
-            .context("Failed to serialize snapshot")?;
+        let json =
+            serde_json::to_string_pretty(&snapshot).context("Failed to serialize snapshot")?;
         fs::write(&path, json)
             .with_context(|| format!("Failed to write snapshot to {}", path.display()))?;
 
@@ -176,8 +180,8 @@ impl RecoveryManager for FileRecoveryManager {
             return Ok(vec![]);
         }
         let mut out = Vec::new();
-        for entry in fs::read_dir(&dir)
-            .with_context(|| format!("Failed to read {}", dir.display()))?
+        for entry in
+            fs::read_dir(&dir).with_context(|| format!("Failed to read {}", dir.display()))?
         {
             let entry = entry?;
             let path = entry.path();
@@ -215,8 +219,8 @@ impl PipelineStep {
     pub fn recovery_action(&self, snapshot: &PipelineSnapshot) -> RecoveryAction {
         match self {
             PipelineStep::Add { .. } => {
-                let oid = git2::Oid::from_str(&snapshot.index_oid)
-                    .unwrap_or_else(|_| git2::Oid::zero());
+                let oid =
+                    git2::Oid::from_str(&snapshot.index_oid).unwrap_or_else(|_| git2::Oid::zero());
                 RecoveryAction::RestoreIndex {
                     to_oid: oid,
                     description: "unstage all files staged by this pipeline".into(),
@@ -355,8 +359,15 @@ mod tests {
             let tree = repo.find_tree(tree_oid).unwrap();
             let sig = git2::Signature::now("Test", "test@test.com").unwrap();
             let parent = repo.head().unwrap().peel_to_commit().unwrap();
-            repo.commit(Some("HEAD"), &sig, &sig, "pipeline commit", &tree, &[&parent])
-                .unwrap();
+            repo.commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "pipeline commit",
+                &tree,
+                &[&parent],
+            )
+            .unwrap();
         }
 
         // HEAD should have advanced
