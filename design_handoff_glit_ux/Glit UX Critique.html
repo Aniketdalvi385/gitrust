@@ -1,0 +1,1766 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Glit — UX critique</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0d0e;
+    --panel: #14171a;
+    --panel-2: #1a1e22;
+    --term-bg: #0d1117;
+    --term-bg-2: #12161b;
+    --fg: #e8eaed;
+    --fg-2: #b7bdc6;
+    --dim: #6e7681;
+    --dim-2: #4a525c;
+    --rule: #22272e;
+    --rule-2: #2d343c;
+    --user: #79c0ff;          /* prompt + neutral commands */
+    --user-2: #a5d6ff;
+    --green: #56d364;
+    --yellow: #e3b341;
+    --orange: #ff9d4a;
+    --red: #ff7b72;
+    --magenta: #d2a8ff;
+    --accent: #ffd24a;        /* doc accent */
+  }
+  * { box-sizing: border-box; }
+  html, body { background: var(--bg); color: var(--fg); }
+  body {
+    font-family: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+    font-size: 16px;
+    line-height: 1.55;
+    margin: 0;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 64px 56px 96px; }
+
+  /* ---------- header ---------- */
+  .eyebrow {
+    font-family: "Geist Mono", ui-monospace, monospace;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  h1 {
+    font-size: 52px;
+    line-height: 1.05;
+    letter-spacing: -0.025em;
+    font-weight: 600;
+    margin: 8px 0 20px;
+    text-wrap: balance;
+  }
+  h1 .accent { color: var(--accent); }
+  .lede {
+    font-size: 19px;
+    line-height: 1.5;
+    color: var(--fg-2);
+    max-width: 760px;
+    text-wrap: pretty;
+  }
+  .lede strong { color: var(--fg); font-weight: 500; }
+
+  hr.sep {
+    border: 0;
+    border-top: 1px solid var(--rule);
+    margin: 56px 0 40px;
+  }
+
+  /* ---------- section ---------- */
+  h2 {
+    font-size: 13px;
+    font-family: "Geist Mono", ui-monospace, monospace;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--dim);
+    font-weight: 500;
+    margin: 0 0 28px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  h2::after {
+    content: "";
+    flex: 1;
+    border-top: 1px solid var(--rule);
+  }
+  h3 {
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    margin: 0 0 6px;
+    text-wrap: balance;
+  }
+  h3 .num {
+    display: inline-block;
+    font-family: "Geist Mono", ui-monospace, monospace;
+    font-size: 14px;
+    color: var(--dim);
+    font-weight: 500;
+    margin-right: 14px;
+    vertical-align: 4px;
+  }
+  .sub {
+    color: var(--fg-2);
+    margin: 0 0 22px;
+    max-width: 820px;
+    text-wrap: pretty;
+  }
+  p { text-wrap: pretty; }
+
+  /* ---------- top-level findings cards ---------- */
+  .findings {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
+  }
+  .finding {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    padding: 22px 24px;
+  }
+  .finding .label {
+    font-family: "Geist Mono", ui-monospace, monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+    margin-bottom: 8px;
+  }
+  .finding h4 {
+    font-size: 17px;
+    font-weight: 600;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+  .finding p {
+    color: var(--fg-2);
+    font-size: 14.5px;
+    margin: 0 0 14px;
+    line-height: 1.5;
+  }
+  .quote {
+    font-family: "Geist Mono", ui-monospace, monospace;
+    font-size: 13px;
+    background: var(--term-bg);
+    border: 1px solid var(--rule);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin: 0;
+    color: var(--fg-2);
+    white-space: pre-wrap;
+    line-height: 1.5;
+  }
+  .quote.bad { border-left: 2px solid var(--red); }
+  .quote.good { border-left: 2px solid var(--green); }
+  .quote .strike { color: var(--dim-2); text-decoration: line-through; }
+  .quote + .quote { margin-top: 6px; }
+  .quote-pair { display: grid; gap: 6px; }
+
+  /* ---------- flow blocks ---------- */
+  .flow { margin-bottom: 72px; }
+  .flow-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    margin-top: 22px;
+  }
+  .term {
+    background: var(--term-bg);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    overflow: hidden;
+    font-family: "Geist Mono", ui-monospace, "JetBrains Mono", monospace;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--fg);
+  }
+  .term-head {
+    background: var(--term-bg-2);
+    border-bottom: 1px solid var(--rule);
+    padding: 8px 14px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: "Geist", sans-serif;
+    font-size: 12px;
+    letter-spacing: 0.02em;
+  }
+  .term-head .dots {
+    display: flex; gap: 6px;
+  }
+  .term-head .dots i {
+    width: 11px; height: 11px; border-radius: 50%;
+    background: #3a3f47;
+    display: inline-block;
+  }
+  .term-head .label {
+    font-family: "Geist Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+  }
+  .term-head .label.bad { color: var(--red); }
+  .term-head .label.good { color: var(--green); }
+  .term-body {
+    padding: 16px 18px 20px;
+    white-space: pre-wrap;
+    overflow-x: auto;
+  }
+
+  /* ANSI-ish color classes inside .term */
+  .term .p { color: var(--dim); }              /* prompt chrome */
+  .term .u { color: var(--user); }             /* user input */
+  .term .d { color: var(--dim); }              /* dim/secondary */
+  .term .g { color: var(--green); }
+  .term .y { color: var(--yellow); }
+  .term .o { color: var(--orange); }
+  .term .r { color: var(--red); }
+  .term .m { color: var(--magenta); }
+  .term .b { color: var(--user-2); }
+  .term .strong { font-weight: 600; color: var(--fg); }
+  .term .head { color: var(--fg); font-weight: 600; }
+  .term .caret { color: var(--accent); }
+  .term .cursor {
+    display: inline-block;
+    width: 7px; height: 14px;
+    background: var(--fg);
+    vertical-align: -2px;
+    animation: blink 1s steps(2) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* changes list */
+  .changes {
+    margin: 18px 0 0;
+    padding: 0;
+    list-style: none;
+    display: grid;
+    gap: 10px;
+  }
+  .changes li {
+    color: var(--fg-2);
+    font-size: 14.5px;
+    padding-left: 22px;
+    position: relative;
+    line-height: 1.5;
+  }
+  .changes li::before {
+    content: "→";
+    position: absolute;
+    left: 0;
+    color: var(--accent);
+    font-family: "Geist Mono", monospace;
+  }
+  .changes li code, .changes li .mono {
+    font-family: "Geist Mono", monospace;
+    font-size: 13px;
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 4px;
+    padding: 1px 6px;
+    color: var(--fg);
+  }
+  .changes li strong { color: var(--fg); font-weight: 600; }
+
+  /* footer / questions */
+  .questions {
+    background: var(--panel);
+    border: 1px solid var(--rule);
+    border-radius: 12px;
+    padding: 28px 32px;
+    margin-top: 24px;
+  }
+  .questions ol {
+    margin: 0;
+    padding-left: 22px;
+    color: var(--fg-2);
+  }
+  .questions li {
+    margin-bottom: 12px;
+    line-height: 1.55;
+  }
+  .questions li strong { color: var(--fg); font-weight: 600; }
+
+  .meta {
+    margin-top: 56px;
+    color: var(--dim);
+    font-size: 13px;
+    font-family: "Geist Mono", monospace;
+    letter-spacing: 0.04em;
+  }
+
+  /* ---------- timeline component (terminal.css-inspired) ---------- */
+  .timeline-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 14px;
+    margin-top: 22px;
+  }
+  .tl-frame {
+    background: var(--term-bg);
+    border: 1px solid var(--rule);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .tl-frame-head {
+    background: var(--term-bg-2);
+    border-bottom: 1px solid var(--rule);
+    padding: 10px 16px;
+    font-family: "Geist Mono", monospace;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .tl-frame-head .state { color: var(--fg-2); }
+  .tl-frame-head .state.run { color: var(--accent); }
+  .tl-frame-head .state.done { color: var(--green); }
+  .tl-body { padding: 18px 22px 22px; }
+  .tl-cmd {
+    font-family: "Geist Mono", monospace;
+    font-size: 12.5px;
+    color: var(--fg);
+    margin: 0 0 18px;
+  }
+  .tl-cmd .p { color: var(--dim); margin-right: 6px; }
+  .tl-cmd .u { color: var(--user); }
+  .timeline {
+    position: relative;
+    padding-left: 26px;
+    margin: 0;
+    list-style: none;
+  }
+  .timeline::before {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 7px;
+    bottom: 7px;
+    width: 1px;
+    background: var(--rule-2);
+  }
+  .t-step {
+    position: relative;
+    padding-bottom: 14px;
+  }
+  .t-step:last-child { padding-bottom: 0; }
+  .t-step .node {
+    position: absolute;
+    left: -25px;
+    top: 4px;
+    width: 11px; height: 11px;
+    border-radius: 50%;
+    border: 1.5px solid var(--rule-2);
+    background: var(--term-bg);
+    box-sizing: border-box;
+  }
+  .t-step.done .node {
+    background: var(--green);
+    border-color: var(--green);
+  }
+  .t-step.done .node::after {
+    content: "";
+    position: absolute;
+    left: 2px; top: 4px;
+    width: 3px; height: 5px;
+    border-right: 1.5px solid var(--term-bg);
+    border-bottom: 1.5px solid var(--term-bg);
+    transform: rotate(45deg);
+  }
+  .t-step.run .node {
+    background: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 4px rgba(255, 210, 74, 0.18);
+    animation: tlPulse 1.4s ease-in-out infinite;
+  }
+  @keyframes tlPulse {
+    0%, 100% { box-shadow: 0 0 0 4px rgba(255, 210, 74, 0.20); }
+    50% { box-shadow: 0 0 0 8px rgba(255, 210, 74, 0.06); }
+  }
+  .t-card {
+    background: var(--term-bg-2);
+    border: 1px solid var(--rule);
+    border-radius: 7px;
+    padding: 10px 14px;
+    font-family: "Geist Mono", monospace;
+    font-size: 12.5px;
+    line-height: 1.5;
+  }
+  .t-card .row {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .t-card .verb {
+    color: var(--user-2);
+    font-weight: 600;
+    min-width: 52px;
+  }
+  .t-step.done .t-card .verb { color: var(--green); }
+  .t-card .target { color: var(--fg); }
+  .t-card .scope { color: var(--magenta); }
+  .t-card .stat {
+    color: var(--green);
+    font-size: 11.5px;
+    margin-left: auto;
+  }
+  .t-card .stat.bad { color: var(--red); }
+  .t-card .marker { color: var(--orange); margin-left: 4px; }
+  .t-card .marker.r2 { color: var(--red); }
+  .t-card .meta {
+    color: var(--dim);
+    font-size: 11.5px;
+    margin-top: 4px;
+  }
+  .t-card .delta {
+    color: var(--dim);
+    font-size: 11.5px;
+    font-family: "Geist Mono", monospace;
+    margin-top: 4px;
+  }
+  .t-card .delta .from { color: var(--dim-2); }
+  .t-card .delta .to { color: var(--yellow); }
+  .tl-foot {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px dashed var(--rule);
+    font-family: "Geist Mono", monospace;
+    font-size: 12px;
+    color: var(--dim);
+    line-height: 1.6;
+  }
+  .tl-foot .key {
+    color: var(--accent);
+    background: rgba(255, 210, 74, 0.08);
+    border: 1px solid rgba(255, 210, 74, 0.25);
+    border-radius: 3px;
+    padding: 0 5px;
+  }
+  .tl-foot .next {
+    color: var(--user-2);
+  }
+  .tl-foot .recover { color: var(--green); }
+
+  /* small screens */
+  @media (max-width: 900px) {
+    .wrap { padding: 40px 24px 64px; }
+    h1 { font-size: 36px; }
+    .findings { grid-template-columns: 1fr; }
+    .flow-grid { grid-template-columns: 1fr; }
+    .timeline-grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ====================== HEADER ====================== -->
+  <div class="eyebrow">UX critique · agentic CLI</div>
+  <h1>Glit reads its <span class="accent">own</span> intent out loud,<br>then forgets it's an agent.</h1>
+  <p class="lede">
+    The flows you described are 80% there — safety tiers, recovery snapshots, plan previews, type-to-confirm. The polish gap is mostly in <strong>tone, default behavior, and consistency</strong>. Below: what's already working, six cross-cutting fixes, then concrete before/after rewrites for each flow. Everything quoted as "what to change to what."
+  </p>
+
+  <hr class="sep">
+
+  <!-- ====================== WHAT'S WORKING ====================== -->
+  <h2>Things you should not touch</h2>
+  <p class="sub">After seeing the full loop (status → branch list → commit → conflict check), it's clear the foundation is stronger than the screenshot let on. Flagging these so they don't get redesigned out by accident.</p>
+
+  <div class="findings">
+    <div class="finding">
+      <div class="label">Keep · Typo tolerance</div>
+      <h4><span class="mono" style="font-family:'Geist Mono'">glit 'statsus'</span> just works</h4>
+      <p>Quietly running status when the user fat-fingers it is exactly the delight an agentic CLI should provide. Don't add a "did you mean…" prompt — silent rescue is better than chatty rescue.</p>
+<pre class="quote good">$ glit 'statsus'
+On branch main · tracking origin/main · 1 ahead · 1 behind</pre>
+    </div>
+
+    <div class="finding">
+      <div class="label">Keep · Status line</div>
+      <h4>Single-line status header is great</h4>
+      <p><span class="mono" style="font-family:'Geist Mono'">On branch main · tracking origin/main · 1 ahead · 1 behind</span> is denser and more scannable than <span class="mono" style="font-family:'Geist Mono'">git status</span>'s 4-line preamble. The middot separator + concrete ahead/behind counts are doing real work.</p>
+<pre class="quote good">→ Diverged from upstream (1 ahead, 1 behind). Pull first: glit "pull"
+(Remote state from last fetch — run `glit "fetch"` to refresh.)</pre>
+    </div>
+
+    <div class="finding">
+      <div class="label">Keep · Rich picker</div>
+      <h4>The arrow-key picker correctly defaults to Merge</h4>
+      <p>I was wrong in my first pass — the picker <em>does</em> cursor on the safe option, with type-to-filter and full descriptions. (The "Do nothing" line I flagged in the original screenshot looks like an inline degraded fallback.) Keep the rich picker; investigate why the fallback fires.</p>
+<pre class="quote good">? Pick a resolution strategy:
+&gt; Merge (creates a merge commit; you'll resolve markers in editor)
+  Rebase (replays your 1 commit(s) on top of remote)
+  ...
+[↑↓ to move, enter to select, type to filter]</pre>
+    </div>
+
+    <div class="finding">
+      <div class="label">Keep · Branch list</div>
+      <h4>Branch table is information-dense</h4>
+      <p><span class="mono" style="font-family:'Geist Mono'">* main → origin/main (↑1 ↓1)</span> packs current/upstream/ahead-behind into one line. The <span class="mono" style="font-family:'Geist Mono'">master (no upstream)</span> annotation on the sibling row is the kind of detail that saves a beginner from a 20-minute debugging session.</p>
+<pre class="quote good">* main   →  origin/main  (↑1 ↓1)
+  master    (no upstream)</pre>
+    </div>
+
+    <div class="finding">
+      <div class="label">Keep · SHA transitions</div>
+      <h4><span class="mono" style="font-family:'Geist Mono'">(aa44620 → 0de4a0d)</span> in commit confirmation</h4>
+      <p>Showing the SHA delta after a write op is the kind of receipt that gives power users confidence and gives beginners a thing to copy when something goes wrong. Use this pattern on every write op (push: <span class="mono" style="font-family:'Geist Mono'">origin/main 0de4a0d → 1a3f4b8</span>).</p>
+    </div>
+
+    <div class="finding">
+      <div class="label">Keep · Generated commit msg</div>
+      <h4>Drafting commit message <em>before</em> the plan box</h4>
+      <p>The order — generate message, show it editable, <em>then</em> show the plan that uses it — means by the time the user is at "Execute? [Y/n]" they've already approved the wording. Compare to tools that bury the editable message inside the plan box. Don't change this sequence.</p>
+    </div>
+  </div>
+
+  <hr class="sep">
+
+  <!-- ====================== CROSS-CUTTING FINDINGS ====================== -->
+  <h2>Six things I'd change everywhere</h2>
+
+  <div class="findings">
+
+    <!-- 1 -->
+    <div class="finding">
+      <div class="label">01 · Identity</div>
+      <h4>Stop dropping into raw <span style="font-family:'Geist Mono'">git</span> mid-flow</h4>
+      <p>In the screenshot, option 1 is <span class="mono">glit "pull"</span> but options 2–4 are raw <span class="mono">git</span>. That's an identity crisis — users came to Glit precisely so they wouldn't have to remember <span class="mono">--force-with-lease</span>.</p>
+      <div class="quote-pair">
+<pre class="quote bad">2. Rebase:      git pull --rebase
+3. Keep yours:  git push --force-with-lease  ⚠⚠
+4. Discard yours: git fetch &amp;&amp; git reset --hard origin/&lt;branch&gt;</pre>
+<pre class="quote good">2. Rebase       glit "rebase onto origin"
+3. Force push   glit "force push"      ⚠⚠
+4. Discard mine glit "discard my commits"  ⚠⚠</pre>
+      </div>
+    </div>
+
+    <!-- 2 -->
+    <div class="finding">
+      <div class="label">02 · Confidence</div>
+      <h4>Stop hedging once you've fetched</h4>
+      <p>You already ran <span class="mono">git fetch</span>. You <em>know</em>. "Predicted" makes it sound like the LLM guessed, which undermines trust in the safer messages that should sound certain.</p>
+      <div class="quote-pair">
+<pre class="quote bad">⚠ Merge conflicts predicted (1 local, 1 remote commit(s) to merge):</pre>
+<pre class="quote good">⚠ Will conflict on pull · 1 ahead, 1 behind on main</pre>
+      </div>
+    </div>
+
+    <!-- 3 -->
+    <div class="finding">
+      <div class="label">03 · Recommendation</div>
+      <h4>The picker is fine — the wall of text above it isn't</h4>
+      <p>Correction from my first pass: the rich picker does default to Merge. The real problem is everything <em>between</em> the conflict detection and the picker — "Manual fix needed", "Both sides committed…", "Stash will NOT help", and a numbered list that repeats the picker options. By the time the user reaches the picker, they've already mentally branched. Cut the preamble or move it behind <span class="mono">?</span>.</p>
+<pre class="quote good">⚠ Will conflict on pull · README.md (~3 lines)
+[picker fires immediately — Merge highlighted, [?] for guidance]</pre>
+    </div>
+
+    <!-- 4 -->
+    <div class="finding">
+      <div class="label">04 · Severity</div>
+      <h4>The marker should depend on the <em>branch</em>, not the command</h4>
+      <p>Force-pushing your own <span class="mono">feat/login</span> branch is ⚠. Force-pushing <span class="mono">main</span> with three collaborators behind it is ⛔. Right now both are flat ⚠⚠. Make Glit check <span class="mono">git config branch.&lt;name&gt;.remote</span> + protected-branch rules and upgrade the marker dynamically.</p>
+<pre class="quote good">force push → origin/feat/login           ⚠   you are the only contributor
+force push → origin/main                 ⛔  3 collaborators behind, last
+                                              shared push 2 hr ago</pre>
+    </div>
+
+    <!-- 5 -->
+    <div class="finding">
+      <div class="label">05 · Noise</div>
+      <h4>Stop answering questions nobody asked</h4>
+      <p>"Stash will NOT help — it only captures UNCOMMITTED changes" is a paragraph defending against a thing the user didn't propose. If it's truly a common wrong turn, show it on <span class="mono">?</span>. Otherwise cut it. Same for the "Manual fix needed: conflict markers look like &lt;&lt;&lt;..." block — useful once, noise on the 30th time.</p>
+<pre class="quote good">Press <span class="mono">?</span> for what conflict resolution looks like
+Press <span class="mono">why</span> to ask why Glit ruled out stash/cherry-pick/...</pre>
+    </div>
+
+    <!-- 6 -->
+    <div class="finding">
+      <div class="label">06 · Recovery</div>
+      <h4>Mention the safety net <em>before</em> the scary choice, not after</h4>
+      <p>Type-to-confirm is good friction, but it's lonely friction if the user doesn't yet know that Glit snapshotted the state. Put the recovery promise <em>inline</em>, next to the destructive option. That's what turns "irreversible" into "reversible-with-effort," which is the actual UX you want.</p>
+<pre class="quote good">⚠⚠ glit "reset --hard HEAD~3"
+   loses 3 commits, 99 uncommitted lines
+   recoverable for 30 days via:  glit undo</pre>
+    </div>
+
+  </div>
+
+  <hr class="sep">
+
+  <!-- ====================== FLOW 1: MERGE CONFLICT ====================== -->
+  <div class="flow">
+    <h2>Flow rewrites</h2>
+
+    <h3><span class="num">01</span>Merge-conflict prediction</h3>
+    <p class="sub">
+      This is the screenshot. Three things compound: the reasoning leak above the result, the wall-of-text "Manual fix needed" block, and the four-option menu where the default exit is hidden in the prompt line.
+    </p>
+
+    <div class="flow-grid">
+
+      <!-- BEFORE -->
+      <div class="term">
+        <div class="term-head">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="label bad">Before</div>
+        </div>
+        <div class="term-body"><span class="p">$</span> <span class="u">GLIT_DEBUG=1 glit 'do I have conflicts if I pull changes'</span>
+  <span class="d">(reasoning: User wants to know if there are merge conflicts when</span>
+  <span class="d">pulling changes, so this is a read-only check for merge preview.)</span>
+<span class="d">Fetching origin…</span> <span class="g">✓</span>
+
+<span class="y">⚠ Merge conflicts predicted (1 local, 1 remote commit(s) to merge):</span>
+  • README.md
+
+  <span class="y">Manual fix needed:</span> Merge/rebase will pause with conflict markers
+  (&lt;&lt;&lt;&lt;&lt;&lt;&lt;, =======, &gt;&gt;&gt;&gt;&gt;&gt;&gt;) inside the affected files.
+    Edit each file to keep the right version, remove the markers,
+    then `git add` it and continue.
+
+  <span class="y">→ Both sides committed conflicting changes. Stash will NOT help — it</span>
+    only captures UNCOMMITTED changes, and you have none. Real options:
+    1. Merge:        <span class="b">glit "pull"</span>           – produces a merge commit; resolve markers, then commit
+    2. Rebase:       <span class="b">git pull --rebase</span>     – replays your commit(s) on top of remote (resolve per commit)
+    3. Keep yours:   <span class="b">git push --force-with-lease</span>  <span class="r">⚠⚠</span>  overwrites remote (only if you're sure)
+    4. Discard yours: <span class="b">git fetch &amp;&amp; git reset --hard origin/&lt;branch&gt;</span>  <span class="r">⚠⚠</span>  loses local commit(s)
+
+<span class="p">&gt;</span> Pick a resolution strategy: <span class="b">Do nothing – exit and decide later</span>
+</div>
+      </div>
+
+      <!-- AFTER -->
+      <div class="term">
+        <div class="term-head">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="label good">After</div>
+        </div>
+        <div class="term-body"><span class="p">$</span> <span class="u">glit "do I have conflicts if I pull"</span>
+<span class="d">  dbg → read-only · merge_preview on main</span>
+
+<span class="d">Fetched origin/main</span> · <span class="head">1 ahead, 1 behind</span>
+
+<span class="y">⚠ Pull will conflict</span>
+  <span class="strong">README.md</span>  <span class="d">both sides edited the intro · ~3 lines overlap</span>
+
+<span class="head">Suggested</span>  <span class="g">Merge</span> — keep both histories, resolve once
+  <span class="caret">[Enter]</span>  glit "pull"           <span class="d">merge commit · resolve markers in README.md</span>
+
+<span class="d">Other options</span>
+  <span class="caret">[r]</span>  glit "rebase"         <span class="d">replay your work on top · resolve per commit</span>
+  <span class="caret">[f]</span>  glit "force push"     <span class="o">⚠</span>  <span class="d">rewrites 1 remote commit · you own this branch</span>
+  <span class="caret">[d]</span>  glit "discard mine"   <span class="o">⚠</span>  <span class="d">drops 1 local commit · </span><span class="g">glit undo restores it for 30d</span>
+
+  <span class="caret">[?]</span> explain conflict markers   <span class="caret">[why]</span> why these 4   <span class="caret">[q]</span> quit
+<span class="p">▸</span> <span class="cursor"></span>
+</div>
+      </div>
+    </div>
+
+    <ul class="changes">
+      <li><strong>Demote the reasoning leak.</strong> Make the debug line dim, prefix it with <code>dbg →</code>, indent it under the command. Right now it floats between user input and result like it's part of the answer.</li>
+      <li><strong>Replace "predicted" with the actual fact.</strong> <code>Pull will conflict</code> + status line (<code>1 ahead, 1 behind</code>) gives the user diagnostic context the original buried.</li>
+      <li><strong>Tell them what's conflicting, not just where.</strong> "both sides edited the intro · ~3 lines overlap" tells them whether to even bother. Three lines is a 60-second fix; 300 lines is "find the other dev first."</li>
+      <li><strong>Promote one option, demote the others.</strong> Cursor on Enter = Merge. Single-key shortcuts for the rest. The current "Do nothing — exit and decide later" default <em>looks</em> safe but trains people to bail.</li>
+      <li><strong>All four options speak Glit.</strong> Not <code>git pull --rebase</code>, just <code>glit "rebase"</code>. The literal git command can show on hover/expand for the curious.</li>
+      <li><strong>Severity reflects branch reality.</strong> Force-push on your own branch is <code>⚠</code>, not <code>⚠⚠</code>. Save <code>⚠⚠</code> and <code>⛔</code> for cases where shared history actually breaks.</li>
+      <li><strong>Recovery promise inline.</strong> "<code>glit undo</code> restores it for 30d" right next to the discard option.</li>
+      <li><strong>Move the wall-of-text behind <code>?</code></strong>. Conflict-marker syntax tutorial: useful once, noise the other 99 times.</li>
+    </ul>
+  </div>
+
+  <!-- ====================== FLOW 2: PLAN PREVIEW ====================== -->
+  <div class="flow">
+    <h3><span class="num">02</span>Plan-preview box before execution</h3>
+    <p class="sub">
+      A boxed step list is right. The mistake is paraphrasing the steps ("Stage your changes, write a commit message, push to origin") instead of showing the literal command + the literal scope. Devs trust diffs and filenames, not English.
+    </p>
+
+    <div class="flow-grid">
+
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label bad">Typical wrap-in-English plan box</div></div>
+        <div class="term-body"><span class="p">$</span> <span class="u">glit "push my login changes"</span>
+
+<span class="head">Plan</span>
+┌─────────────────────────────────────────────────────────┐
+│ 1. Stage your login-related changes                     │
+│ 2. Create a commit with a generated message             │
+│ 3. Push the current branch to its remote                <span class="y">⚠</span> │
+└─────────────────────────────────────────────────────────┘
+
+Continue? <span class="b">[Y/n]</span>
+</div>
+      </div>
+
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label good">Concrete plan box</div></div>
+        <div class="term-body"><span class="p">$</span> <span class="u">glit "push my login changes"</span>
+
+<span class="head">Plan</span> · <span class="d">on feat/session-refresh, 2 commits ahead of origin</span>
+
+  <span class="caret">1</span>  <span class="head">add</span>     <span class="b">src/auth/login.rs</span>      <span class="g">+87 −12</span>
+                <span class="b">src/auth/session.rs</span>    <span class="g">+new</span>
+                <span class="d">2 other tracked files match "login" — skipped, press</span> <span class="caret">[a]</span> <span class="d">to include</span>
+
+  <span class="caret">2</span>  <span class="head">commit</span>  <span class="m">"Add session refresh + token rotation to login flow"</span>
+                <span class="d">generated · </span><span class="caret">[e]</span><span class="d"> edit message</span>
+
+  <span class="caret">3</span>  <span class="head">push</span>    → <span class="b">origin/feat/session-refresh</span>  <span class="o">⚠</span>
+                <span class="d">first push of this branch · will create remote ref</span>
+
+<span class="caret">[Enter]</span> run all     <span class="caret">[s N]</span> skip step N     <span class="caret">[e N]</span> edit step N     <span class="caret">[q]</span> cancel
+<span class="p">▸</span> <span class="cursor"></span>
+</div>
+      </div>
+    </div>
+
+    <ul class="changes">
+      <li><strong>Show diffs and paths, not paraphrases.</strong> A dev scanning <code>+87 −12</code> on <code>login.rs</code> learns more in 200ms than they get from "Stage your login-related changes."</li>
+      <li><strong>Surface the "almost matched" set.</strong> When the LLM filters files by relevance, tell the user what it <em>left out</em> and let them grab it with one key. The biggest beginner footgun in this flow is silently missing files.</li>
+      <li><strong>Make the commit message obviously editable.</strong> Wrap it in quotes (visual cue: this is a string), put <code>[e] edit</code> right next to it, not in a generic Y/n at the bottom.</li>
+      <li><strong>Per-step skip, not just all-or-nothing.</strong> "Y/n" treats a 3-step plan as atomic; <code>[s 3]</code> "stage and commit but don't push yet" is the actual mental model devs have.</li>
+      <li><strong>Annotate steps with what makes them notable.</strong> "first push of this branch · will create remote ref" warns about a thing beginners hit (the <code>--set-upstream</code> dance) before it bites.</li>
+    </ul>
+  </div>
+
+  <!-- ====================== FLOW 3: RESET PREVIEW ====================== -->
+  <div class="flow">
+    <h3><span class="num">03</span>Reset preview + type-to-confirm</h3>
+    <p class="sub">
+      The trick with destructive ops isn't more friction — it's <em>better-targeted</em> friction. Show what's lost with enough specificity that the user genuinely re-decides. And pick a type-to-confirm string that's memorable in context, not a random word.
+    </p>
+
+    <div class="flow-grid">
+
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label bad">Generic reset confirm</div></div>
+        <div class="term-body"><span class="p">$</span> <span class="u">glit "reset 3 commits back hard"</span>
+
+<span class="r">⚠⚠ DESTRUCTIVE — this will discard commits and working tree changes.</span>
+
+  3 commits will be lost.
+  2 files will revert.
+
+  Recovery snapshot will be created.
+
+Type <span class="r">CONFIRM</span> to proceed:
+<span class="p">▸</span> <span class="cursor"></span>
+</div>
+      </div>
+
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label good">Specific, recoverable</div></div>
+        <div class="term-body"><span class="p">$</span> <span class="u">glit "reset 3 commits back hard"</span>
+
+<span class="r">⚠⚠ Hard reset · feat/session-refresh → HEAD~3</span>
+
+  <span class="head">Commits dropped</span> (3)
+    <span class="y">a3f9c12</span>  feat: session refresh        <span class="d">← HEAD, 12 min ago, you</span>
+    <span class="y">8b21e44</span>  wip: token plumbing          <span class="d">  47 min ago, you</span>
+    <span class="y">c0d4a89</span>  refactor: extract auth utils <span class="d">  2 hr ago, you</span>
+
+  <span class="head">Working tree reverts</span>
+    <span class="b">src/auth/login.rs</span>    <span class="r">−87 +12</span>   <span class="d">(undoes today's work)</span>
+    <span class="b">src/auth/session.rs</span>  <span class="r">deleted</span>     <span class="d">(file goes away)</span>
+
+  <span class="g">↻ Snapshot saved · glit undo → restores all of the above for 30 days</span>
+
+Type the branch name <span class="d">(so you know what you're resetting)</span>:
+  <span class="b">feat/session-refresh</span>
+<span class="p">▸</span> <span class="cursor"></span>
+</div>
+      </div>
+    </div>
+
+    <ul class="changes">
+      <li><strong>Show commits with author + age.</strong> "12 min ago, you" vs "2 days ago, alex" changes the decision. The original "3 commits will be lost" doesn't.</li>
+      <li><strong>Annotate what each file change <em>means</em> in plain words.</strong> "undoes today's work" / "file goes away" — a beginner scanning <code>−87 +12</code> alone won't internalize what's actually about to vanish.</li>
+      <li><strong>Type-to-confirm = type the branch name, not the word CONFIRM.</strong> Typing CONFIRM is muscle memory after the second time. Typing <code>feat/session-refresh</code> forces eye contact with the thing you're modifying. (Same trick GitHub uses for repo deletion.)</li>
+      <li><strong>Promise recovery in the same visual block as the loss.</strong> The green line and the red losses live together — the user sees the safety net at the same moment they see the cliff.</li>
+      <li><strong>Skip "Recovery snapshot will be created."</strong> "Will be" is the wrong tense; take the snapshot <em>first</em>, then say "Snapshot saved." Removes a what-if.</li>
+    </ul>
+  </div>
+
+  <!-- ====================== FLOW 4: DETACHED HEAD ====================== -->
+  <div class="flow">
+    <h3><span class="num">04</span>Detached-HEAD rescue</h3>
+    <p class="sub">
+      This is the single state where beginners are most likely to panic and the most likely to lose work. Never say "detached HEAD" first — that phrase is the source of the panic.
+    </p>
+
+    <div class="flow-grid">
+
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label bad">Jargon-first</div></div>
+        <div class="term-body"><span class="p">$</span> <span class="u">glit status</span>
+
+<span class="y">HEAD is detached at a3f9c12.</span>
+
+You are in <span class="strong">detached HEAD state</span>. You can look around, make
+experimental changes and commit them, and you can discard any commits
+you make in this state without impacting any branches by switching back
+to a branch.
+
+Options:
+  1. Create a new branch from here:  <span class="b">git switch -c &lt;name&gt;</span>
+  2. Return to your previous branch:  <span class="b">git switch -</span>
+  3. Discard (if you have new commits, they'll be lost)
+
+<span class="p">&gt;</span>
+</div>
+      </div>
+
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label good">Plain-English-first</div></div>
+        <div class="term-body"><span class="p">$</span> <span class="u">glit status</span>
+
+<span class="y">⚠ You're not on a branch right now.</span>
+  <span class="d">You're looking at commit </span><span class="y">a3f9c12</span><span class="d"> directly (the tag</span> <span class="b">v1.4.0</span><span class="d">).</span>
+  <span class="d">Reading code here is fine. </span><span class="strong">Any new commits you make will be lost</span><span class="d"> unless</span>
+  <span class="d">you save them to a branch first.</span>
+
+<span class="head">What do you want to do?</span>
+
+  <span class="caret">[Enter]</span>  <span class="g">Save my current spot as a new branch</span>     <span class="d">recommended</span>
+              <span class="d">name? </span><span class="b">explore-v1.4.0</span><span class="d"> (you can change it)</span>
+
+  <span class="caret">[m]</span>      Go back to <span class="b">main</span>                          <span class="d">you have no new commits here yet, safe</span>
+  <span class="caret">[s]</span>      Stay here, I'm just reading
+  <span class="caret">[?]</span>      Why am I in this state?
+
+<span class="p">▸</span> <span class="cursor"></span>
+</div>
+      </div>
+    </div>
+
+    <ul class="changes">
+      <li><strong>Lead with the consequence, not the term.</strong> "You're not on a branch" → "any new commits will be lost" is the causal chain a beginner needs. "Detached HEAD" is for the <code>[?]</code> explainer.</li>
+      <li><strong>Detect "is this user about to lose anything?" first.</strong> If they have no new commits, going back to main is genuinely safe — say so. If they have 3 new commits, the safe-default option changes to "save as branch" and the "go back" option gets a <code>⚠</code>.</li>
+      <li><strong>Pre-fill the branch name.</strong> If they checked out tag <code>v1.4.0</code>, suggest <code>explore-v1.4.0</code>. If they checked out a SHA, use <code>explore-a3f9c12</code>. Beginners freeze on the "pick a name" step.</li>
+      <li><strong>Anchor the SHA to something they recognize.</strong> "commit a3f9c12 (the tag v1.4.0)" or "(2 commits before main)" — beginners don't read SHAs as identities.</li>
+    </ul>
+  </div>
+
+  <!-- ====================== FLOW 5: BRANCH NAME ====================== -->
+  <div class="flow">
+    <h3><span class="num">05</span>Branch-name sanitization</h3>
+    <p class="sub">
+      Small flow, easy to over-engineer. The right answer: don't lecture, just suggest, and let Enter take the suggestion.
+    </p>
+
+    <div class="flow-grid">
+
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label bad">Lectures the user</div></div>
+        <div class="term-body"><span class="p">$</span> <span class="u">glit "make a branch called feat/Login Page (v2)"</span>
+
+<span class="r">Error:</span> Invalid branch name.
+
+Git branch names cannot contain spaces, parentheses, or several other
+characters. They are also conventionally lowercase with hyphens.
+
+Please provide a valid branch name and try again.
+</div>
+      </div>
+
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label good">Suggests and moves on</div></div>
+        <div class="term-body"><span class="p">$</span> <span class="u">glit "make a branch called feat/Login Page (v2)"</span>
+
+<span class="d">Git won't allow spaces or parens in branch names.</span>
+
+  <span class="head">Suggested</span>   <span class="g">feat/login-page-v2</span>
+  <span class="d">or type your own:</span>  <span class="b">_</span>
+
+<span class="caret">[Enter]</span> use suggested     <span class="caret">[Esc]</span> cancel
+</div>
+      </div>
+    </div>
+
+    <ul class="changes">
+      <li><strong>No "Error:". </strong>Nothing failed yet — Glit caught it before the failure. Use the saved keystrokes for a fix, not a scolding.</li>
+      <li><strong>Don't enumerate every illegal character.</strong> Show the rule that mattered <em>here</em> ("spaces or parens"). The full rules go behind <code>[?]</code>.</li>
+      <li><strong>Make the suggestion typeable too.</strong> Cursor in the "type your own" field, pre-filled with the suggestion — backspace edits, Enter accepts. One state, not a binary.</li>
+    </ul>
+  </div>
+
+  <!-- ====================== FLOW 6.5: PLAN BOX CHROME ====================== -->
+  <div class="flow">
+    <h3><span class="num">06½</span>Plan-execution box (commit flow)</h3>
+    <p class="sub">
+      New observation from the fuller loop. The current box has three small issues that compound: heavy double-line chrome, raw <span class="mono">git</span> commands inside a Glit box, and <span class="mono">⚠</span> on <span class="mono">git add</span> — which is fully reversible and shouldn't dilute the caution marker.
+    </p>
+
+    <div class="flow-grid">
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label bad">Current</div></div>
+        <div class="term-body"><span class="d">  Drafting commit message from diff…</span> <span class="g">✓</span>
+<span class="p">&gt;</span> Commit message (edit or accept): <span class="m">fix(README): add conflicting thing to README.md</span>
+<span class="d">╔════════════════════════════════════════════════════╗
+║                     GLit plan                      ║
+╚════════════════════════════════════════════════════╝</span>
+  1. <span class="b">git add</span>   (all files)  <span class="y">⚠</span>
+  2. <span class="b">git commit</span>  <span class="m">"fix(README): add conflicting thing to README.md"</span>  <span class="y">⚠</span>
+  <span class="d">──────────────────────────────────────────────────</span>
+
+<span class="p">&gt;</span> Execute this plan? <span class="b">[Y/n]</span> Yes
+  [1] git add … <span class="g">✓</span>
+       <span class="d">→ Staged all changes</span>
+  [2] git commit … <span class="g">✓</span>
+       <span class="d">→ Committed: fix(README)… (aa44620→0de4a0d)</span>
+
+<span class="g">✓</span>  Pipeline complete.
+</div>
+      </div>
+
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label good">Tightened</div></div>
+        <div class="term-body"><span class="d">  Drafted commit message from diff:</span>
+  <span class="m">"fix(README): add conflicting thing to README.md"</span>     <span class="caret">[e]</span> <span class="d">edit</span>
+
+<span class="head">Plan</span>  <span class="d">·  on main, 0 ahead</span>
+  <span class="caret">1</span>  <span class="head">stage</span>    <span class="b">README.md</span>    <span class="g">+4 −1</span>
+  <span class="caret">2</span>  <span class="head">commit</span>   <span class="d">message above</span>                                        <span class="o">⚠</span>
+
+<span class="caret">[Enter]</span> run    <span class="caret">[e]</span> edit message    <span class="caret">[s 2]</span> skip commit    <span class="caret">[q]</span> cancel
+<span class="p">▸</span> <span class="u">↵</span>
+
+  <span class="g">✓</span> staged   <span class="b">README.md</span>                            <span class="g">+4 −1</span>
+  <span class="g">✓</span> committed                                  <span class="d">aa44620 → </span><span class="y">0de4a0d</span>
+
+<span class="d">Done · 1 commit on main, ahead of origin/main by 1</span>
+<span class="d">Next: </span><span class="b">glit "push"</span><span class="d"> to share, or </span><span class="b">glit undo</span><span class="d"> to revert</span>
+</div>
+      </div>
+    </div>
+
+    <ul class="changes">
+      <li><strong>Drop the box-drawing chrome.</strong> The <code>╔═╗</code> double-line border + centered title costs 4 vertical lines and adds zero information. A bold <code>Plan</code> label with a status sub-line is denser and reads faster in a long terminal session.</li>
+      <li><strong>One <code>⚠</code>, not two.</strong> <code>git add</code> is reversible (<code>git reset</code>). <code>commit</code> is the line where history changes. Marking both dilutes the meaning of the marker — it should mean "pay attention here," not "a write happens here."</li>
+      <li><strong>Speak Glit inside the Glit plan box.</strong> Either <code>stage / commit / push</code> (verbs, in Glit's vocabulary) or stay literal with <code>git add / git commit</code>. Pick one. Right now it reads <em>like</em> Glit (single quotes around input, ⚠ markers) but the verbs are raw git.</li>
+      <li><strong>Show what's being staged, not just "all files".</strong> <code>(all files)</code> is exactly the moment a beginner pushes <code>node_modules</code>. Show the filenames + diff stat; collapse with <code>(+12 more, [a] to see)</code> if there are many.</li>
+      <li><strong>"Pipeline complete" → "Done".</strong> "Pipeline" is CI-speak; a single commit isn't a pipeline. <code>Done · 1 commit on main, ahead of origin/main by 1</code> closes the loop with status, not jargon.</li>
+      <li><strong>End with the obvious next step.</strong> After a commit, the next thing 90% of users want is push. After a push, the next thing is a status check. Lead them. (And always mention <code>glit undo</code> within reach.)</li>
+      <li><strong>Per-step skip on the plan.</strong> <code>[s 2]</code> = "stage but don't commit yet" turns a binary Y/n into the actual decisions devs make. Especially useful for the "oh wait, let me see the diff before committing" moment.</li>
+    </ul>
+  </div>
+
+  <!-- ====================== FLOW 7: STATUS / BRANCH ====================== -->
+  <div class="flow">
+    <h3><span class="num">06¾</span>Status &amp; branch list — small tweaks only</h3>
+    <p class="sub">
+      Mostly working. Two minor things worth tightening, plus one that's a missed opportunity.
+    </p>
+
+    <div class="flow-grid">
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label bad">Current</div></div>
+        <div class="term-body"><span class="p">$</span> <span class="u">glit 'statsus'</span>
+On branch <span class="head">main</span> · tracking <span class="b">origin/main</span> · <span class="y">1 ahead</span> · <span class="y">1 behind</span>
+Last commit: <span class="y">80e66aa</span> <span class="m">"fix(README): add conflicting thing."</span> (12d ago)
+
+Nothing to commit, working tree clean.
+
+<span class="y">→ Diverged from upstream (1 ahead, 1 behind). Pull first:</span> <span class="b">glit "pull"</span>
+
+<span class="d">(Remote state from last fetch — run `glit "fetch"` to refresh.)</span>
+</div>
+      </div>
+
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label good">Tightened</div></div>
+        <div class="term-body"><span class="p">$</span> <span class="u">glit 'statsus'</span>
+<span class="d">  ↳ ran status</span>
+
+<span class="head">main</span>  <span class="d">·</span>  <span class="b">origin/main</span>  <span class="d">·</span>  <span class="y">↑1 ↓1</span>  <span class="d">·</span>  <span class="d">working tree clean</span>
+<span class="d">Last:</span> <span class="y">80e66aa</span> <span class="m">"fix(README): add conflicting thing"</span> <span class="d">· 12d ago · you</span>
+<span class="d">Fetched:</span> <span class="d">8 min ago</span>  <span class="d">·</span>  <span class="caret">[r]</span> <span class="d">refresh</span>
+
+<span class="y">⚠ Diverged from origin/main</span>  <span class="d">— you and someone else both moved on.</span>
+  <span class="caret">[Enter]</span>  glit "pull"           <span class="d">merge their commit in</span>
+  <span class="caret">[r]</span>      glit "rebase"         <span class="d">replay your commit on top</span>
+  <span class="caret">[w]</span>      keep working          <span class="d">you can resolve later</span>
+</div>
+      </div>
+    </div>
+
+    <ul class="changes">
+      <li><strong>Surface the silent typo-rescue.</strong> One dim line — <code>↳ ran status</code> — confirms what just happened. Currently a user typing <code>statsus</code> might wonder if they're seeing cached output. A 1-line breadcrumb removes the doubt without scolding.</li>
+      <li><strong>Quantify "last fetched".</strong> <code>(Remote state from last fetch…)</code> is honest but vague. <code>Fetched: 8 min ago</code> tells the user whether to trust the ahead/behind counts. Past ~10 minutes, color the timestamp yellow.</li>
+      <li><strong>The "Diverged" line is a fork in the road — let them act on it.</strong> Right now it's text + one suggestion. Inline keys (<code>[Enter] pull · [r] rebase · [w] work</code>) turn the status command into a one-keystroke flow without making the user retype a query.</li>
+      <li><strong>Use <code>↑1 ↓1</code> consistently with the branch list.</strong> The branch list already uses <code>(↑1 ↓1)</code>; the status line uses <code>1 ahead · 1 behind</code>. Same data, two notations. Pick the arrows — they're scannable and language-independent.</li>
+      <li><strong>Annotate "Last commit" with author.</strong> The branch list shows it implicitly via <code>* current</code>; the status line should too (<code>· you</code> / <code>· alex</code>). Beginners often discover they're on a branch someone else last touched.</li>
+    </ul>
+  </div>
+
+  <!-- ====================== FLOW 6: RECOVERY SNAPSHOT ====================== -->
+  <div class="flow">
+    <h3><span class="num">06</span>Recovery snapshot listing</h3>
+    <p class="sub">
+      Snapshots are the marquee safety feature, but they're only valuable if a panicked user can find them in &lt; 10 seconds. <code>glit undo</code> should be the muscle-memory command — and it should be discoverable from every destructive-op screen.
+    </p>
+
+    <div class="flow-grid">
+
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label bad">Reflog-flavored</div></div>
+        <div class="term-body"><span class="p">$</span> <span class="u">glit snapshots</span>
+
+<span class="head">Recovery snapshots:</span>
+
+  glit-snap-2026-05-27T13:04:22Z  a3f9c12  HEAD~3 before reset
+  glit-snap-2026-05-27T12:18:01Z  e7c1a90  before push --force-with-lease
+  glit-snap-2026-05-26T19:55:30Z  9bb2e44  before discard
+  glit-snap-2026-05-24T10:02:11Z  c0d4a89  pre-merge fix/auth → main
+
+Run <span class="b">glit restore &lt;snapshot-name&gt;</span> to recover.
+</div>
+      </div>
+
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label good">Designed for the panic moment</div></div>
+        <div class="term-body"><span class="p">$</span> <span class="u">glit undo</span>
+
+<span class="head">What would you like to undo?</span>  <span class="d">last 7 days, newest first</span>
+
+  <span class="caret">[1]</span>  <span class="g">2 min ago</span>     before reset --hard           <span class="d">3 commits, 2 files</span>
+       <span class="d">restoring will bring back: feat: session refresh + 2 more</span>
+
+  <span class="caret">[2]</span>  <span class="g">1 hr ago</span>      before force push             <span class="d">1 commit rewritten</span>
+       <span class="d">restoring will: revert origin/feat/login to the pre-force state</span>
+
+  <span class="caret">[3]</span>  yesterday      before discard mine           <span class="d">1 commit dropped</span>
+  <span class="caret">[4]</span>  3 days ago     pre-merge fix/auth → main     <span class="d">conflict-resolution state</span>
+
+  <span class="caret">[a]</span> show all (12 in last 30 days)     <span class="caret">[q]</span> quit
+<span class="p">▸</span> <span class="cursor"></span>
+</div>
+      </div>
+    </div>
+
+    <ul class="changes">
+      <li><strong>Rename the command.</strong> <code>glit snapshots</code> is for the future-you who's reading docs; <code>glit undo</code> is for the right-now-you who just made a mistake. Make both work, but lead with undo.</li>
+      <li><strong>Relative timestamps, not ISO.</strong> "2 min ago" routes around the panic. ISO is for logs.</li>
+      <li><strong>Describe what restoring will <em>do</em>, not what the snapshot is named.</strong> "restoring will bring back: feat: session refresh + 2 more" closes the loop the user is actually asking about.</li>
+      <li><strong>Surface this entry point everywhere destructive.</strong> Every <code>⚠⚠</code> / <code>⛔</code> screen should mention <code>glit undo</code> by name. Discoverability is the feature.</li>
+      <li><strong>Hide history past 7 days behind <code>[a]</code>.</strong> A 30-day list scrolls; a 7-day list fits.</li>
+    </ul>
+  </div>
+
+  <hr class="sep">
+
+  <!-- ====================== FLOW 07: TIMELINE PROPOSAL ====================== -->
+  <div class="flow">
+    <h3><span class="num">07</span>Proposal: render the plan as a timeline</h3>
+    <p class="sub">
+      Picking up the thread from <strong>06½</strong> — the ASCII <span class="mono">╔═╗</span> plan box conveys "these are steps" but loses the flow once execution starts. A vertical rail (in the spirit of <a href="https://terminalcss.xyz/#Timeline" style="color:var(--user-2)">terminal.css timeline</a>) gives you a single visual that <em>animates</em>: nodes light up as steps complete, the currently-running step pulses, and what's done vs. pending is obvious at a glance.
+    </p>
+    <p class="sub">
+      The same component renders all three states below — plan preview, mid-execution, complete — with only the node modifiers changing. One mental model from drafting to receipt.
+    </p>
+
+    <div class="timeline-grid">
+
+      <!-- STATE 1: PENDING -->
+      <div class="tl-frame">
+        <div class="tl-frame-head">
+          <span>1 · Drafted</span>
+          <span class="state">awaiting confirm</span>
+        </div>
+        <div class="tl-body">
+          <div class="tl-cmd"><span class="p">$</span><span class="u">glit "commit my changes"</span></div>
+          <ul class="timeline">
+            <li class="t-step">
+              <div class="node"></div>
+              <div class="t-card">
+                <div class="row">
+                  <span class="verb">stage</span>
+                  <span class="target">README.md</span>
+                  <span class="stat">+4 −1</span>
+                </div>
+                <div class="meta">all matched files · reversible with <span style="color:#79c0ff">glit "unstage"</span></div>
+              </div>
+            </li>
+            <li class="t-step">
+              <div class="node"></div>
+              <div class="t-card">
+                <div class="row">
+                  <span class="verb">commit</span>
+                  <span class="scope">"fix(README): add conflicting thing"</span>
+                  <span class="marker">⚠</span>
+                </div>
+                <div class="meta">generated from diff · <span style="color:#ffd24a">[e] edit</span></div>
+              </div>
+            </li>
+            <li class="t-step">
+              <div class="node"></div>
+              <div class="t-card">
+                <div class="row">
+                  <span class="verb">push</span>
+                  <span class="target">→ origin/main</span>
+                  <span class="marker">⚠</span>
+                </div>
+                <div class="meta">your branch · 0 collaborators behind</div>
+              </div>
+            </li>
+          </ul>
+          <div class="tl-foot">
+            <span class="key">Enter</span> run all · <span class="key">e 2</span> edit message · <span class="key">s 3</span> skip push · <span class="key">q</span> cancel
+          </div>
+        </div>
+      </div>
+
+      <!-- STATE 2: MID-EXECUTION -->
+      <div class="tl-frame">
+        <div class="tl-frame-head">
+          <span>2 · Running</span>
+          <span class="state run">step 2 of 3</span>
+        </div>
+        <div class="tl-body">
+          <div class="tl-cmd"><span class="p">$</span><span class="u">glit "commit my changes"</span></div>
+          <ul class="timeline">
+            <li class="t-step done">
+              <div class="node"></div>
+              <div class="t-card">
+                <div class="row">
+                  <span class="verb">staged</span>
+                  <span class="target">README.md</span>
+                  <span class="stat">+4 −1</span>
+                </div>
+                <div class="meta">42 ms</div>
+              </div>
+            </li>
+            <li class="t-step run">
+              <div class="node"></div>
+              <div class="t-card">
+                <div class="row">
+                  <span class="verb">commit…</span>
+                  <span class="scope">"fix(README): add conflicting thing"</span>
+                </div>
+                <div class="meta">writing index → tree</div>
+              </div>
+            </li>
+            <li class="t-step">
+              <div class="node"></div>
+              <div class="t-card">
+                <div class="row">
+                  <span class="verb">push</span>
+                  <span class="target">→ origin/main</span>
+                  <span class="marker">⚠</span>
+                </div>
+                <div class="meta">queued</div>
+              </div>
+            </li>
+          </ul>
+          <div class="tl-foot">
+            <span class="key">Ctrl-C</span> abort · staged work preserved · <span class="recover">snapshot @ aa44620 taken before run</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- STATE 3: COMPLETE -->
+      <div class="tl-frame">
+        <div class="tl-frame-head">
+          <span>3 · Done</span>
+          <span class="state done">3 of 3 ✓</span>
+        </div>
+        <div class="tl-body">
+          <div class="tl-cmd"><span class="p">$</span><span class="u">glit "commit my changes"</span></div>
+          <ul class="timeline">
+            <li class="t-step done">
+              <div class="node"></div>
+              <div class="t-card">
+                <div class="row">
+                  <span class="verb">staged</span>
+                  <span class="target">README.md</span>
+                  <span class="stat">+4 −1</span>
+                </div>
+              </div>
+            </li>
+            <li class="t-step done">
+              <div class="node"></div>
+              <div class="t-card">
+                <div class="row">
+                  <span class="verb">committed</span>
+                  <span class="scope">"fix(README): add conflicting thing"</span>
+                </div>
+                <div class="delta"><span class="from">aa44620</span> → <span class="to">0de4a0d</span></div>
+              </div>
+            </li>
+            <li class="t-step done">
+              <div class="node"></div>
+              <div class="t-card">
+                <div class="row">
+                  <span class="verb">pushed</span>
+                  <span class="target">origin/main</span>
+                  <span class="stat">1 commit</span>
+                </div>
+                <div class="delta">origin/main now at <span class="to">0de4a0d</span></div>
+              </div>
+            </li>
+          </ul>
+          <div class="tl-foot">
+            Next: <span class="next">glit "status"</span> · <span class="next">glit "log"</span> · undo this commit with <span class="recover">glit undo</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <ul class="changes">
+      <li><strong>One component, three states.</strong> Drafting / running / done all share the same vertical rail. The user learns the visual once and reuses it for every multi-step Glit command. ASCII boxes don't scale this way — they're inert once printed.</li>
+      <li><strong>Status lives on the node, not in a separate column.</strong> Empty circle = pending, pulsing yellow = running, filled green check = done. Color + shape + motion = readable at a glance even when colorblind or in low-light terminals.</li>
+      <li><strong>The card carries everything else.</strong> Verb (stage / commit / push), target, diff stat, severity marker, optional meta line. Same layout per step — no special-casing.</li>
+      <li><strong>Severity tier drives marker placement on the card itself</strong>, not as a column. Caution ⚠ sits next to the verb. Destructive ⚠⚠ / irreversible ⛔ would tint the card border.</li>
+      <li><strong>The footer changes meaning per state.</strong> Drafted → keymap. Running → abort safety. Done → next moves + undo. Same slot, different role — always actionable.</li>
+      <li><strong>Cheap to render in a real TTY.</strong> Even though this is HTML, the underlying pattern is just box-drawing rail + step text + ANSI color. Rust crates like <span class="mono">indicatif</span> already do the pulsing-node animation. The visual maps directly to a real terminal; no React required.</li>
+      <li><strong>Falls back gracefully.</strong> In non-TTY (CI logs, piped output), the timeline collapses to a numbered list with explicit prefixes (<span class="mono">[done]</span>, <span class="mono">[run]</span>, <span class="mono">[pending]</span>) — same information, no escape codes.</li>
+    </ul>
+  </div>
+
+  <!-- ====================== BETTER SELECTION ====================== -->
+  <h2>Better selection — the best picker is no picker</h2>
+  <p class="sub">
+    The arrow-key list works, but it forces the user to <em>weigh</em> options every time. A great agentic CLI uses everything it knows — branch context, repo conventions, the user's history — to make the right choice the default. The picker is the fallback for when prediction fails or the stakes are too high to auto-pick. Five patterns, roughly in order of preference:
+  </p>
+
+  <!-- ============= PATTERN 1: PREDICT + CONFIRM ============= -->
+  <div class="flow">
+    <h3><span class="num">P1</span>Predict + confirm — turns 4-option pickers into 1-keystroke yes/no</h3>
+    <p class="sub">
+      Glit already knows: your branch (<span class="mono">feat/session-refresh</span>, solo), the repo's merge history (last 20 merges = 18 rebases), the size of the conflict (3 lines, one file). It can rank the four options itself and present one with a confirmation. The picker hides behind <span class="mono">?</span>.
+    </p>
+
+    <div class="flow-grid">
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label bad">Current — flat picker</div></div>
+        <div class="term-body"><span class="p">?</span> Pick a resolution strategy:
+<span class="caret">&gt;</span> Merge (creates a merge commit; you'll resolve markers)
+  Rebase (replays your 1 commit(s) on top of remote)
+  Force-push (with-lease) — keep YOUR version, overwrite remote <span class="r">⚠⚠</span>
+  Discard local — drop your 1 commit(s), take 1 from remote <span class="r">⚠⚠</span>
+  Do nothing — exit and decide later
+<span class="d">[↑↓ to move, enter to select, type to filter]</span>
+</div>
+      </div>
+
+      <div class="term">
+        <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label good">Predict + confirm</div></div>
+        <div class="term-body"><span class="y">⚠ Pull will conflict on README.md</span> <span class="d">(~3 lines)</span>
+
+<span class="head">Suggested · Rebase</span>  <span class="d">(this repo uses rebase 18/20 times; you're solo on this branch)</span>
+
+  <span class="caret">[Enter]</span>  do it           <span class="b">glit "rebase"</span>
+  <span class="caret">[m]</span>      merge instead   <span class="d">creates a merge commit</span>
+  <span class="caret">[?]</span>      all options     <span class="d">incl. force-push, discard</span>
+  <span class="caret">[q]</span>      back
+
+<span class="p">▸</span> <span class="cursor"></span>
+</div>
+      </div>
+    </div>
+
+    <ul class="changes">
+      <li><strong>One keystroke for the right answer.</strong> Most resolutions don't need a menu — they need a smart default with a fast escape.</li>
+      <li><strong>Show the <em>reasoning</em> for the suggestion in dim text.</strong> "this repo uses rebase 18/20 times; you're solo on this branch" turns a black-box pick into a teachable moment. Users learn the heuristic; juniors learn the convention of their team.</li>
+      <li><strong>Promote the second-most-likely option to a single key.</strong> In this case <code>[m] merge</code> — the user can do the next-most-common thing in one keystroke without opening the menu.</li>
+      <li><strong>Hide the long tail behind <code>[?]</code>.</strong> Force-push and discard aren't gone — they're one key away. But they don't crowd the safe path.</li>
+      <li><strong>Falls back to the picker.</strong> If prediction confidence is low (new repo, weird state, conflicting signals), skip the suggestion and open the full picker. Mark which mode you're in subtly (<code>Suggested</code> vs <code>Pick a strategy</code>).</li>
+    </ul>
+  </div>
+
+  <!-- ============= PATTERN 2: OUTCOME-FIRST WITH GRAPHS ============= -->
+  <div class="flow">
+    <h3><span class="num">P2</span>Outcome-first picker — show what the graph looks like, not what the command is</h3>
+    <p class="sub">
+      When the full picker IS needed (stakes too high, prediction unsure), reframe it around the resulting commit graph. Devs reason about graphs better than they reason about commands. ASCII art is cheap and renders in every terminal.
+    </p>
+
+    <div class="term" style="margin-top: 22px;">
+      <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label good">Outcome-first picker</div></div>
+      <div class="term-body"><span class="head">How should the histories combine?</span>  <span class="d">your branch · feat/session-refresh</span>
+
+  <span class="caret">[a]</span>  <span class="head">Merge</span>           <span class="d">●─●─●</span> <span class="b">main</span>                              <span class="d">keeps both histories</span>
+                          <span class="d">  ╲   ╲</span>
+                          <span class="d">   ●───◆</span> <span class="m">(merge commit)</span>
+
+  <span class="caret">[b]</span>  <span class="head">Rebase</span>          <span class="d">●─●─●─</span><span class="g">●─●</span>   <span class="b">main</span>                       <span class="d">linear · your work on top</span>
+                                          <span class="d">your commit, replayed</span>
+
+  <span class="caret">[c]</span>  <span class="head">Force-push</span>      <span class="d">●─●─</span><span class="g">●</span>   <span class="b">main</span>     <span class="r">⚠⚠</span>                      <span class="d">rewrites origin</span>
+                              <span class="r">✗ remote commit deleted</span>
+
+  <span class="caret">[d]</span>  <span class="head">Discard mine</span>    <span class="d">●─●─●</span>   <span class="b">origin/main</span>   <span class="r">⚠⚠</span>            <span class="d">takes remote as-is</span>
+                              <span class="r">✗ your local commit deleted</span>
+
+<span class="caret">[Tab]</span> preview files affected  ·  <span class="caret">[Enter]</span> pick  ·  <span class="caret">[?]</span> explain a choice
+<span class="p">▸</span> <span class="cursor"></span>
+</div>
+    </div>
+
+    <ul class="changes">
+      <li><strong>End-state, not command.</strong> Devs ask "what will my graph look like after?" The picker should answer that, not list verbs.</li>
+      <li><strong>Severity is rendered as deletion in the graph.</strong> <code>✗ remote commit deleted</code> under Force-push is a more visceral warning than the abstract <code>⚠⚠</code> marker alone.</li>
+      <li><strong>Direct-key shortcuts.</strong> <code>[a] [b] [c] [d]</code> beats arrow keys — single keystroke, screen-reader-friendly, indexable in muscle memory.</li>
+      <li><strong>Tab = preview, Enter = pick.</strong> Separating "explore" from "commit" is the single biggest accessibility win. Currently the cursor IS the decision — there's no way to look without picking.</li>
+    </ul>
+  </div>
+
+  <!-- ============= PATTERN 3: INLINE EXPAND ============= -->
+  <div class="flow">
+    <h3><span class="num">P3</span>Inline expand — accordion for when descriptions need to be deep</h3>
+    <p class="sub">
+      A middle ground: list stays compact, but pressing <span class="mono">→</span> or <span class="mono">space</span> expands the current option to show full detail (commands, files affected, recovery path). Enter commits. Works because most users only need detail on the option they're hovering — not all four at once.
+    </p>
+
+    <div class="term" style="margin-top: 22px;">
+      <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label good">Accordion picker · cursor on Rebase, expanded</div></div>
+      <div class="term-body"><span class="p">?</span> <span class="head">Pick a resolution strategy</span>
+
+  <span class="d">▶</span> Merge          <span class="d">creates a merge commit</span>
+  <span class="caret">▼</span> <span class="head">Rebase</span>         <span class="d">replays your work on top</span>
+       <span class="d">─────────────────────────────────────────────────────────</span>
+       Runs:        <span class="b">git pull --rebase origin main</span>
+       Affects:     <span class="b">README.md</span> <span class="d">(3 lines conflict)</span>
+       Result:      linear history · your commit becomes <span class="y">a3f9c12'</span>
+       If it goes wrong:  <span class="g">glit undo</span> restores to before pull
+                          <span class="d">(snapshot taken automatically)</span>
+
+       <span class="caret">[Enter]</span> do this    <span class="caret">[↓]</span> next option
+  <span class="d">▶</span> Force-push     <span class="d">overwrites remote</span> <span class="r">⚠⚠</span>
+  <span class="d">▶</span> Discard mine   <span class="d">loses your commit</span> <span class="r">⚠⚠</span>
+
+<span class="d">[↑↓ navigate · space/→ expand · enter to do · q to quit]</span>
+</div>
+    </div>
+
+    <ul class="changes">
+      <li><strong>Two-tier disclosure.</strong> Skim the list. Stop at an option. Hit <code>space</code>. See everything about it. Skim or commit. The current picker forces you to read all four descriptions every time, even when you already know you want Merge.</li>
+      <li><strong>Detail block has a fixed shape</strong> — Runs / Affects / Result / If it goes wrong. Same four lines per option means the user learns where to look and doesn't have to re-parse the layout per choice.</li>
+      <li><strong>Recovery path is part of the detail, not separate.</strong> By the time you've expanded a destructive option, you've seen <code>glit undo</code> next to it.</li>
+    </ul>
+  </div>
+
+  <!-- ============= PATTERN 4: WIZARD MODE ============= -->
+  <div class="flow">
+    <h3><span class="num">P4</span>Wizard mode — decompose the choice into yes/no questions (beginner opt-in)</h3>
+    <p class="sub">
+      For users who genuinely don't know which strategy to pick, the choice is unfamiliar <em>because the trade-offs are unfamiliar</em>. A short Q&amp;A maps to a strategy without forcing the user to learn jargon first. Off by default for power users; opt-in via <span class="mono">glit config verbosity beginner</span> or first-run questionnaire.
+    </p>
+
+    <div class="term" style="margin-top: 22px;">
+      <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label good">Wizard mode</div></div>
+      <div class="term-body"><span class="y">⚠ Pull will conflict.</span> <span class="d">Two questions to figure out the right move:</span>
+
+  <span class="head">1.</span> Is anyone else committing to <span class="b">main</span> right now?
+        <span class="caret">[y]</span> yes, others are working here
+        <span class="caret">[n]</span> no, it's just me           <span class="d">(default · based on last 30d of commits)</span>
+        <span class="p">▸</span> <span class="g">n</span>
+
+  <span class="head">2.</span> Do you want the merge to show up as a separate event in history?
+        <span class="caret">[y]</span> yes, preserve it as a merge commit
+        <span class="caret">[n]</span> no, keep history linear     <span class="d">(default · this repo prefers linear)</span>
+        <span class="p">▸</span> <span class="g">n</span>
+
+  <span class="g">→</span> <span class="head">Rebase</span> fits.  <span class="caret">[Enter]</span> do it  ·  <span class="caret">[?]</span> show me the other options anyway
+</div>
+    </div>
+
+    <ul class="changes">
+      <li><strong>Questions are about <em>intent</em>, not implementation.</strong> "Do you want the merge as a separate event" is a question a non-git-expert can answer. "Merge or rebase?" is not.</li>
+      <li><strong>Each question has a smart default.</strong> Glit can guess the answer to "is anyone else on this branch" by checking recent commit authors. The user just confirms.</li>
+      <li><strong>Two questions max.</strong> A wizard with 5+ steps is a survey. A wizard with 2 binary steps maps perfectly to 4 strategies.</li>
+      <li><strong>Always offer the escape hatch.</strong> "<code>[?]</code> show me the other options anyway" lets the user override the wizard's conclusion without restarting.</li>
+      <li><strong>Off by default; tied to verbosity.</strong> Senior devs get the predict+confirm flow (P1). Beginners get the wizard. Same Glit binary; different mode.</li>
+    </ul>
+  </div>
+
+  <!-- ============= PATTERN 5: FILE MULTI-SELECT WITH BUCKETS ============= -->
+  <div class="flow">
+    <h3><span class="num">P5</span>File multi-select — group by confidence, not relevance</h3>
+    <p class="sub">
+      The other selection flow in Glit. "File multi-select grouped by relevance" is right; the unlock is being explicit about <em>how confident</em> the LLM is per file, and letting the user toggle groups, not just files.
+    </p>
+
+    <div class="term" style="margin-top: 22px;">
+      <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label good">Bucketed file picker</div></div>
+      <div class="term-body"><span class="p">$</span> <span class="u">glit "commit my login changes"</span>
+
+<span class="head">Select files to stage</span>  <span class="d">·  matched on "login"  ·  4 of 12 changed files selected</span>
+
+  <span class="g">▼</span> <span class="head">Related</span> <span class="d">(3 · pre-checked)</span>                                <span class="caret">[1]</span> <span class="d">toggle group</span>
+       <span class="g">[x]</span>  <span class="b">src/auth/login.rs</span>            <span class="g">+87 −12</span>   <span class="d">named in query</span>
+       <span class="g">[x]</span>  <span class="b">src/auth/session.rs</span>          <span class="g">+new</span>     <span class="d">imports login::*</span>
+       <span class="g">[x]</span>  <span class="b">tests/login_test.rs</span>          <span class="g">+34</span>      <span class="d">covers login.rs</span>
+
+  <span class="y">▼</span> <span class="head">Uncertain</span> <span class="d">(2 · visible, not pre-checked)</span>                  <span class="caret">[2]</span>
+       <span class="g">[x]</span>  <span class="b">src/db/users.rs</span>              <span class="g">+4 −2</span>    <span class="d">touched in same edit session</span>
+       <span class="d">[ ]</span>  <span class="b">README.md</span>                    <span class="g">+12 −3</span>   <span class="d">mentions "login" in changelog</span>
+
+  <span class="d">▶</span> <span class="head">Unrelated</span> <span class="d">(7 · hidden ·</span> <span class="caret">[a]</span> <span class="d">to show)</span>
+
+  <span class="head">Total:</span>  4 files  ·  <span class="g">+125 −12</span>  ·  about 1 commit's worth
+
+<span class="caret">[space]</span> toggle file  <span class="caret">[1-2]</span> toggle group  <span class="caret">[a]</span> show skipped  <span class="caret">[n]</span> none  <span class="caret">[Enter]</span> stage
+</div>
+    </div>
+
+    <ul class="changes">
+      <li><strong>Three buckets matching the real classifier output.</strong> Glit's two-pass resolver already emits <code>{ related, uncertain, unrelated }</code> with a per-file reason line. Use the existing struct names: <code>Related</code> (pre-checked) / <code>Uncertain</code> (visible, not pre-checked) / <code>Unrelated</code> (hidden). No new classification work needed — just surface what's there.</li>
+      <li><strong>Show the per-file reason inline.</strong> The classifier already produces "named in query," "imports login::*," "touched in same edit session." Right now it's only visible with <code>--show-all</code>; lift it into the picker as a dim trailing note. This is the cheapest single fix in the doc.</li>
+      <li><strong>Promote <code>--show-all</code> to a keystroke.</strong> Today it's a flag (long, requires re-running). <code>[a] show skipped</code> reveals the Unrelated bucket inline. The 1-in-8 under-inclusion rate the model hits becomes a 1-keystroke recovery instead of a re-invocation.</li>
+      <li><strong>Toggle a whole bucket with one key.</strong> <code>[1]</code> / <code>[2]</code> = include or exclude the whole group. Beats space-bar-marching through 5 files.</li>
+      <li><strong>Collapsed by default for the Unrelated bucket.</strong> The classifier is right ~88% of the time on this group; don't waste vertical space until the user asks.</li>
+      <li><strong>Running total of scope.</strong> "4 files · +125 −12 · about 1 commit's worth" closes the loop on "did I include too much / too little." Updates live as the user toggles.</li>
+    </ul>
+  </div>
+
+  <!-- ============= WHEN TO USE WHICH ============= -->
+  <div class="flow">
+    <h3><span class="num">⌖</span>When to use which pattern</h3>
+    <p class="sub">
+      Not one selection UX — a layered system. Glit picks the right one based on confidence, stakes, and user verbosity setting.
+    </p>
+
+    <div class="term" style="margin-top: 22px;">
+      <div class="term-head"><div class="dots"><i></i><i></i><i></i></div><div class="label">Decision matrix</div></div>
+      <div class="term-body"><span class="head">Situation</span>                                          <span class="head">Use</span>
+<span class="d">─────────────────────────────────────────────────────────────────────────────</span>
+High-confidence prediction · low/medium stakes      <span class="g">P1 · Predict + confirm</span>
+High-confidence · destructive (force/discard)       <span class="g">P1 + type-to-confirm</span>  <span class="d">(re-read flow 03)</span>
+Low-confidence prediction · stakes matter           <span class="g">P2 · Outcome-first picker</span>
+User needs to compare options in detail             <span class="g">P3 · Inline expand</span>
+Verbosity = beginner OR user typed "help"           <span class="g">P4 · Wizard</span>
+Multi-select (files, branches, commits)             <span class="g">P5 · Bucketed picker</span>
+
+<span class="d">Anywhere a picker fires, three rules apply:</span>
+  <span class="caret">·</span> Direct-key shortcuts ([a][b][c][d]), not just arrow keys
+  <span class="caret">·</span> Tab/space to preview, Enter to commit — never auto-commit on hover
+  <span class="caret">·</span> The escape hatch is always [q] or Esc, NEVER a list item
+</div>
+    </div>
+  </div>
+
+  <hr class="sep">
+
+  <!-- ====================== DESIGNING AROUND THE MODEL ====================== -->
+  <h2>Designing around the model</h2>
+  <p class="sub">qwen2.5:3b on a laptop CPU has hard limits. They aren't problems to hide — they're design inputs that should shape the UX. Eight patterns that exist <em>because</em> of how the model behaves. Several of these supersede or refine recommendations I made earlier.</p>
+
+  <div class="findings">
+
+    <!-- M1 -->
+    <div class="finding">
+      <div class="label">M1 · Engine indicator</div>
+      <h4>Show which engine answered — fast-path or LLM</h4>
+      <p>60% of queries hit the canonical fast-path (~25 phrases, 100% reliable, instant). 40% go through the LLM (~92% accurate, 400ms–2s). Same output surface, completely different reliability. A single glyph tells the user which they're getting.</p>
+<pre class="quote good">$ glit "push"
+  <span style="color:#ffd24a">⚡</span> pushed origin/main · 0de4a0d → 1a3f4b8       <span style="color:#6e7681">(fast-path · 12ms)</span>
+
+$ glit "ship my login work to prod"
+  <span style="color:#a5d6ff">◉</span> understanding…                              <span style="color:#6e7681">(llm · ~1s)</span></pre>
+      <p style="margin-top:14px">Power-user behavior emerges from transparency — once users see the <span class="mono">⚡</span> on certain phrasings, they reach for them naturally.</p>
+    </div>
+
+    <!-- M2 -->
+    <div class="finding">
+      <div class="label">M2 · No streaming</div>
+      <h4>Stage labels replace token-streaming reasoning</h4>
+      <p>Supersedes recommendation F. Since the LLM response isn't streamed, surface <em>stages</em> of the pipeline with their typical latency budgets. Users learn the rhythm; a stalled stage is the user's cue to Ctrl-C with confidence.</p>
+<pre class="quote good">  <span style="color:#56d364">✓</span> intent: commit       <span style="color:#6e7681">820ms (budget ~1s)</span>
+  <span style="color:#56d364">✓</span> files: 3 selected    <span style="color:#6e7681">640ms (budget ~700ms)</span>
+  <span style="color:#ffd24a">⠋</span> message: drafting…   <span style="color:#6e7681">~400ms</span></pre>
+    </div>
+
+    <!-- M3 -->
+    <div class="finding">
+      <div class="label">M3 · NeedsClarification (3% of queries)</div>
+      <h4>Treat low-confidence as a first-class state, not an error</h4>
+      <p>The classifier itself signals when it's unsure. Today Glit surfaces an editable prompt; the upgrade is to also offer Glit's best 2–3 guesses as one-key picks so the user doesn't have to retype.</p>
+<pre class="quote good">$ glit "the auth thing"
+  <span style="color:#a5d6ff">◉</span> not sure what you want. My best guesses:
+    <span style="color:#ffd24a">[a]</span>  commit your auth changes        <span style="color:#6e7681">5 modified files in src/auth/</span>
+    <span style="color:#ffd24a">[b]</span>  switch to branch feat/oauth     <span style="color:#6e7681">last touched 12m ago</span>
+    <span style="color:#ffd24a">[c]</span>  show recent auth commits
+
+  ▸ or refine: <span style="color:#79c0ff">the auth thing</span> _</pre>
+    </div>
+
+    <!-- M4 -->
+    <div class="finding">
+      <div class="label">M4 · AmbiguousFeature (5% of queries)</div>
+      <h4>Reuse the P5 picker — items are matches, not files</h4>
+      <p>The resolver returns multiple plausible interpretations of "auth." Same bucketed-picker pattern as the file selector; the rows are now matched features with the type baked into the row.</p>
+<pre class="quote good">$ glit "commit the auth thing"
+  <span style="color:#a5d6ff">◉</span> 3 things match "auth" in this repo:
+    <span style="color:#ffd24a">[1]</span>  files ·    src/auth/* + tests/auth_test.rs    <span style="color:#56d364">5 files, +120</span>
+    <span style="color:#ffd24a">[2]</span>  branch ·   feat/oauth-refresh                  <span style="color:#6e7681">2 ahead</span>
+    <span style="color:#ffd24a">[3]</span>  recent ·  auth_middleware.rs                  <span style="color:#6e7681">you, 12m ago</span>
+
+  <span style="color:#ffd24a">[Enter]</span> pick highlighted  ·  <span style="color:#ffd24a">[r]</span> refine query</pre>
+    </div>
+
+    <!-- M5 -->
+    <div class="finding">
+      <div class="label">M5 · TooManyFiles gate (&gt;50 modified)</div>
+      <h4>Don't refuse — narrow</h4>
+      <p>A flat refusal is correct (the model truncates silently past 50 files) but a refusal that <em>helps the user narrow</em> turns a dead-end into a one-key recovery.</p>
+<pre class="quote good">$ glit "commit everything"
+  <span style="color:#ff9d4a">⚠</span> 87 modified files — too many to reason about safely.
+
+  Narrow by:
+    <span style="color:#ffd24a">[1]</span>  recent edits (last hour)    <span style="color:#56d364">32 files</span>
+    <span style="color:#ffd24a">[2]</span>  current directory            <span style="color:#56d364">14 files</span>
+    <span style="color:#ffd24a">[3]</span>  type a hint to filter        <span style="color:#6e7681">e.g. "login", "tests"</span>
+    <span style="color:#ffd24a">[a]</span>  proceed anyway · group by dir  <span style="color:#ff9d4a">⚠</span>
+    <span style="color:#ffd24a">[q]</span>  cancel</pre>
+    </div>
+
+    <!-- M6 -->
+    <div class="finding">
+      <div class="label">M6 · Closed operation set</div>
+      <h4>The LLM never invents a command — lean into that in onboarding</h4>
+      <p>Because the classifier picks from a fixed ~25-op enum (not free-text), there's no "the AI made up a destructive command" failure mode in Glit. That's a trust statement worth saying out loud in <span class="mono">glit help</span> or first-run copy: <em>"Glit always picks from a known list of ~25 git operations. It will never invent a command."</em> Differentiates Glit from cloud LLM CLI wrappers where this fear is legitimate.</p>
+    </div>
+
+    <!-- M7 -->
+    <div class="finding">
+      <div class="label">M7 · Reasoning lines are Rust, not LLM</div>
+      <h4>Trust the dim "why" text completely — it can't hallucinate</h4>
+      <p>Clarification for P1 and elsewhere: when I wrote "this repo uses rebase 18/20 times; you're solo on this branch," that's a Rust-computed line over real git data, <em>not</em> LLM output. The danger classifier, recovery choice, refname validation, and severity tier are all pure Rust. The LLM is never trusted with safety-critical text. Worth surfacing in copy: "Glit's reasoning lines are computed from your actual repo — the AI never writes warnings."</p>
+    </div>
+
+    <!-- M8 -->
+    <div class="finding">
+      <div class="label">M8 · Corrections extend the fast-path</div>
+      <h4>"Remember this" isn't fine-tuning — it's growing the canonical list</h4>
+      <p>Refines recommendation A. The misclassification correction shouldn't try to retrain qwen. It should write to a per-repo aliases file that's consulted <em>before</em> the LLM, as part of the fast-path. Three corrections on the same phrasing make it a 100%-reliable instant response — effectively turning each user's repo into a tuned dialect.</p>
+<pre class="quote good">$ cat .git/glit/aliases.toml
+[aliases]
+"changes today"        = { op = "log", since = "1d" }
+"my work-in-progress"  = { op = "diff", scope = "uncommitted" }
+"ship to staging"      = { op = "push", target = "staging" }
+
+# Aliases are checked before the LLM. Edit by hand or via:
+#   glit alias "&lt;phrasing&gt;" → &lt;op&gt;</pre>
+      <p style="margin-top:14px">Bonus: the aliases file is human-readable + diffable. Teams can commit it to share Glit dialect across collaborators.</p>
+    </div>
+
+  </div>
+
+  <hr class="sep">
+
+  <!-- ====================== MORE TO CONSIDER ====================== -->
+  <h2>More to consider — things I didn't cover in v1</h2>
+  <p class="sub">Re-reading the brief and the screenshots, here are the bigger structural questions worth a pass. Most are not visual issues, but they shape the visual surface.</p>
+
+  <div class="findings">
+
+    <div class="finding">
+      <div class="label">A · Misclassification</div>
+      <h4>What happens when the LLM picks the wrong intent?</h4>
+      <p>The classifier hits ~92% intent accuracy on the 40% of queries that reach it (60% bypass via fast-path). So ~3% of all queries land wrong. Today the debug reasoning line is honest but read-only — there's no in-place fix.</p>
+<pre class="quote good">$ glit "show me my changes"
+  ↳ ran <span style="color:#79c0ff">log -p HEAD~5</span>    [w]rong? · [d]iff instead · [s]tatus instead
+
+[output…]
+
+→ If wrong, this phrasing becomes a fast-path alias for next time.</pre>
+      <p style="margin-top:14px">The correction doesn't fine-tune qwen — it extends the canonical fast-path list (per-repo <span class="mono">.git/glit/aliases.toml</span>). Three corrections turn a frequently-wrong phrasing into a 100%-reliable instant response. See <strong>M8</strong> for the file format.</p>
+    </div>
+
+    <div class="finding">
+      <div class="label">B · REPL state</div>
+      <h4>The REPL needs a persistent "focus" line</h4>
+      <p>One-shot CLI is stateless; the REPL isn't. After 5 commands the user has built mental context ("I'm working on session-refresh, I have 2 untracked files, I haven't pushed in 20 min"). Surface a one-line status header at every prompt:</p>
+<pre class="quote good">[main↑1↓2 · staged: 1 · last push: 23m]
+glit&gt; _</pre>
+      <p style="margin-top:14px">No retyping <span class="mono">status</span> every other command. Stale ahead/behind counts update lazily.</p>
+    </div>
+
+    <div class="finding">
+      <div class="label">C · Scriptability</div>
+      <h4>Auto-detect TTY, drop chrome when piped</h4>
+      <p>The picker, box drawing, color, animation — all great in a real terminal, all garbage in <span class="mono">glit "status" | grep ahead</span> or in CI logs. Detect <span class="mono">isatty(stdout)</span> and switch to a parseable mode. Optional <span class="mono">--json</span> for tooling.</p>
+<pre class="quote good">$ glit "status" --json | jq .ahead
+1</pre>
+      <p style="margin-top:14px">A CLI that works in scripts is a CLI that gets adopted by teams, not just individuals.</p>
+    </div>
+
+    <div class="finding">
+      <div class="label">D · First run</div>
+      <h4>Where does a brand-new user learn what Glit can do?</h4>
+      <p>Glit's superpower is natural language — but that's only valuable if users know to <em>try</em> things. A 30-second first-run tour beats a 30-page README.</p>
+<pre class="quote good">$ glit
+✓ Glit ready · ollama up · qwen2.5:3b loaded
+
+First time? Try any of these:
+  glit "what changed today"
+  glit "commit my work-in-progress"
+  glit "am I behind on main"
+
+Or just describe what you want. Type help to see the menu.
+glit&gt; _</pre>
+    </div>
+
+    <div class="finding">
+      <div class="label">E · Progressive disclosure</div>
+      <h4>The 5th-commit user and the 500th-commit user need different scaffolding</h4>
+      <p>The "Manual fix needed: edit each file, remove markers, then <span class="mono">git add</span>…" block is gold for a beginner and noise for a senior. Track a per-user counter; collapse hand-holding behind <span class="mono">[?]</span> after N successful resolutions of the same op. Show a setting in <span class="mono">glit config</span> so it's auditable.</p>
+<pre class="quote good">verbosity: auto (beginner)  · force with --verbose / --terse
+  show-recovery-hint:   always
+  show-conflict-syntax: until 5 successful resolutions  ✓ 4 / 5
+  show-reasoning:       on GLIT_DEBUG=1</pre>
+    </div>
+
+    <div class="finding">
+      <div class="label">F · Latency</div>
+      <h4>No streaming → surface the stage, not the partial response</h4>
+      <p>Ollama's <span class="mono">format: json</span> mode waits for the full response, so streaming the LLM's prose isn't an option. Instead, show <em>which stage</em> of the pipeline Glit is in, with each stage's typical latency budget. Users learn the rhythm and can Ctrl-C deliberately when something stalls.</p>
+<pre class="quote good">$ glit "ship my login work to prod"
+  <span style="color:#ffd24a">⠋</span> understanding intent…       <span style="color:#6e7681">~1s</span>
+  <span style="color:#56d364">✓</span> matched intent: push
+  <span style="color:#ffd24a">⠋</span> matching files (12 changed) <span style="color:#6e7681">~700ms</span>
+  <span style="color:#56d364">✓</span> 3 files selected
+  <span style="color:#ffd24a">⠋</span> rendering plan…</pre>
+      <p style="margin-top:14px">If a stage exceeds its budget by 2×, dim the spinner and offer an explanation + Ctrl-C with a graceful out. The 60% of queries that hit fast-path get no spinner at all — just a tiny <span class="mono">⚡</span> glyph to confirm "instant." See <strong>M1</strong> + <strong>M2</strong>.</p>
+    </div>
+
+    <div class="finding">
+      <div class="label">G · Conventional commits</div>
+      <h4>Detect convention before applying it</h4>
+      <p>Glit drafted <span class="mono">fix(README): add conflicting thing</span> — nice if the repo uses conventional commits, surprising if it doesn't (some repos prefer <span class="mono">README: add…</span> or <span class="mono">Add conflicting thing to README</span>). Scan the last 20 commits; match the dominant style. Cache per-repo in <span class="mono">.git/glit/style</span>.</p>
+    </div>
+
+    <div class="finding">
+      <div class="label">H · Cross-platform</div>
+      <h4>Plan for cmd.exe and Powershell, not just iTerm</h4>
+      <p>Unicode markers (<span class="mono">⚠⚠ ⛔</span>), the rich picker, box-drawing characters, ANSI color — all conditionally available across Windows terminals, screen-readers, and SSH sessions where <span class="mono">TERM</span> is degraded. Test the degraded path explicitly; don't let a Windows beginner see <span class="mono">??Ó</span> instead of <span class="mono">⚠⚠</span> the first time they hit a destructive op.</p>
+<pre class="quote good">marker tier
+  safe         (no marker)         (no marker)
+  caution      ⚠            ASCII: !
+  destructive  ⚠⚠           ASCII: !!
+  irreversible ⛔            ASCII: XX</pre>
+    </div>
+
+  </div>
+
+  <hr class="sep">
+
+  <!-- ====================== RESOLVED · V2 ACTION ITEMS ====================== -->
+  <h2>Resolved — v2 action items</h2>
+  <p class="sub">Captured from the answer pass. Each item below has enough detail to ticket directly.</p>
+
+  <div class="findings" style="grid-template-columns: 1fr;">
+
+    <div class="finding">
+      <div class="label">Q1 · File-relevance filter ✓ resolved</div>
+      <h4>The classifier already emits <span class="mono" style="font-family:'Geist Mono'">{ related, uncertain, unrelated }</span> + per-file reasons</h4>
+      <p>So all of P5 (bucketed picker) is surfacing data Glit already has — no new classifier work. Updated the P5 mockup above to use the real names (3 buckets, not 4) and to show the per-file reason inline.</p>
+      <p><strong>Action items:</strong></p>
+      <ul class="changes" style="margin-top:8px">
+        <li>Lift per-file reason from <code>--show-all</code>-only into the default picker view (dim trailing note).</li>
+        <li>Promote <code>--show-all</code> to inline <code>[a] show skipped</code> keystroke — keeps Unrelated collapsed by default, one-key reveal.</li>
+        <li>The 1-in-8 under-inclusion rate isn't worth fighting at the model layer; recovery should be the design, not prevention.</li>
+      </ul>
+    </div>
+
+    <div class="finding">
+      <div class="label">Q2 · What/Risks/Recovery/Safety ✓ split</div>
+      <h4>Set the stakes once; place Recovery + Safety next to what they protect</h4>
+      <p>Agreed split:</p>
+      <ul class="changes" style="margin-top:8px">
+        <li><strong>What + Risks</strong> stay as the header block above type-to-confirm. They set the frame.</li>
+        <li><strong>Recovery</strong> moves to inline annotation next to each thing the user would want to undo. <span class="mono" style="font-family:'Geist Mono'">3 commits dropped — glit undo restores them for 30d</span>.</li>
+        <li><strong>Safety</strong> (the snapshot already taken, the <code>--force-with-lease</code> protection) goes inline with the protective mechanism. <span class="mono" style="font-family:'Geist Mono'">Snapshot @ aa44620 taken before run</span> belongs next to the abort hint, not in the header.</li>
+      </ul>
+      <p style="margin-top:12px">Worth A/B'ing in the prototype — the split feels right but seeing it side by side will catch unforeseen redundancy.</p>
+    </div>
+
+    <div class="finding">
+      <div class="label">Q3 · REPL vs one-shot ✓ scoped</div>
+      <h4>Same pipeline, three render modes</h4>
+      <p>Same plan, three surfaces:</p>
+      <ul class="changes" style="margin-top:8px">
+        <li><strong>REPL (interactive):</strong> full plan box + per-step keys + the timeline visual (07).</li>
+        <li><strong>One-shot interactive:</strong> identical to REPL but exits after.</li>
+        <li><strong>One-shot <code>--yes</code> (scripting):</strong> collapse the plan to one line per step, no picker, type-to-confirm still blocks. Suggested format:
+<pre class="quote good" style="margin-top:8px">$ glit "commit my login changes" --yes
+  plan: stage(3) → commit → push       <span class="d">3 steps · 1 caution · snapshot 0de4a0d</span>
+  ✓ staged 3 files (+125 −12)
+  ✓ committed                          aa44620 → 0de4a0d
+  ✓ pushed origin/feat/session-refresh</pre>
+        </li>
+      </ul>
+    </div>
+
+    <div class="finding">
+      <div class="label">Q4 · Inquire picker bug ✓ identified</div>
+      <h4>Pin <span class="mono" style="font-family:'Geist Mono'">.with_starting_cursor(0)</span> explicitly</h4>
+      <p>The "Do nothing highlighted" behavior in the original screenshot is <span class="mono">inquire::Select</span> restoring last-selection. Two-line fix at the call site for every picker: pin starting cursor to index 0, and put your safest option at index 0 (already the case for the conflict picker).</p>
+      <p>Belt-and-suspenders: if you ever <em>do</em> want last-selection memory (e.g. for an option that's tied to user preference, not safety), do it explicitly per-call site — not as the default behavior.</p>
+    </div>
+
+    <div class="finding">
+      <div class="label">Q5 · Severity-by-context ✓ tiered</div>
+      <h4>Cheap signals always; <span class="mono" style="font-family:'Geist Mono'">ls-remote</span> only at force-push confirm</h4>
+      <p>Tiered cost ladder:</p>
+      <ul class="changes" style="margin-top:8px">
+        <li><strong>Free (every classification):</strong> branch-name match (<code>main</code>/<code>master</code>/<code>develop</code>/<code>trunk</code>) → upgrade marker on protected branch names. Catches ~80% of correct ⛔ calls.</li>
+        <li><strong>Cheap-ish (~50ms, before destructive ops):</strong> walk last N commits, count authors that aren't <code>user.email</code> → real "3 collaborators behind" instead of the lying <code>behind &gt; 0</code> heuristic. Fix <code>has_foreign_commits()</code> to do this.</li>
+        <li><strong>Expensive (200–500ms, gated behind force-push confirm only):</strong> <code>git ls-remote</code> to verify the remote tip hasn't moved since last fetch. Pay the latency once, where it matters.</li>
+        <li><strong>Skip:</strong> GitHub branch protection API — host-specific, doesn't belong in a host-agnostic tool.</li>
+      </ul>
+    </div>
+  </div>
+
+  <hr class="sep">
+
+  <!-- ====================== NEXT DELIVERABLE ====================== -->
+  <h2>Next deliverable — interactive prototype</h2>
+  <div class="questions">
+    <p style="margin-top:0">You said yes to the prototype, with the keymap question as the open one (<code>[Enter] run all</code> vs per-step <code>[y/n]</code> vs <code>[e] edit step</code>). My scoping proposal before I build:</p>
+    <ol>
+      <li><strong>Flow:</strong> the plan-execution pipeline (<code>glit "commit my login changes"</code> → plan → execute → done). Highest-traffic flow and the one the keymap question is about.</li>
+      <li><strong>Three keymap variants</strong> as a top-of-screen toggle, switching the same underlying state machine:
+        <ul style="margin:8px 0">
+          <li><code>A · Atomic</code> — <code>[Enter]</code> runs all, <code>[q]</code> cancels. Fewest keystrokes; lowest control.</li>
+          <li><code>B · Per-step</code> — <code>[y/n]</code> at every step. Most control; most friction.</li>
+          <li><code>C · Hybrid</code> — <code>[Enter]</code> runs all, but <code>[e N]</code> edits step N before run, <code>[s N]</code> skips step N. (My recommendation.)</li>
+        </ul>
+      </li>
+      <li><strong>Real keyboard input</strong> in the page — type the keys, watch the timeline advance, including the pulsing mid-execution node. Click-on-highlighted-key as a fallback.</li>
+      <li><strong>Two preset failure injections</strong> to test the recovery path: "push rejected (non-fast-forward)" and "commit hook failed." Lets you see how the keymap survives an error mid-pipeline.</li>
+      <li><strong>Side-bar legend</strong> showing the keymap for the current variant, plus the snapshot ID that would be taken — so you can read the affordances without the prototype having to teach them.</li>
+    </ol>
+    <p style="margin-bottom:0"><strong>Out of scope for v1 of the prototype</strong> (each its own follow-up if you want):</p>
+    <ul style="margin-top:8px; padding-left:22px; color:var(--fg-2)">
+      <li>Merge-conflict picker — separate prototype; the keymap question is different (P1 predict+confirm vs P2 graph picker vs P3 accordion).</li>
+      <li>File multi-select — also separate; keymap is settled (<code>[space]</code>, <code>[1-3]</code>, <code>[a]</code>, <code>[Enter]</code>).</li>
+      <li>Reset / discard flows — covered by static mockups; rarely-hit so less ROI on interactivity.</li>
+    </ul>
+    <p style="margin-top:16px; color:var(--fg)">Confirm the scope (or tweak it) and I'll build it as <code>Glit Plan Prototype.html</code>. Best guess: ~1 turn of work.</p>
+  </div>
+
+  <div class="meta">glit · ux critique v2 · 2026-05-27 · answers integrated</div>
+
+</div>
+</body>
+</html>
