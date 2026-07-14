@@ -144,22 +144,33 @@ pub async fn run_agent(
     match crate::validation::situation_gate(&context.situation, &intent_result.intent) {
         crate::validation::SituationVerdict::Allowed => {}
         crate::validation::SituationVerdict::Blocked { message } => {
-            // TODO(Phase 12): migrate onto SituationVerdict::Redirect
-            if matches!(
-                context.situation,
-                crate::commands::RepoSituation::DetachedHead { .. }
-            ) && crate::validation::is_write_intent(&intent_result.intent)
-            {
-                // Preserve the Phase 9 interactive way-out (branch-here / switch-back).
-                return handle_detached_head_rescue(&mut repo, &*gate).await;
-            }
             // Return the refusal as an Err so it exits non-zero (main() renders
             // `✗ {e}` and exits 1; the REPL prints and continues), matching the
             // execution-layer block in run_pre_checks. Returning Ok exited 0 and
             // let scripts read a refused, never-executed op as success.
             return Err(anyhow::anyhow!("{}", message));
         }
-        crate::validation::SituationVerdict::Redirect { .. } => { /* Phase 12+ */ }
+        // The gate — not agent.rs — drives the way out (Phase 12; subsumes the
+        // old detached-HEAD special-case that used to live in the Blocked arm).
+        crate::validation::SituationVerdict::Redirect(redirect) => {
+            use crate::validation::Redirect;
+            return match redirect {
+                Redirect::DetachedHeadRescue => {
+                    handle_detached_head_rescue(&mut repo, &*gate).await
+                }
+                Redirect::ReconcileDiverged { ahead, behind } => {
+                    reconcile_flow(
+                        &mut repo,
+                        ReconcileMode::SameBranch,
+                        ahead,
+                        behind,
+                        config,
+                        &*gate,
+                    )
+                    .await
+                }
+            };
+        }
     }
 
     // Dispatch based on intent
@@ -978,6 +989,20 @@ async fn build_scoped_steps(
             Ok(vec![PipelineStep::DiscardLocal { remote, branch }])
         }
 
+        // In-progress backout/continue ops (Phase 11). The situation gate has
+        // already verified each is valid for the current Mid* state (and that
+        // Continue's index is conflict-free), so map 1:1 to the step. No extra
+        // gate here — execute_pipeline shows the plan + SimpleConfirm, and these
+        // are low-danger (aborts especially).
+        ScopedWriteOp::MergeAbort => Ok(vec![PipelineStep::MergeAbort]),
+        ScopedWriteOp::RebaseContinue => Ok(vec![PipelineStep::RebaseContinue]),
+        ScopedWriteOp::RebaseSkip => Ok(vec![PipelineStep::RebaseSkip]),
+        ScopedWriteOp::RebaseAbort => Ok(vec![PipelineStep::RebaseAbort]),
+        ScopedWriteOp::CherryPickContinue => Ok(vec![PipelineStep::CherryPickContinue]),
+        ScopedWriteOp::CherryPickAbort => Ok(vec![PipelineStep::CherryPickAbort]),
+        ScopedWriteOp::RevertContinue => Ok(vec![PipelineStep::RevertContinue]),
+        ScopedWriteOp::RevertAbort => Ok(vec![PipelineStep::RevertAbort]),
+
         ScopedWriteOp::Init => {
             // Already inside a repo — re-init is harmless but confirm first
             init_repo(gate)?;
@@ -1115,29 +1140,13 @@ async fn handle_feature_pipeline(
         FeaturePipelineOp::CommitPush { message } => {
             commit_push_pipeline(repo, message, config, gate).await
         }
-        FeaturePipelineOp::Sync { strategy } => {
-            use crate::commands::SyncStrategy;
-            let remote = config.remote.clone();
-            let branch = current_branch_name(repo);
-
-            // Confirm before pulling
-            let resp = gate.prompt(&GateType::SimpleConfirm {
-                message: format!(
-                    "Sync: pull from {}/{} ({})?",
-                    remote,
-                    branch,
-                    match strategy {
-                        SyncStrategy::Merge => "merge",
-                        SyncStrategy::Rebase => "rebase",
-                    }
-                ),
-            })?;
-            if !matches!(resp, GateResponse::Confirmed) {
-                println!("  Aborted.");
-                return Ok(());
-            }
-
-            execute_pipeline(repo, vec![PipelineStep::Pull { remote }], config, gate).await
+        FeaturePipelineOp::Sync { strategy: _ } => {
+            // S13 — cross-branch freshness: reconcile the current branch against
+            // the remote default branch (origin/HEAD), reusing the rebase-vs-merge
+            // ChoiceGate. The gate now owns the choice, so SyncStrategy is advisory
+            // only (kept for prompt/classifier compatibility). Counts are recomputed
+            // inside reconcile_flow after the inline fetch.
+            reconcile_flow(repo, ReconcileMode::CrossBranchSync, 0, 0, config, gate).await
         }
     }
 }
@@ -1267,6 +1276,203 @@ async fn commit_push_pipeline(
     ];
 
     execute_pipeline(repo, steps, config, gate).await
+}
+
+// =============================================================================
+// Divergence reconciliation (Phase 12 — S9/S10/S13): fetch → rebase-vs-merge
+// ChoiceGate → run it → (conditionally) push.
+// =============================================================================
+
+/// Which branch the reconcile targets, and whether the post-reconcile push is
+/// safe to auto-run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReconcileMode {
+    /// S9: reconcile the current branch against its OWN upstream. The
+    /// post-reconcile push is a clean fast-forward — always safe to append.
+    SameBranch,
+    /// S13 (Sync): reconcile the current branch against `origin/<default>`. A
+    /// rebase here rewrites already-pushed commits, so it NEVER auto-pushes
+    /// (force-with-lease + PushedCommitRewrite are Phase 13); a merge pushes only
+    /// if the branch isn't behind its own upstream. This closes the
+    /// duplicate-commit loop where an auto-push → NonFastForward → reconcile
+    /// against a stale upstream would replay rewritten commits (Amendment 1).
+    CrossBranchSync,
+}
+
+/// (ahead, behind) of HEAD vs a `remote/branch` ref (e.g. `origin/main`).
+/// `(0, 0)` when either side can't be resolved.
+fn ahead_behind_vs(repo: &git2::Repository, target_ref: &str) -> (usize, usize) {
+    let local = match repo.head().ok().and_then(|h| h.target()) {
+        Some(o) => o,
+        None => return (0, 0),
+    };
+    let target = match repo.revparse_single(target_ref).ok().map(|o| o.id()) {
+        Some(o) => o,
+        None => return (0, 0),
+    };
+    repo.graph_ahead_behind(local, target).unwrap_or((0, 0))
+}
+
+/// Append the post-reconcile Push step for the current branch.
+fn with_push(
+    mut steps: Vec<PipelineStep>,
+    remote: &str,
+    branch: &str,
+    repo: &git2::Repository,
+) -> Vec<PipelineStep> {
+    let set_upstream = !branch_has_upstream(repo, branch);
+    steps.push(PipelineStep::Push {
+        remote: remote.to_string(),
+        branch: branch.to_string(),
+        set_upstream,
+    });
+    steps
+}
+
+/// The flagship divergence flow. `_ahead_hint`/`_behind_hint` are advisory (from
+/// the Redirect); the inline fetch recomputes authoritative counts vs the
+/// resolved target, and the degenerate-count guards run BEFORE the gate renders.
+async fn reconcile_flow(
+    repo: &mut git2::Repository,
+    mode: ReconcileMode,
+    _ahead_hint: u32,
+    _behind_hint: u32,
+    config: &Config,
+    gate: &dyn ConfirmationGate,
+) -> anyhow::Result<()> {
+    let git_ops = Git2Operations;
+    let remote = config.remote.clone();
+    let branch = current_branch_name(repo);
+    if branch == "HEAD" {
+        return Err(anyhow::anyhow!(
+            "No branch to reconcile — repository has no commits or HEAD is detached."
+        ));
+    }
+
+    // Resolve the target branch + ref (SameBranch → own upstream; Sync → default).
+    let target_branch = match mode {
+        ReconcileMode::SameBranch => branch.clone(),
+        ReconcileMode::CrossBranchSync => crate::git_ops::default_branch(repo, &remote)
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Could not determine {r}'s default branch (origin/HEAD). Try: git remote set-head {r} -a",
+                    r = remote
+                )
+            })?,
+    };
+    let target_ref = format!("{}/{}", remote, target_branch);
+
+    // Inline fetch — refresh the tracking ref before the choice + guards.
+    print!("Fetching {}… ", remote);
+    std::io::Write::flush(&mut std::io::stdout()).ok();
+    if let Err(e) = git_ops.fetch(repo, &remote, false) {
+        println!("✗");
+        return Err(anyhow::anyhow!("Could not fetch {}: {}", remote, e));
+    }
+    println!("✓");
+
+    let (ahead, behind) = ahead_behind_vs(repo, &target_ref);
+
+    // Amendment 2 — degenerate counts skip the gate entirely.
+    if behind == 0 {
+        println!("  {}", crate::copy::reconcile_up_to_date(&target_ref));
+        if mode == ReconcileMode::SameBranch && ahead > 0 {
+            let steps = with_push(vec![], &remote, &branch, repo);
+            return execute_pipeline(repo, steps, config, gate).await;
+        }
+        return Ok(());
+    }
+    if ahead == 0 {
+        // Plain fast-forward — rebase-vs-merge would be a meaningless choice
+        // (merge would fabricate a pointless merge commit).
+        println!("  {}", crate::copy::reconcile_fast_forwarded(&target_ref));
+        let msg = format!("Merge {} into {}", target_ref, branch);
+        let mut steps = vec![PipelineStep::Merge {
+            source: target_ref.clone(),
+            message: msg,
+        }];
+        if mode == ReconcileMode::SameBranch {
+            steps = with_push(steps, &remote, &branch, repo);
+        }
+        return execute_pipeline(repo, steps, config, gate).await;
+    }
+
+    // True divergence — offer the rebase-vs-merge choice with consequences.
+    let cross = mode == ReconcileMode::CrossBranchSync;
+    let options = vec![
+        crate::commands::ChoiceOption {
+            label: "Rebase".to_string(),
+            consequence: crate::copy::reconcile_rebase_consequence(ahead as u32, cross),
+        },
+        crate::commands::ChoiceOption {
+            label: "Merge".to_string(),
+            consequence: crate::copy::RECONCILE_MERGE_CONSEQUENCE.to_string(),
+        },
+        crate::commands::ChoiceOption {
+            label: "Abort".to_string(),
+            consequence: crate::copy::RECONCILE_ABORT_CONSEQUENCE.to_string(),
+        },
+    ];
+    let question = format!(
+        "Your branch and {} have diverged (ahead {}, behind {}). How should GLit reconcile?",
+        target_ref, ahead, behind
+    );
+    let choice = match gate.prompt(&GateType::ChoiceGate { question, options })? {
+        GateResponse::Chose(i) => i,
+        _ => {
+            println!("  Nothing changed.");
+            return Ok(());
+        }
+    };
+
+    // Build the pipeline per choice + the Amendment-1 push matrix.
+    let (steps, post_note): (Vec<PipelineStep>, Option<String>) = match choice {
+        0 => {
+            let steps = vec![PipelineStep::Rebase {
+                onto: target_ref.clone(),
+            }];
+            match mode {
+                ReconcileMode::SameBranch => (with_push(steps, &remote, &branch, repo), None),
+                // Never auto-push a rewritten branch (Phase 13 owns force-with-lease).
+                ReconcileMode::CrossBranchSync => (
+                    steps,
+                    Some(crate::copy::sync_rebase_force_note(&target_ref)),
+                ),
+            }
+        }
+        1 => {
+            let msg = format!("Merge {} into {}", target_ref, branch);
+            let steps = vec![PipelineStep::Merge {
+                source: target_ref.clone(),
+                message: msg,
+            }];
+            match mode {
+                ReconcileMode::SameBranch => (with_push(steps, &remote, &branch, repo), None),
+                ReconcileMode::CrossBranchSync => {
+                    // Push only if the branch isn't behind its OWN upstream.
+                    let own_ref = format!("{}/{}", remote, branch);
+                    let (_own_ahead, own_behind) = ahead_behind_vs(repo, &own_ref);
+                    if own_behind == 0 {
+                        (with_push(steps, &remote, &branch, repo), None)
+                    } else {
+                        (steps, Some(crate::copy::SYNC_MERGE_BEHIND_NOTE.to_string()))
+                    }
+                }
+            }
+        }
+        _ => {
+            println!("  Nothing changed.");
+            return Ok(());
+        }
+    };
+
+    let result = execute_pipeline(repo, steps, config, gate).await;
+    if result.is_ok() {
+        if let Some(note) = post_note {
+            println!("  {}", note);
+        }
+    }
+    result
 }
 
 /// Handle the "bare push but nothing to push" case. Either:
@@ -1627,10 +1833,19 @@ async fn execute_pipeline(
     // Capture snapshot BEFORE preview so the user sees the recovery point in
     // the header. The snapshot is on disk before any step runs.
     let recovery_mgr = FileRecoveryManager;
-    let snapshot = recovery_mgr.capture_snapshot(repo)?;
+    // Skip snapshot capture for a pure abort/skip pipeline: those run WITH a
+    // conflicted index, and capture_snapshot's `index.write_tree()` errors on
+    // unmerged entries. git's own ORIG_HEAD is the recovery net for a backout.
+    // Continue is NOT a backout step here, so it still snapshots (index clean).
+    let snapshot: Option<crate::recovery::PipelineSnapshot> =
+        if crate::commands::pipeline_is_pure_backout(&steps) {
+            None
+        } else {
+            Some(recovery_mgr.capture_snapshot(repo)?)
+        };
     let sha7 = snapshot
-        .head_oid
-        .as_deref()
+        .as_ref()
+        .and_then(|s| s.head_oid.as_deref())
         .map(|s| &s[..s.len().min(7)])
         .unwrap_or("");
 
@@ -1649,7 +1864,9 @@ async fn execute_pipeline(
     if !matches!(proceed, GateResponse::Confirmed) {
         // The snapshot was captured before the gate — clean it up since
         // nothing changed.
-        let _ = recovery_mgr.delete_snapshot(&snapshot);
+        if let Some(s) = &snapshot {
+            let _ = recovery_mgr.delete_snapshot(s);
+        }
         println!("  Aborted.");
         return Ok(());
     }
@@ -1662,9 +1879,13 @@ async fn execute_pipeline(
     let mut last_error: Option<anyhow::Error> = None;
     let mut no_local_change = false;
     let mut failed_push: Option<(String, String)> = None; // (remote, branch) when a Push step fails
-                                                          // Classified network/merge failure captured during the step loop. When
-                                                          // set, the executor renders a class-aware picker instead of the generic
-                                                          // anyhow chain.
+                                                          // Set when a Merge/Rebase step paused on conflicts (Phase 12): the repo is
+                                                          // left in an in-progress op and recovery belongs to git's state machine +
+                                                          // the Phase 11 verbs, NOT the snapshot-restore path.
+    let mut reconcile_paused: Option<(&'static str, usize)> = None;
+    // Classified network/merge failure captured during the step loop. When
+    // set, the executor renders a class-aware picker instead of the generic
+    // anyhow chain.
     let mut classified: Option<(crate::git_ops::FailureClass, String, String)> = None; // (class, raw_stderr, step_verb)
     let glit_debug = std::env::var("GLIT_DEBUG").is_ok();
 
@@ -1772,6 +1993,28 @@ async fn execute_pipeline(
                 );
                 println!();
 
+                // Reconcile pause (Phase 12): a Merge/Rebase step left an
+                // in-progress op (conflict). This is a calm handoff into the
+                // Phase 11 verbs, NOT a snapshot-recoverable failure — record it
+                // and stop before the generic error spew. `repo.state() != Clean`
+                // after a step error reliably indicates this (Add/Commit/Push
+                // failures never leave a non-Clean state).
+                if repo.state() != git2::RepositoryState::Clean {
+                    let op = match step {
+                        PipelineStep::Rebase { .. } => "rebase",
+                        PipelineStep::Merge { .. } => "merge",
+                        _ => "operation",
+                    };
+                    let n = repo
+                        .index()
+                        .ok()
+                        .and_then(|idx| idx.conflicts().ok().map(|c| c.count()))
+                        .unwrap_or(0);
+                    reconcile_paused = Some((op, n));
+                    last_error = Some(e);
+                    break;
+                }
+
                 // Did the operation return a typed `ClassifiedFailure`?
                 // If so, capture it for the post-loop picker and suppress
                 // the generic "Step failed:" / "Recovery: ..." prints —
@@ -1801,10 +2044,10 @@ async fn execute_pipeline(
                             failed_push = Some((remote.clone(), branch.clone()));
                         }
                     }
-                    let action = step.recovery_action(&snapshot);
+                    let action = snapshot.as_ref().map(|s| step.recovery_action(s));
                     no_local_change = matches!(
                         action,
-                        crate::commands::RecoveryAction::NoLocalChange { .. }
+                        Some(crate::commands::RecoveryAction::NoLocalChange { .. })
                     ) && i == 0;
                     last_error = Some(e);
                     break;
@@ -1821,10 +2064,10 @@ async fn execute_pipeline(
                         failed_push = Some((remote.clone(), branch.clone()));
                     }
                 }
-                let action = step.recovery_action(&snapshot);
+                let action = snapshot.as_ref().map(|s| step.recovery_action(s));
                 no_local_change = matches!(
                     action,
-                    crate::commands::RecoveryAction::NoLocalChange { .. }
+                    Some(crate::commands::RecoveryAction::NoLocalChange { .. })
                 ) && i == 0;
                 if glit_debug {
                     eprintln!("  Recovery: {:?}", action);
@@ -1835,10 +2078,25 @@ async fn execute_pipeline(
         }
     }
 
+    // Reconcile pause (Phase 12): the snapshot is intentionally PRESERVED —
+    // git's ORIG_HEAD + `glit "abort <op>"` (Phase 11) own recovery, and
+    // `glit --recover` defers via AdviseGitAbort while the op is in progress.
+    // Return the calm handoff as an Err so a paused rebase exits NONZERO (a
+    // half-done op is not success — the 10.1 finding #2 applies), with no
+    // "snapshot preserved / run --recover" spew. The calm text IS the message.
+    if let Some((op, n)) = reconcile_paused {
+        return Err(anyhow::anyhow!(
+            "{}",
+            crate::copy::reconcile_paused_block(op, n)
+        ));
+    }
+
     // Delete snapshot on success, or when the first step failed without changing repo state.
     // Keep it on real failures (for `glit --recover`).
     if last_error.is_none() {
-        let _ = recovery_mgr.delete_snapshot(&snapshot);
+        if let Some(s) = &snapshot {
+            let _ = recovery_mgr.delete_snapshot(s);
+        }
         println!();
 
         // Compose the Done line. Pull a fresh RepoContext so the ahead/behind
@@ -1865,13 +2123,19 @@ async fn execute_pipeline(
         // Push that fails non-FF leaves the local repo in a fine state — the
         // earlier commit is intact, only the network step refused. No snapshot
         // recovery is needed.
-        let _ = recovery_mgr.delete_snapshot(&snapshot);
-    } else {
+        if let Some(s) = &snapshot {
+            let _ = recovery_mgr.delete_snapshot(s);
+        }
+    } else if let Some(s) = &snapshot {
         eprintln!(
             "\n  Snapshot preserved at ~/.glit/snapshots/{}.json",
-            snapshot.pipeline_id
+            s.pipeline_id
         );
         eprintln!("  Run 'glit --recover' to restore to pre-pipeline state.");
+    } else {
+        // A backout op (no snapshot) failed — git's own state machine holds the
+        // recovery point (ORIG_HEAD / the in-progress op is still intact).
+        eprintln!("\n  The operation did not complete — your repository state is unchanged.");
     }
 
     // Class-aware recovery picker. Renders right at failure time so the
@@ -1889,19 +2153,23 @@ async fn execute_pipeline(
     // When the failure was a non-fast-forward push, offer the same conflict-
     // resolution menu the user gets from `glit "safe to pull"`. The local
     // commit is already safe; the user just needs to decide how to reconcile.
-    if let Some((remote, _branch)) = failed_push {
+    if failed_push.is_some() {
         eprintln!("\nPush was rejected because the remote has commits you don't have.");
-        eprintln!("Let's figure out how to reconcile…\n");
-        // Recursive across async fn boundary — box the future so the
-        // compiler doesn't need to figure out the indefinite size.
-        let fut = Box::pin(handle_merge_preview(
-            repo, &remote, config, gate, /*auto_confirm=*/ false,
+        eprintln!("Let's reconcile…\n");
+        // S10 — offer the reconcile flow directly (rebase-vs-merge ChoiceGate),
+        // not the old dead-end "pull first" string. SameBranch: the rejected push
+        // was the current branch against its own upstream. Recursive across the
+        // async boundary → box the future. Propagate the result so a paused
+        // reconcile still exits nonzero.
+        let fut = Box::pin(reconcile_flow(
+            repo,
+            ReconcileMode::SameBranch,
+            0,
+            0,
+            config,
+            gate,
         ));
-        if let Err(e) = fut.await {
-            eprintln!("  Could not run merge preview: {}", e);
-        }
-        // Swallow the push error so the user-visible exit is the picker.
-        return Ok(());
+        return fut.await;
     }
 
     match last_error {
@@ -1922,13 +2190,39 @@ pub fn execute_recovery() -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("No interrupted pipeline found in ~/.glit/snapshots/"))?;
 
     println!("Found interrupted pipeline from {}.", snapshot.captured_at);
-    println!("Restoring repository to pre-pipeline state...\n");
 
     let repo_path = find_repo_root()?;
     let repo = git2::Repository::open(&repo_path)?;
-    recovery_mgr.execute_recovery(&repo, &snapshot)?;
+    let current_head = repo.head().ok().and_then(|h| h.target());
 
-    Ok(())
+    // Situation-aware: never fight git's own state machine, and never silently
+    // strand a detached HEAD out of an operation that actually completed.
+    match crate::recovery::recovery_plan(repo.state(), &snapshot, current_head) {
+        crate::recovery::RecoveryDecision::AdviseGitAbort => {
+            println!("{}", crate::copy::RECOVER_MID_OP_ADVICE);
+            Ok(())
+        }
+        crate::recovery::RecoveryDecision::WarnDetached => {
+            println!("{}", crate::copy::RECOVER_DETACHED_WARN);
+            let gate = InquireGate;
+            let resp = gate.prompt(&GateType::SimpleConfirm {
+                message: "Restore anyway, moving to a detached HEAD?".to_string(),
+            })?;
+            if matches!(resp, GateResponse::Confirmed) {
+                recovery_mgr.execute_recovery(&repo, &snapshot)?;
+            } else {
+                println!(
+                    "  Left as-is. The snapshot is preserved — `glit recover --clean` to remove it."
+                );
+            }
+            Ok(())
+        }
+        crate::recovery::RecoveryDecision::Restore => {
+            println!("Restoring repository to pre-pipeline state...\n");
+            recovery_mgr.execute_recovery(&repo, &snapshot)?;
+            Ok(())
+        }
+    }
 }
 
 // =============================================================================
@@ -2565,6 +2859,16 @@ fn summarize_step(
             "→ Reset local to {}/{} — any unpushed work is gone (recoverable via reflog)",
             remote, branch
         )),
+        P::Merge { source, .. } => Some(format!("→ Merged {} (merge commit recorded)", source)),
+        P::Rebase { onto } => Some(format!("→ Rebased onto {}", onto)),
+        P::MergeAbort => Some("→ Merge aborted — back to your pre-merge state".to_string()),
+        P::RebaseContinue => Some("→ Rebase continued".to_string()),
+        P::RebaseSkip => Some("→ Skipped the conflicting commit".to_string()),
+        P::RebaseAbort => Some("→ Rebase aborted — back to the original HEAD".to_string()),
+        P::CherryPickContinue => Some("→ Cherry-pick continued".to_string()),
+        P::CherryPickAbort => Some("→ Cherry-pick aborted".to_string()),
+        P::RevertContinue => Some("→ Revert continued".to_string()),
+        P::RevertAbort => Some("→ Revert aborted".to_string()),
         P::Status | P::Log { .. } | P::Diff { .. } => None,
     }
 }
@@ -2748,6 +3052,16 @@ fn step_name(step: &PipelineStep) -> &'static str {
         PipelineStep::PullRebase { .. } => "git pull --rebase",
         PipelineStep::ForcePush { .. } => "git push --force-with-lease",
         PipelineStep::DiscardLocal { .. } => "git reset --hard",
+        PipelineStep::Merge { .. } => "git merge",
+        PipelineStep::Rebase { .. } => "git rebase",
+        PipelineStep::MergeAbort => "git merge --abort",
+        PipelineStep::RebaseContinue => "git rebase --continue",
+        PipelineStep::RebaseSkip => "git rebase --skip",
+        PipelineStep::RebaseAbort => "git rebase --abort",
+        PipelineStep::CherryPickContinue => "git cherry-pick --continue",
+        PipelineStep::CherryPickAbort => "git cherry-pick --abort",
+        PipelineStep::RevertContinue => "git revert --continue",
+        PipelineStep::RevertAbort => "git revert --abort",
     }
 }
 
@@ -2871,5 +3185,372 @@ mod tests {
             }
             _ => panic!("Expected FilesSelected"),
         }
+    }
+}
+
+// =============================================================================
+// Phase 12 — divergence reconciliation, outcome-based (real git in tempdirs,
+// bare remote + clones — no network). The centerpiece is the two-clone diverged
+// repro ending 0/0 ahead-behind with both changes present.
+// =============================================================================
+#[cfg(test)]
+mod phase12_reconcile_tests {
+    use super::*;
+    use crate::commands::{IntentType, RepoSituation, ScopedWriteOp};
+    use crate::config::Config;
+    use crate::confirm::ScriptedGate;
+    use crate::validation::{situation_gate, Redirect, SituationVerdict};
+    use git2::Repository;
+    use std::fs;
+    use std::path::Path;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    fn git(dir: &Path, args: &[&str]) {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("failed to spawn git");
+        assert!(
+            out.status.success(),
+            "git {:?} failed:\n{}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    fn set_identity(dir: &Path, who: &str) {
+        git(dir, &["config", "user.name", who]);
+        git(dir, &["config", "user.email", &format!("{}@test.com", who)]);
+    }
+
+    fn clone_from(remote: &Path) -> TempDir {
+        let dst = TempDir::new().unwrap();
+        git(
+            &std::env::temp_dir(),
+            &[
+                "clone",
+                remote.to_str().unwrap(),
+                dst.path().to_str().unwrap(),
+            ],
+        );
+        dst
+    }
+
+    /// Bare remote with a `main` base commit already pushed from clone A.
+    /// Returns (remote, clone_a).
+    fn remote_with_base() -> (TempDir, TempDir) {
+        let remote = TempDir::new().unwrap();
+        git(remote.path(), &["init", "--bare", "-b", "main", "."]);
+        let a = clone_from(remote.path());
+        set_identity(a.path(), "A");
+        fs::write(a.path().join("base.txt"), "base\n").unwrap();
+        git(a.path(), &["add", "."]);
+        git(a.path(), &["commit", "-m", "base"]);
+        git(a.path(), &["push", "origin", "main"]);
+        (remote, a)
+    }
+
+    /// Same-branch divergence on `main`: clone B advances the remote; clone A
+    /// commits locally then fetches. `conflict` controls whether both edits hit
+    /// the same file+line. Returns (remote, clone_a) — keep both alive.
+    fn diverged_same_branch(conflict: bool) -> (TempDir, TempDir) {
+        let (remote, a) = remote_with_base();
+
+        // Clone B advances the remote.
+        let b = clone_from(remote.path());
+        set_identity(b.path(), "B");
+        if conflict {
+            fs::write(b.path().join("base.txt"), "B side\n").unwrap();
+        } else {
+            fs::write(b.path().join("b.txt"), "from b\n").unwrap();
+        }
+        git(b.path(), &["add", "."]);
+        git(b.path(), &["commit", "-m", "b change"]);
+        git(b.path(), &["push", "origin", "main"]);
+
+        // Clone A commits locally (not pushed).
+        if conflict {
+            fs::write(a.path().join("base.txt"), "A side\n").unwrap();
+        } else {
+            fs::write(a.path().join("a.txt"), "from a\n").unwrap();
+        }
+        git(a.path(), &["add", "."]);
+        git(a.path(), &["commit", "-m", "a change"]);
+
+        // A fetches so its tracking ref reflects the divergence.
+        git(a.path(), &["fetch", "origin"]);
+        (remote, a)
+    }
+
+    // Centerpiece: two-clone diverged repro, choose Rebase → 0/0 and both
+    // changes present.
+    #[tokio::test]
+    async fn diverged_rebase_lands_zero_zero_with_both_changes() {
+        let (_remote, a) = diverged_same_branch(false);
+        let mut repo = Repository::open(a.path()).unwrap();
+
+        // Detection + gate route.
+        let sit = crate::context::detect_situation(&repo);
+        assert!(
+            matches!(
+                sit,
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1
+                }
+            ),
+            "expected Diverged{{1,1}}, got {:?}",
+            sit
+        );
+        let push_intent = IntentType::ScopedWrite(ScopedWriteOp::Push {
+            remote: "origin".into(),
+        });
+        assert!(matches!(
+            situation_gate(&sit, &push_intent),
+            SituationVerdict::Redirect(Redirect::ReconcileDiverged {
+                ahead: 1,
+                behind: 1
+            })
+        ));
+
+        // Drive the flow choosing Rebase (option 0).
+        let cfg = Config::default();
+        let gate = ScriptedGate::new(0);
+        reconcile_flow(&mut repo, ReconcileMode::SameBranch, 1, 1, &cfg, &gate)
+            .await
+            .expect("reconcile should succeed");
+
+        let (ahead, behind) = ahead_behind_vs(&repo, "origin/main");
+        assert_eq!((ahead, behind), (0, 0), "expected 0/0 after rebase+push");
+        assert!(a.path().join("a.txt").exists(), "local change missing");
+        assert!(a.path().join("b.txt").exists(), "remote change missing");
+    }
+
+    // Merge path → the new tip records 2 parents; both changes present; 0/0.
+    #[tokio::test]
+    async fn diverged_merge_records_two_parents() {
+        let (_remote, a) = diverged_same_branch(false);
+        let mut repo = Repository::open(a.path()).unwrap();
+        let cfg = Config::default();
+        let gate = ScriptedGate::new(1); // Merge
+        reconcile_flow(&mut repo, ReconcileMode::SameBranch, 1, 1, &cfg, &gate)
+            .await
+            .expect("merge reconcile should succeed");
+
+        let tip = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(tip.parent_count(), 2, "merge commit should have 2 parents");
+        let (ahead, behind) = ahead_behind_vs(&repo, "origin/main");
+        assert_eq!((ahead, behind), (0, 0), "expected 0/0 after merge+push");
+        assert!(a.path().join("a.txt").exists());
+        assert!(a.path().join("b.txt").exists());
+    }
+
+    // Conflicting rebase pauses: Err (nonzero) with the calm handoff message,
+    // repo transitions to MidRebase, and the snapshot is preserved.
+    #[tokio::test]
+    async fn diverged_rebase_conflict_pauses_and_preserves_snapshot() {
+        let (_remote, a) = diverged_same_branch(true);
+        let mut repo = Repository::open(a.path()).unwrap();
+        let pre_head = repo.head().unwrap().target().unwrap().to_string();
+
+        let cfg = Config::default();
+        let gate = ScriptedGate::new(0); // Rebase → conflicts
+        let result = reconcile_flow(&mut repo, ReconcileMode::SameBranch, 1, 1, &cfg, &gate).await;
+
+        // Nonzero exit (Err), calm message, no anyhow chain spew.
+        let err = result.expect_err("conflicting rebase must pause with a nonzero exit");
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("Paused on conflicts") && msg.contains("abort rebase"),
+            "expected the calm handoff, got: {msg}"
+        );
+
+        // In-progress rebase.
+        assert!(
+            matches!(
+                crate::context::detect_situation(&repo),
+                RepoSituation::MidRebase { .. }
+            ),
+            "expected MidRebase after conflict"
+        );
+
+        // Snapshot preserved — find the one at the pre-reconcile tip, then clean up.
+        use crate::recovery::{FileRecoveryManager, RecoveryManager};
+        let mgr = FileRecoveryManager;
+        let snaps = mgr.list_snapshots().unwrap();
+        let mine = snaps
+            .into_iter()
+            .find(|s| s.head_oid.as_deref() == Some(pre_head.as_str()))
+            .expect("snapshot for the paused pipeline should be preserved on disk");
+        assert_eq!(
+            crate::recovery::recovery_plan(
+                repo.state(),
+                &mine,
+                repo.head().ok().and_then(|h| h.target())
+            ),
+            crate::recovery::RecoveryDecision::AdviseGitAbort,
+            "--recover should defer to git while the rebase is in progress"
+        );
+        mgr.delete_snapshot_by_id(&mine.pipeline_id).unwrap();
+    }
+
+    // Amendment 2: degenerate counts skip the ChoiceGate entirely.
+    #[tokio::test]
+    async fn ahead_only_fast_forwards_without_gate() {
+        // A is behind origin/main only (fast-forwardable): B advances remote, A
+        // has no local commit.
+        let (remote, a) = remote_with_base();
+        let b = clone_from(remote.path());
+        set_identity(b.path(), "B");
+        fs::write(b.path().join("b.txt"), "from b\n").unwrap();
+        git(b.path(), &["add", "."]);
+        git(b.path(), &["commit", "-m", "b"]);
+        git(b.path(), &["push", "origin", "main"]);
+        git(a.path(), &["fetch", "origin"]);
+
+        let mut repo = Repository::open(a.path()).unwrap();
+        // ahead == 0, behind == 1 (a fast-forward).
+        assert_eq!(ahead_behind_vs(&repo, "origin/main"), (0, 1));
+
+        let cfg = Config::default();
+        let gate = ScriptedGate::new(0);
+        reconcile_flow(&mut repo, ReconcileMode::SameBranch, 0, 1, &cfg, &gate)
+            .await
+            .expect("fast-forward should succeed");
+
+        assert!(
+            !gate.choice_shown.get(),
+            "the gate must not render for a pure fast-forward"
+        );
+        assert_eq!(
+            ahead_behind_vs(&repo, "origin/main"),
+            (0, 0),
+            "should be up to date after FF"
+        );
+        assert!(a.path().join("b.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn behind_zero_skips_gate() {
+        // A is ahead only (behind == 0): local commit, remote unchanged.
+        let (_remote, a) = remote_with_base();
+        fs::write(a.path().join("a.txt"), "from a\n").unwrap();
+        git(a.path(), &["add", "."]);
+        git(a.path(), &["commit", "-m", "a"]);
+        git(a.path(), &["fetch", "origin"]);
+
+        let mut repo = Repository::open(a.path()).unwrap();
+        assert_eq!(ahead_behind_vs(&repo, "origin/main"), (1, 0));
+
+        let cfg = Config::default();
+        let gate = ScriptedGate::new(0);
+        reconcile_flow(&mut repo, ReconcileMode::SameBranch, 1, 0, &cfg, &gate)
+            .await
+            .expect("ahead-only push should succeed");
+
+        assert!(
+            !gate.choice_shown.get(),
+            "the gate must not render when behind==0"
+        );
+        assert_eq!(
+            ahead_behind_vs(&repo, "origin/main"),
+            (0, 0),
+            "our commit should be pushed"
+        );
+    }
+
+    // Sync via origin/HEAD resolves the default branch.
+    #[test]
+    fn sync_default_branch_resolves_via_origin_head() {
+        let (_remote, a) = remote_with_base();
+        let repo = Repository::open(a.path()).unwrap();
+        assert_eq!(
+            crate::git_ops::default_branch(&repo, "origin").as_deref(),
+            Some("main")
+        );
+    }
+
+    /// Current branch = `feature` (pushed to origin/feature, so own upstream is
+    /// in sync), diverged from `origin/main` (which clone B advanced). Returns
+    /// (remote, clone_a). HEAD is on `feature`, fetched.
+    fn feature_diverged_from_main() -> (TempDir, TempDir) {
+        let (remote, a) = remote_with_base();
+        git(a.path(), &["checkout", "-b", "feature"]);
+        fs::write(a.path().join("feature.txt"), "feat\n").unwrap();
+        git(a.path(), &["add", "."]);
+        git(a.path(), &["commit", "-m", "feat1"]);
+        git(a.path(), &["push", "-u", "origin", "feature"]);
+
+        let b = clone_from(remote.path());
+        set_identity(b.path(), "B");
+        fs::write(b.path().join("main2.txt"), "main2\n").unwrap();
+        git(b.path(), &["add", "."]);
+        git(b.path(), &["commit", "-m", "main2"]);
+        git(b.path(), &["push", "origin", "main"]);
+
+        git(a.path(), &["fetch", "origin"]);
+        (remote, a)
+    }
+
+    // Amendment 1: Sync + Rebase never auto-pushes the (possibly-published)
+    // branch — origin/<feature> stays untouched; the force-push note is deferred
+    // to Phase 13. Guards the duplicate-commit recovery loop.
+    #[tokio::test]
+    async fn sync_rebase_does_not_autopush_feature() {
+        let (_remote, a) = feature_diverged_from_main();
+        let mut repo = Repository::open(a.path()).unwrap();
+        let before = repo
+            .refname_to_id("refs/remotes/origin/feature")
+            .unwrap()
+            .to_string();
+
+        let cfg = Config::default();
+        let gate = ScriptedGate::new(0); // Rebase
+        reconcile_flow(&mut repo, ReconcileMode::CrossBranchSync, 0, 0, &cfg, &gate)
+            .await
+            .expect("cross-branch rebase should succeed locally");
+
+        let after = repo
+            .refname_to_id("refs/remotes/origin/feature")
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            before, after,
+            "Sync must NOT auto-push a rebased (published) branch"
+        );
+    }
+
+    // Amendment 1: Sync + Merge DOES push when the branch is not behind its own
+    // upstream (own_behind == 0) — the merge is a new commit on top, a safe
+    // fast-forward for origin/feature.
+    #[tokio::test]
+    async fn sync_merge_pushes_when_own_upstream_not_behind() {
+        let (_remote, a) = feature_diverged_from_main();
+        let mut repo = Repository::open(a.path()).unwrap();
+        let before = repo
+            .refname_to_id("refs/remotes/origin/feature")
+            .unwrap()
+            .to_string();
+
+        let cfg = Config::default();
+        let gate = ScriptedGate::new(1); // Merge
+        reconcile_flow(&mut repo, ReconcileMode::CrossBranchSync, 0, 0, &cfg, &gate)
+            .await
+            .expect("cross-branch merge should succeed");
+
+        // origin/feature advanced (the merge commit was pushed), and the new tip
+        // has 2 parents (feature + main).
+        let after = repo
+            .refname_to_id("refs/remotes/origin/feature")
+            .unwrap()
+            .to_string();
+        assert_ne!(
+            before, after,
+            "Sync+Merge should push when own upstream isn't behind"
+        );
+        let tip = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(tip.parent_count(), 2, "merge should record 2 parents");
     }
 }

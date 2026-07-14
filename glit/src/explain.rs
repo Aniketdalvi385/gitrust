@@ -151,6 +151,55 @@ pub fn explain(op: &ScopedWriteOp) -> &'static Explanation {
             recovery: Some(Msg("`git reflog` lists abandoned commits for ~90 days; you can still check them out by SHA.")),
             safety: None,
         },
+        // In-progress backout/continue ops (Phase 11).
+        W::MergeAbort => &Explanation {
+            what: Msg("Backs out of the in-progress merge and restores your branch to its pre-merge state."),
+            risks: Msg("Any conflict resolutions you'd staged for this merge are discarded."),
+            recovery: Some(Msg("Nothing to recover — this IS the recovery. Start the merge again if you still want it.")),
+            safety: Some(Msg("Restores via git's own machinery; your committed history is untouched.")),
+        },
+        W::RebaseContinue => &Explanation {
+            what: Msg("Resumes the paused rebase, applying the current commit now that conflicts are resolved."),
+            risks: Msg("If more commits still conflict, the rebase pauses again on the next one."),
+            recovery: Some(Msg("`git rebase --abort` (or `glit \"abort rebase\"`) returns to your pre-rebase state.")),
+            safety: Some(Msg("Only runs once the index is conflict-free — the gate checks first.")),
+        },
+        W::RebaseSkip => &Explanation {
+            what: Msg("Drops the commit that's currently causing conflicts and continues the rebase."),
+            risks: Msg("The skipped commit's changes are left out of the rebased branch entirely."),
+            recovery: Some(Msg("`git rebase --abort` returns to your pre-rebase state, skipped commit included.")),
+            safety: None,
+        },
+        W::RebaseAbort => &Explanation {
+            what: Msg("Backs out of the in-progress rebase and restores the original HEAD."),
+            risks: Msg("Any conflict resolutions staged during this rebase are discarded."),
+            recovery: Some(Msg("Nothing to recover — this IS the recovery. Start the rebase again if you still want it.")),
+            safety: Some(Msg("Restores the original branch tip via git's own machinery.")),
+        },
+        W::CherryPickContinue => &Explanation {
+            what: Msg("Resumes the paused cherry-pick now that conflicts are resolved and staged."),
+            risks: Msg("If further picks conflict, the operation pauses again."),
+            recovery: Some(Msg("`git cherry-pick --abort` (or `glit \"abort cherry-pick\"`) returns to your pre-pick state.")),
+            safety: Some(Msg("Only runs once the index is conflict-free — the gate checks first.")),
+        },
+        W::CherryPickAbort => &Explanation {
+            what: Msg("Backs out of the in-progress cherry-pick and restores your pre-pick state."),
+            risks: Msg("Any conflict resolutions staged for this cherry-pick are discarded."),
+            recovery: Some(Msg("Nothing to recover — this IS the recovery. Re-run the cherry-pick if you still want it.")),
+            safety: Some(Msg("Restores via git's own machinery; committed history is untouched.")),
+        },
+        W::RevertContinue => &Explanation {
+            what: Msg("Resumes the paused revert now that conflicts are resolved and staged."),
+            risks: Msg("If further reverts conflict, the operation pauses again."),
+            recovery: Some(Msg("`git revert --abort` (or `glit \"abort revert\"`) returns to your pre-revert state.")),
+            safety: Some(Msg("Only runs once the index is conflict-free — the gate checks first.")),
+        },
+        W::RevertAbort => &Explanation {
+            what: Msg("Backs out of the in-progress revert and restores your pre-revert state."),
+            risks: Msg("Any conflict resolutions staged for this revert are discarded."),
+            recovery: Some(Msg("Nothing to recover — this IS the recovery. Re-run the revert if you still want it.")),
+            safety: Some(Msg("Restores via git's own machinery; committed history is untouched.")),
+        },
     }
 }
 

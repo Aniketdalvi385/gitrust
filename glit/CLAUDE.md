@@ -13,7 +13,7 @@ All commands run from `glit/` (where `Cargo.toml` lives).
 ```bash
 cargo build                 # debug build
 cargo build --release       # optimized (opt-level=z, lto, stripped — see [profile.release])
-cargo test                  # run all ~145 unit tests
+cargo test                  # run all ~163 unit tests
 cargo test <name>           # single test by name substring, e.g. cargo test test_default_config
 cargo test --package glit intent::   # tests in one module
 cargo run -- "show status"  # run a one-shot query
@@ -70,8 +70,10 @@ Each layer's behavior sits behind a trait so tests can swap in mocks: `IntentCla
 - Plan: docs/BUILD_PHASES_V3.md (phases 9–14). Background: docs/scenario_map.md.
 - One phase per session. Never start phase N+1 until phase N verification passes.
 - Bug-fix work is test-first: write the failing test, watch it fail, then fix.
-- Current phase: 11 (Phases 9 and 10 complete).
+- Current phase: 13 (Phases 9–12 complete).
 
 ### Layer 0/3 state machine (Phase 10)
 
 `context::detect_situation(repo) -> commands::RepoSituation` is the single, deterministic classification of repository state (Normal / EmptyRepo / DetachedHead / MidMerge / MidRebase / MidCherryPick / MidRevert / MidBisect / Diverged / RemoteRewritten / StaleLock). It is stored on `RepoContext.situation` and rendered into the classifier prompt by `describe_situation`. `validation::situation_gate(&RepoSituation, &IntentType) -> SituationVerdict` (Allowed / Blocked{message} / Redirect) enforces the §13 matrix; `agent::run_agent` calls it immediately after classification and **before** resolution, so a state-invalid intent never reaches the resolver. This is the single source of state-based blocking — do not reintroduce parallel `repo.state()` checks in `run_pre_checks`. Block messages live in `copy.rs`.
+
+**Phase 12 — divergence reconciliation.** `SituationVerdict::Redirect(Redirect)` now carries gate-driven rescue flows (`DetachedHeadRescue`, `ReconcileDiverged{ahead,behind}`) — the gate, not `agent.rs`, drives the way out (the old detached-HEAD special-case is gone). `agent::reconcile_flow` implements the flagship flow (`fetch → GateType::ChoiceGate` rebase-vs-merge with per-option consequence sentences → run it → conditional push); `AutoConfirmGate` refuses `ChoiceGate` (no silent strategy default under `--yes`). A mid-pipeline rebase/merge conflict pauses into the Phase 11 verbs and returns a nonzero `Err` while preserving the snapshot (`--recover` defers to git). Sync resolves its target via `origin/HEAD` and never auto-pushes a rebased branch (force-with-lease is Phase 13).

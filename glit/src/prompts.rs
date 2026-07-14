@@ -97,6 +97,18 @@ IMPORTANT: "rebase", "pull rebase", "pull with rebase", "rebase onto origin", "r
 IMPORTANT: "force push", "force-push", "force push with lease", "force-with-lease", "overwrite remote with mine" → use intent "scoped_write" with op "force_push". This runs `git push --force-with-lease` (safe variant that refuses if remote moved). DANGEROUS — only when user explicitly asks for it.
 IMPORTANT: "discard local", "discard my commits", "discard local commits", "reset to origin", "reset hard to origin", "drop local commits", "abandon local commits" → use intent "scoped_write" with op "discard_local". This fetches and hard-resets the local branch to the remote tracking ref. DESTRUCTIVE — local commits are gone (only recoverable via reflog).
 IMPORTANT: Plain "status", "what's the status", "show status" → use intent "read_only" with op "status". (Cheap, local only — ahead/behind may be stale.) Only switch to op "fetch" when the user explicitly asks about SYNC with the remote.
+IMPORTANT: In-progress operation control (look at the "State:" line in the repo state — it tells you which operation, if any, is in progress). Use intent "scoped_write" with these ops:
+  - "abort/cancel the rebase", "get out of the rebase", "undo this rebase" → op "rebase_abort".
+  - "continue the rebase", "resume the rebase", "I resolved the conflicts, go on" (mid-rebase) → op "rebase_continue".
+  - "skip this commit", "skip the rebase" → op "rebase_skip".
+  - "abort/cancel the merge", "get out of the merge" → op "merge_abort".
+  - "abort/cancel the cherry-pick" → op "cherry_pick_abort"; "continue the cherry-pick" → op "cherry_pick_continue".
+  - "abort/cancel the revert" → op "revert_abort"; "continue the revert" → op "revert_continue".
+  Pick the family that MATCHES the in-progress state. A bare "continue" or "abort" while a rebase is in progress → the rebase op; while a merge is in progress → "merge_abort"; etc.
+  Examples:
+    "abort the rebase"        → {"intent":"scoped_write","op":"rebase_abort","confidence":0.95,...}
+    "I fixed the conflicts, continue" (State: rebase in progress) → {"intent":"scoped_write","op":"rebase_continue","confidence":0.9,...}
+    "get me out of this merge" → {"intent":"scoped_write","op":"merge_abort","confidence":0.9,...}
 
 Examples (note how "reasoning" pins down WHY before picking the intent):
   "push my commit" →
@@ -188,7 +200,7 @@ plain push.").
 {
   "reasoning": "one short sentence explaining the choice",
   "intent": "read_only" | "scoped_write" | "feature_pipeline" | "clarify",
-  "op": "status" | "log" | "diff" | "remotes" | "branches" | "config" | "show" | "add" | "commit" | "add_commit" | "branch" | "checkout" | "stash" | "stash_pop" | "reset" | "pull" | "push" | "sync" | "init" | "add_remote" | "remove_remote" | "delete_repo" | "undo",
+  "op": "status" | "log" | "diff" | "remotes" | "branches" | "config" | "show" | "add" | "commit" | "add_commit" | "branch" | "checkout" | "stash" | "stash_pop" | "reset" | "pull" | "push" | "sync" | "init" | "add_remote" | "remove_remote" | "delete_repo" | "undo" | "rebase_continue" | "rebase_skip" | "rebase_abort" | "merge_abort" | "cherry_pick_continue" | "cherry_pick_abort" | "revert_continue" | "revert_abort",
   "files": [],
   "feature_hint": "",
   "message": "",

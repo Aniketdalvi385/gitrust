@@ -158,6 +158,29 @@ pub enum ScopedWriteOp {
     DiscardLocal {
         remote: String,
     },
+    // -------------------------------------------------------------------------
+    // In-progress operation backout/continue steps (Phase 11 — S16/S18/S19).
+    // Field-less: they act on ambient repo state (rebase-merge/MERGE_HEAD/…).
+    // Situation-gated — each is only Allowed in its matching Mid* situation.
+    // Aborts/skips restore or drop pre-op state (git's ORIG_HEAD is the safety
+    // net); continues require a conflict-free index (enforced by the gate).
+    // -------------------------------------------------------------------------
+    /// `git merge --abort` — back out of a mid-merge, restoring pre-merge state.
+    MergeAbort,
+    /// `git rebase --continue` — proceed once conflicts are resolved and staged.
+    RebaseContinue,
+    /// `git rebase --skip` — drop the current conflicted commit and continue.
+    RebaseSkip,
+    /// `git rebase --abort` — back out, restoring the original HEAD.
+    RebaseAbort,
+    /// `git cherry-pick --continue` — proceed once conflicts are resolved.
+    CherryPickContinue,
+    /// `git cherry-pick --abort` — back out of a mid-cherry-pick.
+    CherryPickAbort,
+    /// `git revert --continue` — proceed once conflicts are resolved.
+    RevertContinue,
+    /// `git revert --abort` — back out of a mid-revert.
+    RevertAbort,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -265,6 +288,37 @@ pub enum PipelineStep {
         remote: String,
         branch: String,
     },
+    // -------------------------------------------------------------------------
+    // In-progress operation backout/continue steps (Phase 11 — S16/S18/S19).
+    // All shell out to system git (`git rebase --continue`, etc.) — the
+    // pragmatic v1 the blueprint blesses for gnarly ops. Field-less: they act
+    // on ambient repo state.
+    // -------------------------------------------------------------------------
+    MergeAbort,
+    RebaseContinue,
+    RebaseSkip,
+    RebaseAbort,
+    CherryPickContinue,
+    CherryPickAbort,
+    RevertContinue,
+    RevertAbort,
+    // -------------------------------------------------------------------------
+    // Divergence reconciliation (Phase 12 — S9/S10/S13). Composed internally by
+    // `agent::reconcile_flow`; NOT produced by the classifier. `fetch` runs
+    // inline before the ChoiceGate (so it is a `git_ops` method, not a step).
+    // -------------------------------------------------------------------------
+    /// `git merge <source>` via git2. On conflict-free success it lands the
+    /// merge commit (2 parents) via the merge-aware `commit()` using `message`;
+    /// on conflict it exits into `MidMerge` (Phase 11 owns the rest). `message`
+    /// is resolved at build time so the plan preview can show it.
+    Merge {
+        source: String,
+        message: String,
+    },
+    /// `git rebase <onto>` (shell-out). On conflict it exits into `MidRebase`.
+    Rebase {
+        onto: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -272,6 +326,34 @@ pub enum ResetMode {
     Soft,
     Mixed,
     Hard,
+}
+
+impl PipelineStep {
+    /// True for the abort/skip in-progress ops (Phase 11). These run WITH a
+    /// conflicted index, so they must NOT trigger snapshot capture — git2's
+    /// `index.write_tree()` errors on unmerged entries — and they bypass the
+    /// conflicts backstop. `Continue` is deliberately excluded: by the time it
+    /// runs its index is conflict-free (enforced by the situation gate), so it
+    /// snapshots and validates like any other write.
+    pub fn is_abort_or_skip_backout(&self) -> bool {
+        matches!(
+            self,
+            PipelineStep::MergeAbort
+                | PipelineStep::RebaseAbort
+                | PipelineStep::RebaseSkip
+                | PipelineStep::CherryPickAbort
+                | PipelineStep::RevertAbort
+        )
+    }
+}
+
+/// A pipeline consisting ENTIRELY of abort/skip backout steps. Such a pipeline
+/// skips snapshot capture (conflicted index) and is exempt from the conflicts
+/// backstop. Uses `all()` — NOT `any()` — so a mixed pipeline (a backout plus
+/// any other step, as Phase 12 will compose) keeps both safeties. The non-empty
+/// guard covers `all()`'s vacuous truth on an empty slice.
+pub fn pipeline_is_pure_backout(steps: &[PipelineStep]) -> bool {
+    !steps.is_empty() && steps.iter().all(PipelineStep::is_abort_or_skip_backout)
 }
 
 // =============================================================================
@@ -379,6 +461,22 @@ pub enum GateType {
         message: String,
         options: Vec<String>,
     },
+    /// Strategy choice with a one-sentence consequence per option (Phase 12 —
+    /// S9 rebase-vs-merge). Rendered like `Choose` but each row shows its
+    /// consequence. Unlike `Choose`, `AutoConfirmGate` REFUSES this gate (never
+    /// silently defaults a strategy — see confirm.rs).
+    ChoiceGate {
+        question: String,
+        options: Vec<ChoiceOption>,
+    },
+}
+
+/// One option in a `GateType::ChoiceGate`: a short `label` plus a plain-language
+/// `consequence` sentence shown alongside it so the user chooses with eyes open.
+#[derive(Debug, Clone)]
+pub struct ChoiceOption {
+    pub label: String,
+    pub consequence: String,
 }
 
 /// User's response to a gate.
@@ -433,4 +531,31 @@ pub enum PushFailureType {
     AuthFailure,
     /// Post-check couldn't confirm success.
     VerificationFailed,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Phase 11 quantifier guard: the snapshot-skip and conflicts-backstop
+    // exemption must use all()/non-empty, NOT any(). A mixed pipeline keeps both
+    // safeties on.
+    #[test]
+    fn pure_backout_requires_all_steps_backout() {
+        // A solitary abort/skip → pure backout.
+        assert!(pipeline_is_pure_backout(&[PipelineStep::RebaseAbort]));
+        assert!(pipeline_is_pure_backout(&[PipelineStep::MergeAbort]));
+        assert!(pipeline_is_pure_backout(&[PipelineStep::RebaseSkip]));
+        // Mixed pipeline (backout + anything else) → NOT pure; safeties stay on.
+        assert!(!pipeline_is_pure_backout(&[
+            PipelineStep::RebaseAbort,
+            PipelineStep::Status,
+        ]));
+        // Empty pipeline → not a backout (guards all()`s vacuous truth).
+        assert!(!pipeline_is_pure_backout(&[]));
+        // Continue is NOT a backout step — it snapshots and validates normally.
+        assert!(!pipeline_is_pure_backout(&[PipelineStep::RebaseContinue]));
+        // A plain non-backout step.
+        assert!(!pipeline_is_pure_backout(&[PipelineStep::Status]));
+    }
 }

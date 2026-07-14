@@ -79,6 +79,35 @@ impl ConfirmationGate for InquireGate {
                     None => Ok(GateResponse::Aborted),
                 }
             }
+
+            GateType::ChoiceGate { question, options } => {
+                if options.is_empty() {
+                    return Ok(GateResponse::Aborted);
+                }
+                // Show each option's one-sentence consequence (dimmed) so the
+                // choice is made with eyes open. The label→index mapping is by
+                // position, so the displayed row stays paired with its option.
+                let use_color = crate::danger::use_color();
+                let dim = |s: &str| -> String {
+                    if use_color {
+                        format!("\x1b[2m{}\x1b[0m", s)
+                    } else {
+                        s.to_string()
+                    }
+                };
+                let labels: Vec<String> = options
+                    .iter()
+                    .map(|o| format!("{} — {}", o.label, dim(&o.consequence)))
+                    .collect();
+                let selected = Select::new(question, labels.clone())
+                    .with_starting_cursor(0)
+                    .prompt()
+                    .context("Choice prompt failed")?;
+                match labels.iter().position(|l| l == &selected) {
+                    Some(idx) => Ok(GateResponse::Chose(idx)),
+                    None => Ok(GateResponse::Aborted),
+                }
+            }
         }
     }
 }
@@ -290,6 +319,15 @@ impl ConfirmationGate for AutoConfirmGate {
                     Ok(GateResponse::Chose(0))
                 }
             }
+            GateType::ChoiceGate { .. } => {
+                // --yes must NEVER silently pick a reconciliation strategy — an
+                // auto-chosen rebase-vs-merge could rewrite history the user
+                // meant to preserve. Refuse, mirroring TypeToConfirm.
+                Err(anyhow::anyhow!(
+                    "--yes flag cannot choose a reconciliation strategy (rebase vs merge). \
+                     Run interactively and pick a strategy manually."
+                ))
+            }
         }
     }
 }
@@ -304,6 +342,64 @@ pub struct MockGate {
 impl ConfirmationGate for MockGate {
     fn prompt(&self, _gate: &GateType) -> anyhow::Result<GateResponse> {
         Ok(self.response.clone())
+    }
+}
+
+/// Scripted gate for multi-gate flows (Phase 12 reconcile): answers a
+/// `ChoiceGate`/`Choose` with a fixed index, confirms `SimpleConfirm`, returns
+/// the initial text for `EditableText`, auto-selects related+uncertain files —
+/// and RECORDS whether a `ChoiceGate` was ever shown, so tests can assert the
+/// degenerate-count guards skip the gate (Amendment 2).
+#[cfg(test)]
+pub struct ScriptedGate {
+    pub choice: usize,
+    pub choice_shown: std::cell::Cell<bool>,
+}
+
+#[cfg(test)]
+impl ScriptedGate {
+    pub fn new(choice: usize) -> Self {
+        Self {
+            choice,
+            choice_shown: std::cell::Cell::new(false),
+        }
+    }
+}
+
+#[cfg(test)]
+impl ConfirmationGate for ScriptedGate {
+    fn prompt(&self, gate: &GateType) -> anyhow::Result<GateResponse> {
+        match gate {
+            GateType::None | GateType::SimpleConfirm { .. } => Ok(GateResponse::Confirmed),
+            GateType::TypeToConfirm { .. } => Ok(GateResponse::Confirmed),
+            GateType::EditableText { initial, .. } => {
+                Ok(GateResponse::TextProvided(initial.clone()))
+            }
+            GateType::FileMultiSelect { classification, .. } => {
+                let files: Vec<String> = classification
+                    .related
+                    .iter()
+                    .chain(classification.uncertain.iter())
+                    .map(|f| f.path.clone())
+                    .collect();
+                Ok(GateResponse::FilesSelected(files))
+            }
+            GateType::Choose { options, .. } => {
+                if options.is_empty() {
+                    Ok(GateResponse::Aborted)
+                } else {
+                    Ok(GateResponse::Chose(self.choice.min(options.len() - 1)))
+                }
+            }
+            GateType::ChoiceGate { options, .. } => {
+                self.choice_shown.set(true);
+                if options.is_empty() {
+                    Ok(GateResponse::Aborted)
+                } else {
+                    Ok(GateResponse::Chose(self.choice.min(options.len() - 1)))
+                }
+            }
+        }
     }
 }
 
@@ -379,6 +475,31 @@ mod tests {
             }
             _ => panic!("Expected TextProvided"),
         }
+    }
+
+    #[test]
+    fn test_auto_confirm_rejects_choice_gate() {
+        // --yes must NEVER silently pick a reconciliation strategy (Phase 12).
+        let gate = AutoConfirmGate;
+        let result = gate.prompt(&GateType::ChoiceGate {
+            question: "Rebase or merge?".to_string(),
+            options: vec![
+                crate::commands::ChoiceOption {
+                    label: "Rebase".to_string(),
+                    consequence: "linear".to_string(),
+                },
+                crate::commands::ChoiceOption {
+                    label: "Merge".to_string(),
+                    consequence: "merge commit".to_string(),
+                },
+            ],
+        });
+        assert!(result.is_err(), "--yes must refuse a ChoiceGate");
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("strategy") || msg.contains("reconciliation"),
+            "refusal should name the reason, got: {msg}"
+        );
     }
 
     #[test]

@@ -20,10 +20,20 @@ pub enum SituationVerdict {
     Allowed,
     /// The intent is invalid here. `message` names the situation AND the way out.
     Blocked { message: String },
-    /// Reserved for Phase 12 (e.g. Diverged → reconcile flow). Not produced by
-    /// any Phase 10 row.
-    #[allow(dead_code)]
-    Redirect { suggested_intent: IntentType },
+    /// The gate — not `agent.rs` — drives the way out. Phase 12 makes this the
+    /// single mechanism for both interactive rescues, subsuming the old
+    /// detached-HEAD special-case in `run_agent`.
+    Redirect(Redirect),
+}
+
+/// Which gate-driven rescue flow `run_agent` should run for a `Redirect`.
+pub enum Redirect {
+    /// Detached HEAD + a write intent → interactive branch-here / switch-back
+    /// (S20/S21). `handle_detached_head_rescue`.
+    DetachedHeadRescue,
+    /// Same-branch divergence + push/pull → fetch → rebase-vs-merge ChoiceGate →
+    /// push (S9). `reconcile_flow` in SameBranch mode.
+    ReconcileDiverged { ahead: u32, behind: u32 },
 }
 
 /// True for intents that mutate the repo (everything except read-only queries
@@ -75,6 +85,99 @@ fn is_reconcile(i: &IntentType) -> bool {
         ) | IntentType::FeaturePipeline(FeaturePipelineOp::Sync { .. })
     )
 }
+/// A plain same-branch pull (`pull` / `pull --rebase`). Distinct from `Sync`
+/// (cross-branch, resolves origin/HEAD) and `DiscardLocal` (deliberate reset).
+/// Under `Diverged` these route into the reconcile ChoiceGate (S9), not a plain
+/// pull that would produce an unasked-for merge/rebase.
+fn is_plain_pull(i: &IntentType) -> bool {
+    matches!(
+        i,
+        IntentType::ScopedWrite(ScopedWriteOp::Pull { .. } | ScopedWriteOp::PullRebase { .. })
+    )
+}
+
+// In-progress continue/skip/abort families (Phase 11). Each is valid ONLY in
+// its matching Mid* situation — see `gate_inprogress_op`.
+fn is_rebase_backout(i: &IntentType) -> bool {
+    matches!(
+        i,
+        IntentType::ScopedWrite(
+            ScopedWriteOp::RebaseContinue | ScopedWriteOp::RebaseSkip | ScopedWriteOp::RebaseAbort
+        )
+    )
+}
+fn is_merge_backout(i: &IntentType) -> bool {
+    matches!(i, IntentType::ScopedWrite(ScopedWriteOp::MergeAbort))
+}
+fn is_cherrypick_backout(i: &IntentType) -> bool {
+    matches!(
+        i,
+        IntentType::ScopedWrite(ScopedWriteOp::CherryPickContinue | ScopedWriteOp::CherryPickAbort)
+    )
+}
+fn is_revert_backout(i: &IntentType) -> bool {
+    matches!(
+        i,
+        IntentType::ScopedWrite(ScopedWriteOp::RevertContinue | ScopedWriteOp::RevertAbort)
+    )
+}
+/// Any in-progress continue/skip/abort op.
+fn is_inprogress_op(i: &IntentType) -> bool {
+    is_rebase_backout(i) || is_merge_backout(i) || is_cherrypick_backout(i) || is_revert_backout(i)
+}
+/// The continue variants — gated on a conflict-free index.
+fn is_continue(i: &IntentType) -> bool {
+    matches!(
+        i,
+        IntentType::ScopedWrite(
+            ScopedWriteOp::RebaseContinue
+                | ScopedWriteOp::CherryPickContinue
+                | ScopedWriteOp::RevertContinue
+        )
+    )
+}
+/// The git operation word for a continue/skip/abort intent, for messages.
+fn inprogress_op_word(i: &IntentType) -> &'static str {
+    if is_rebase_backout(i) {
+        "rebase"
+    } else if is_merge_backout(i) {
+        "merge"
+    } else if is_cherrypick_backout(i) {
+        "cherry-pick"
+    } else {
+        "revert"
+    }
+}
+
+/// Gate a continue/skip/abort op. Valid only in its matching Mid* state;
+/// continues additionally require a conflict-free index (the file list comes
+/// straight from the already-detected situation — no repo I/O here).
+fn gate_inprogress_op(situation: &RepoSituation, intent: &IntentType) -> SituationVerdict {
+    use RepoSituation as S;
+    let block = |m: String| SituationVerdict::Blocked { message: m };
+    let continue_ok = |conflicted: &[String]| -> SituationVerdict {
+        if is_continue(intent) && !conflicted.is_empty() {
+            block(crate::copy::continue_conflicts_block(conflicted))
+        } else {
+            SituationVerdict::Allowed
+        }
+    };
+    match situation {
+        S::MidRebase { conflicted, .. } if is_rebase_backout(intent) => continue_ok(conflicted),
+        S::MidMerge { .. } if is_merge_backout(intent) => SituationVerdict::Allowed,
+        S::MidCherryPick { conflicted } if is_cherrypick_backout(intent) => continue_ok(conflicted),
+        S::MidRevert { conflicted } if is_revert_backout(intent) => continue_ok(conflicted),
+        // A backout op that doesn't match the current in-progress state → name
+        // the state that IS in progress.
+        S::MidRebase { .. } => block(crate::copy::REBASE_IN_PROGRESS_BLOCK.to_string()),
+        S::MidMerge { .. } => block(crate::copy::MERGE_IN_PROGRESS_BLOCK.to_string()),
+        S::MidCherryPick { .. } => block(crate::copy::CHERRY_PICK_IN_PROGRESS_BLOCK.to_string()),
+        S::MidRevert { .. } => block(crate::copy::REVERT_IN_PROGRESS_BLOCK.to_string()),
+        S::MidBisect => block(crate::copy::BISECT_IN_PROGRESS_BLOCK.to_string()),
+        // No operation in progress at all (Normal, EmptyRepo, Diverged, …).
+        _ => block(crate::copy::no_inprogress_block(inprogress_op_word(intent))),
+    }
+}
 
 /// Decide whether `intent` is allowed in `situation` (§13 matrix). Pure — no
 /// repo, no I/O — so it is trivially deterministic and table-testable.
@@ -85,6 +188,14 @@ pub fn situation_gate(situation: &RepoSituation, intent: &IntentType) -> Situati
     if !is_write_intent(intent) {
         return SituationVerdict::Allowed;
     }
+
+    // Continue/skip/abort ops are valid ONLY in their matching Mid* state, so
+    // route them here regardless of the current situation. This is what makes
+    // the canonical fast-path phrases ("abort rebase", …) safe to whitelist.
+    if is_inprogress_op(intent) {
+        return gate_inprogress_op(situation, intent);
+    }
+
     let block = |m: String| SituationVerdict::Blocked { message: m };
 
     match situation {
@@ -108,7 +219,10 @@ pub fn situation_gate(situation: &RepoSituation, intent: &IntentType) -> Situati
                     SituationVerdict::Allowed
                 }
             } else {
-                block(crate::copy::DETACHED_HEAD_BLOCK.to_string())
+                // Any other write (commit/push/pull/reset/…): the gate drives the
+                // way out (branch-here / switch-back), not a dead-end block
+                // (Phase 12 — subsumes the old agent.rs special-case).
+                SituationVerdict::Redirect(Redirect::DetachedHeadRescue)
             }
         }
         // Merge-aware commit (Phase 9.2) is the way out of a resolved merge.
@@ -128,8 +242,14 @@ pub fn situation_gate(situation: &RepoSituation, intent: &IntentType) -> Situati
         // (the rebase-vs-merge ChoiceGate is Phase 12). Behind-only is NOT
         // Diverged → stays Normal → the BehindUpstream warn still fires.
         S::Diverged { ahead, behind } => {
-            if is_push_like(intent) {
-                block(crate::copy::diverged_block(*ahead, *behind))
+            if is_push_like(intent) || is_plain_pull(intent) {
+                // The flagship flow (S9/S10): fetch → rebase-vs-merge → push.
+                // DiscardLocal (deliberate reset), commit, add, Sync (cross-branch)
+                // stay Allowed and flow to their own handlers.
+                SituationVerdict::Redirect(Redirect::ReconcileDiverged {
+                    ahead: *ahead,
+                    behind: *behind,
+                })
             } else {
                 SituationVerdict::Allowed
             }
@@ -212,8 +332,13 @@ impl Validator for DefaultValidator {
         // so it only ever sees allowed intents (e.g. the resolved-merge commit,
         // which is conflict-free and passes).
 
-        // ConflictsPresent — block if merge conflicts exist
-        if has_conflicts(repo)? {
+        // ConflictsPresent — block if merge conflicts exist. EXEMPT a pipeline
+        // that is entirely abort/skip backout steps: those legitimately run WITH
+        // conflicts present (that's how you back out of a conflicted op). Uses
+        // `all()` via `pipeline_is_pure_backout` — a mixed pipeline keeps the
+        // backstop. `Continue` is not a backout step here, but its index is
+        // already conflict-free so `has_conflicts` is false anyway.
+        if has_conflicts(repo)? && !crate::commands::pipeline_is_pure_backout(steps) {
             results.push(PreCheckResult::Block(
                 "Merge conflicts detected. Resolve all conflicts before proceeding.".to_string(),
             ));
@@ -753,6 +878,20 @@ pub fn format_step_label(step: &PipelineStep) -> (&'static str, String) {
         PipelineStep::DiscardLocal { remote, branch } => {
             ("discard local", format!("take {}/{}", remote, branch))
         }
+        PipelineStep::Merge { source, message } => {
+            // Show the message so the auto-generated (un-gated) merge message is
+            // visible in the preview, not silent (Phase 12).
+            ("merge", format!("{} → \"{}\"", source, message))
+        }
+        PipelineStep::Rebase { onto } => ("rebase", format!("onto {}", onto)),
+        PipelineStep::MergeAbort => ("merge", "abort".to_string()),
+        PipelineStep::RebaseContinue => ("rebase", "continue".to_string()),
+        PipelineStep::RebaseSkip => ("rebase", "skip".to_string()),
+        PipelineStep::RebaseAbort => ("rebase", "abort".to_string()),
+        PipelineStep::CherryPickContinue => ("cherry-pick", "continue".to_string()),
+        PipelineStep::CherryPickAbort => ("cherry-pick", "abort".to_string()),
+        PipelineStep::RevertContinue => ("revert", "continue".to_string()),
+        PipelineStep::RevertAbort => ("revert", "abort".to_string()),
     }
 }
 
@@ -817,10 +956,12 @@ mod tests {
         repo
     }
 
-    // Detached-HEAD blocking now lives in the situation gate (subsumes the
-    // Phase 9 pre-check). A real detached repo → DetachedHead → commit blocked.
+    // Detached-HEAD write handling now lives in the situation gate as a
+    // Redirect to the branch-here / switch-back rescue (Phase 12 — subsumes the
+    // Phase 9/10 dead-end block). A real detached repo → DetachedHead → commit
+    // routes to DetachedHeadRescue.
     #[test]
-    fn test_detached_head_gate_blocks_commit() {
+    fn test_detached_head_gate_redirects_commit_to_rescue() {
         let dir = TempDir::new().unwrap();
         let repo = init_repo_with_commit(&dir);
         let head_oid = repo.head().unwrap().target().unwrap();
@@ -837,7 +978,7 @@ mod tests {
         });
         assert!(matches!(
             situation_gate(&situation, &intent),
-            SituationVerdict::Blocked { .. }
+            SituationVerdict::Redirect(Redirect::DetachedHeadRescue)
         ));
     }
 
@@ -1160,6 +1301,45 @@ mod tests {
         }
     }
 
+    // Phase 11 — driven by the REAL detected situation: abort is Allowed, and
+    // Continue-with-unresolved-conflicts is Blocked naming the files.
+    #[test]
+    fn test_mid_rebase_allows_abort_blocks_continue_with_files() {
+        let dir = TempDir::new().unwrap();
+        let repo = setup_conflicting_rebase(&dir);
+        let situation = crate::context::detect_situation(&repo);
+
+        assert!(
+            matches!(
+                situation_gate(
+                    &situation,
+                    &IntentType::ScopedWrite(ScopedWriteOp::RebaseAbort)
+                ),
+                SituationVerdict::Allowed
+            ),
+            "abort must be Allowed mid-rebase"
+        );
+
+        match situation_gate(
+            &situation,
+            &IntentType::ScopedWrite(ScopedWriteOp::RebaseContinue),
+        ) {
+            SituationVerdict::Blocked { message } => {
+                assert!(
+                    message.contains("f.txt"),
+                    "continue block must name the conflicted file: {}",
+                    message
+                );
+                assert!(
+                    message.contains("still conflicted"),
+                    "continue block must say still conflicted: {}",
+                    message
+                );
+            }
+            _ => panic!("continue with unresolved conflicts must be Blocked"),
+        }
+    }
+
     #[test]
     fn test_post_check_commit_verifies_merge_two_parents() {
         use crate::git_ops::{Git2Operations, GitOperations};
@@ -1341,6 +1521,15 @@ mod tests {
                 "sync" => IntentType::FeaturePipeline(FeaturePipelineOp::Sync {
                     strategy: SyncStrategy::Rebase,
                 }),
+                // Phase 11 — continue/skip/abort backout ops.
+                "rebase_continue" => IntentType::ScopedWrite(ScopedWriteOp::RebaseContinue),
+                "rebase_skip" => IntentType::ScopedWrite(ScopedWriteOp::RebaseSkip),
+                "rebase_abort" => IntentType::ScopedWrite(ScopedWriteOp::RebaseAbort),
+                "merge_abort" => IntentType::ScopedWrite(ScopedWriteOp::MergeAbort),
+                "cp_continue" => IntentType::ScopedWrite(ScopedWriteOp::CherryPickContinue),
+                "cp_abort" => IntentType::ScopedWrite(ScopedWriteOp::CherryPickAbort),
+                "revert_continue" => IntentType::ScopedWrite(ScopedWriteOp::RevertContinue),
+                "revert_abort" => IntentType::ScopedWrite(ScopedWriteOp::RevertAbort),
                 _ => unreachable!(),
             }
         };
@@ -1386,21 +1575,21 @@ mod tests {
                     stranded_commits: 0,
                 },
                 "commit",
-                Some("Checkout a branch"),
+                Some("@redirect"),
             ),
             (
                 RepoSituation::DetachedHead {
                     stranded_commits: 0,
                 },
                 "push",
-                Some("Checkout a branch"),
+                Some("@redirect"),
             ),
             (
                 RepoSituation::DetachedHead {
                     stranded_commits: 0,
                 },
                 "pull",
-                Some("Checkout a branch"),
+                Some("@redirect"),
             ),
             (
                 RepoSituation::DetachedHead {
@@ -1428,14 +1617,14 @@ mod tests {
                     stranded_commits: 2,
                 },
                 "commit",
-                Some("Checkout a branch"),
+                Some("@redirect"),
             ),
             (
                 RepoSituation::DetachedHead {
                     stranded_commits: 2,
                 },
                 "push",
-                Some("Checkout a branch"),
+                Some("@redirect"),
             ),
             (
                 RepoSituation::MidMerge {
@@ -1637,7 +1826,7 @@ mod tests {
                     behind: 1,
                 },
                 "pull",
-                None,
+                Some("@redirect"),
             ),
             (
                 RepoSituation::Diverged {
@@ -1645,7 +1834,25 @@ mod tests {
                     behind: 1,
                 },
                 "push",
-                Some("diverged"),
+                Some("@redirect"),
+            ),
+            // Diverged: deliberate destructive/other ops stay Allowed (they flow
+            // to their own handlers, not the reconcile ChoiceGate).
+            (
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1,
+                },
+                "discard",
+                None,
+            ),
+            (
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1,
+                },
+                "sync",
+                None,
             ),
             (
                 RepoSituation::RemoteRewritten {
@@ -1719,7 +1926,7 @@ mod tests {
                     behind: 1,
                 },
                 "force",
-                Some("diverged"),
+                Some("@redirect"),
             ),
             (
                 RepoSituation::Diverged {
@@ -1727,7 +1934,7 @@ mod tests {
                     behind: 1,
                 },
                 "acp",
-                Some("diverged"),
+                Some("@redirect"),
             ),
             (
                 RepoSituation::Diverged {
@@ -1735,7 +1942,7 @@ mod tests {
                     behind: 1,
                 },
                 "commitpush",
-                Some("diverged"),
+                Some("@redirect"),
             ),
             (
                 RepoSituation::RemoteRewritten {
@@ -1799,7 +2006,7 @@ mod tests {
                     behind: 1,
                 },
                 "pullrebase",
-                None,
+                Some("@redirect"),
             ),
             (
                 RepoSituation::Diverged {
@@ -1856,6 +2063,125 @@ mod tests {
                 "add",
                 None,
             ),
+            // -----------------------------------------------------------------
+            // Phase 11 — the Mid* rows flip from Blocked to Allowed for exactly
+            // the continue/skip/abort ops; Continue-with-conflicts stays Blocked
+            // and names the files.
+            // -----------------------------------------------------------------
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "rebase_abort",
+                None,
+            ),
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "rebase_skip",
+                None,
+            ),
+            // Continue while conflicts remain → Blocked, names the files.
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["a.txt".into(), "b.txt".into()],
+                },
+                "rebase_continue",
+                Some("still conflicted"),
+            ),
+            // Continue once resolved (clean index) → Allowed.
+            (
+                RepoSituation::MidRebase {
+                    current: 3,
+                    total: 3,
+                    conflicted: vec![],
+                },
+                "rebase_continue",
+                None,
+            ),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec!["f".into()],
+                    resolved: false,
+                },
+                "merge_abort",
+                None,
+            ),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec![],
+                    resolved: true,
+                },
+                "merge_abort",
+                None,
+            ),
+            (
+                RepoSituation::MidCherryPick { conflicted: vec![] },
+                "cp_continue",
+                None,
+            ),
+            (
+                RepoSituation::MidCherryPick {
+                    conflicted: vec!["f".into()],
+                },
+                "cp_continue",
+                Some("still conflicted"),
+            ),
+            (
+                RepoSituation::MidCherryPick {
+                    conflicted: vec!["f".into()],
+                },
+                "cp_abort",
+                None,
+            ),
+            (
+                RepoSituation::MidRevert { conflicted: vec![] },
+                "revert_continue",
+                None,
+            ),
+            (
+                RepoSituation::MidRevert {
+                    conflicted: vec!["f".into()],
+                },
+                "revert_continue",
+                Some("still conflicted"),
+            ),
+            (
+                RepoSituation::MidRevert { conflicted: vec![] },
+                "revert_abort",
+                None,
+            ),
+            // Negatives — a backout op outside its state is Blocked, naming the
+            // state that IS in progress (or "no <op> in progress").
+            (
+                RepoSituation::Normal,
+                "rebase_abort",
+                Some("no rebase in progress"),
+            ),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec!["f".into()],
+                    resolved: false,
+                },
+                "rebase_abort",
+                Some("merge is in progress"),
+            ),
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "merge_abort",
+                Some("rebase is in progress"),
+            ),
         ];
 
         for (situation, tag, expect) in &rows {
@@ -1865,6 +2191,13 @@ mod tests {
                 None => assert!(
                     matches!(verdict, SituationVerdict::Allowed),
                     "expected Allowed: {:?} + {}",
+                    situation,
+                    tag
+                ),
+                // Sentinel: the gate drives the way out via a Redirect (Phase 12).
+                Some("@redirect") => assert!(
+                    matches!(verdict, SituationVerdict::Redirect(_)),
+                    "expected Redirect: {:?} + {}",
                     situation,
                     tag
                 ),

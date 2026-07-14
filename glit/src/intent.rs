@@ -158,6 +158,33 @@ pub fn try_canonical(query: &str) -> Option<IntentType> {
         | "abandon local" => IntentType::ScopedWrite(ScopedWriteOp::DiscardLocal {
             remote: "origin".to_string(),
         }),
+        // In-progress operation continue/skip/abort (Phase 11). Operation-
+        // qualified phrases only — unambiguous, and safe to whitelist because
+        // the situation gate keeps them valid ONLY in their matching Mid* state.
+        "abort rebase" | "rebase abort" | "cancel rebase" => {
+            IntentType::ScopedWrite(ScopedWriteOp::RebaseAbort)
+        }
+        "continue rebase" | "rebase continue" => {
+            IntentType::ScopedWrite(ScopedWriteOp::RebaseContinue)
+        }
+        "skip rebase" | "rebase skip" | "skip this commit" => {
+            IntentType::ScopedWrite(ScopedWriteOp::RebaseSkip)
+        }
+        "abort merge" | "merge abort" | "cancel merge" => {
+            IntentType::ScopedWrite(ScopedWriteOp::MergeAbort)
+        }
+        "abort cherry-pick" | "abort cherrypick" | "cherry-pick abort" | "cancel cherry-pick" => {
+            IntentType::ScopedWrite(ScopedWriteOp::CherryPickAbort)
+        }
+        "continue cherry-pick" | "continue cherrypick" | "cherry-pick continue" => {
+            IntentType::ScopedWrite(ScopedWriteOp::CherryPickContinue)
+        }
+        "abort revert" | "revert abort" | "cancel revert" => {
+            IntentType::ScopedWrite(ScopedWriteOp::RevertAbort)
+        }
+        "continue revert" | "revert continue" => {
+            IntentType::ScopedWrite(ScopedWriteOp::RevertContinue)
+        }
         _ => return None,
     };
     Some(intent)
@@ -431,6 +458,15 @@ fn build_intent_type(ri: &RawIntent, query: &str) -> anyhow::Result<IntentType> 
                     },
                     url: ri.remote_url.clone(),
                 },
+                // In-progress operation continue/skip/abort (Phase 11).
+                "rebase_continue" => ScopedWriteOp::RebaseContinue,
+                "rebase_skip" => ScopedWriteOp::RebaseSkip,
+                "rebase_abort" => ScopedWriteOp::RebaseAbort,
+                "merge_abort" => ScopedWriteOp::MergeAbort,
+                "cherry_pick_continue" | "cherrypick_continue" => ScopedWriteOp::CherryPickContinue,
+                "cherry_pick_abort" | "cherrypick_abort" => ScopedWriteOp::CherryPickAbort,
+                "revert_continue" => ScopedWriteOp::RevertContinue,
+                "revert_abort" => ScopedWriteOp::RevertAbort,
                 _ => ScopedWriteOp::Add {
                     files: FileSelection::All,
                 },

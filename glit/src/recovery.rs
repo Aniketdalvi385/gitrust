@@ -17,6 +17,53 @@ pub struct PipelineSnapshot {
     pub pipeline_id: String,
 }
 
+/// What `glit --recover` should do, given the repo's CURRENT state versus the
+/// snapshot. Recovery must never fight git's own state machine (Phase 11): a
+/// blind HEAD/index restore is only correct when the repo is Clean and the
+/// snapshot was taken on a normal (attached) branch. Pure + table-testable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecoveryDecision {
+    /// A git operation is still in progress (`repo.state() != Clean`). Do NOT
+    /// reset refs underneath it — advise git's native `--abort`, which restores
+    /// pre-op state via git's own machinery.
+    AdviseGitAbort,
+    /// The snapshot was captured detached and the repo is now Clean with HEAD
+    /// moved — the interrupted op most likely COMPLETED. A blind restore would
+    /// soft-reset HEAD back to the mid-operation detached commit, manufacturing
+    /// a stranded detached HEAD out of a success. Warn before restoring.
+    WarnDetached,
+    /// Safe to perform the normal snapshot restore (attached branch, Clean repo).
+    Restore,
+}
+
+/// Decide how to recover, given the repo's current state, the snapshot, and the
+/// current HEAD oid. Pure — no I/O — so the crash-window logic is unit-testable.
+pub fn recovery_plan(
+    repo_state: git2::RepositoryState,
+    snapshot: &PipelineSnapshot,
+    current_head: Option<git2::Oid>,
+) -> RecoveryDecision {
+    // git's own state machine is mid-operation — never reset refs under it.
+    if repo_state != git2::RepositoryState::Clean {
+        return RecoveryDecision::AdviseGitAbort;
+    }
+    let snap_head = snapshot
+        .head_oid
+        .as_ref()
+        .and_then(|s| git2::Oid::from_str(s).ok());
+    // A snapshot taken mid-operation records a detached HEAD (`shorthand()` is
+    // "HEAD"); empty-repo captures have no branch at all.
+    let snap_was_detached =
+        matches!(snapshot.branch_name.as_deref(), Some("HEAD")) || snapshot.branch_name.is_none();
+    // Detached snapshot + now-Clean repo + HEAD moved ⇒ the op completed;
+    // restoring would strand a detached HEAD. (When HEAD hasn't moved, the
+    // restore is a harmless no-op on refs, so fall through to Restore.)
+    if snap_was_detached && current_head != snap_head {
+        return RecoveryDecision::WarnDetached;
+    }
+    RecoveryDecision::Restore
+}
+
 /// Trait for recovery management — enables swapping recovery strategy.
 pub trait RecoveryManager {
     fn capture_snapshot(&self, repo: &Repository) -> anyhow::Result<PipelineSnapshot>;
@@ -337,6 +384,71 @@ mod tests {
 
         mgr.delete_snapshot(&snap).unwrap();
         assert!(!path.exists(), "snapshot file should be deleted");
+    }
+
+    // Phase 11 — situation-aware recovery. `recovery_plan` must never fight
+    // git's own state machine.
+    fn snap(head: &str, branch: &str) -> PipelineSnapshot {
+        PipelineSnapshot {
+            head_oid: Some(head.to_string()),
+            index_oid: "b".repeat(40),
+            branch_name: Some(branch.to_string()),
+            captured_at: "t".to_string(),
+            pipeline_id: "id".to_string(),
+        }
+    }
+
+    #[test]
+    fn recovery_plan_advises_git_abort_when_mid_operation() {
+        let s = snap(&"a".repeat(40), "HEAD");
+        for state in [
+            git2::RepositoryState::Rebase,
+            git2::RepositoryState::Merge,
+            git2::RepositoryState::CherryPick,
+        ] {
+            assert_eq!(
+                recovery_plan(state, &s, None),
+                RecoveryDecision::AdviseGitAbort,
+                "non-Clean state {:?} must advise git-native abort",
+                state
+            );
+        }
+    }
+
+    #[test]
+    fn recovery_plan_warns_on_completed_detached_op() {
+        // The trap: snapshot captured detached (mid-rebase), repo now Clean, and
+        // HEAD moved on to the rebased tip. A blind restore would strand HEAD.
+        let s = snap(&"a".repeat(40), "HEAD");
+        let completed = git2::Oid::from_str(&"c".repeat(40)).unwrap();
+        assert_eq!(
+            recovery_plan(git2::RepositoryState::Clean, &s, Some(completed)),
+            RecoveryDecision::WarnDetached
+        );
+    }
+
+    #[test]
+    fn recovery_plan_restores_detached_when_head_unchanged() {
+        // Continue crashed mid-way: repo Clean-ish but HEAD == snapshot ⇒ the
+        // ref restore is a harmless no-op, so Restore (not a false warning).
+        let same = "a".repeat(40);
+        let same_oid = git2::Oid::from_str(&same).unwrap();
+        let s = snap(&same, "HEAD");
+        assert_eq!(
+            recovery_plan(git2::RepositoryState::Clean, &s, Some(same_oid)),
+            RecoveryDecision::Restore
+        );
+    }
+
+    #[test]
+    fn recovery_plan_restores_normal_commit_case() {
+        // Attached branch, Clean repo, HEAD moved by a Commit → normal restore.
+        let s = snap(&"a".repeat(40), "main");
+        let after_commit = git2::Oid::from_str(&"c".repeat(40)).unwrap();
+        assert_eq!(
+            recovery_plan(git2::RepositoryState::Clean, &s, Some(after_commit)),
+            RecoveryDecision::Restore
+        );
     }
 
     #[test]

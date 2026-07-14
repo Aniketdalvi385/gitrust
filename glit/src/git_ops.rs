@@ -129,11 +129,58 @@ pub trait GitOperations {
         remote: &str,
         branch: &str,
     ) -> anyhow::Result<()>;
+
+    // Divergence reconciliation (Phase 12 — S9/S13).
+    /// `git fetch [--prune] <remote>` — refresh remote-tracking refs before the
+    /// reconcile ChoiceGate. Run inline (not a pipeline step).
+    fn fetch(&self, repo: &Repository, remote: &str, prune: bool) -> anyhow::Result<()>;
+    /// git2 `merge <source>` (e.g. `origin/main`). On a clean 3-way merge it
+    /// lands the merge commit (2 parents) via the merge-aware `commit(message)`;
+    /// a fast-forward moves HEAD with no merge commit; on conflict it leaves the
+    /// repo in `MidMerge` and returns `Err` (Phase 11 owns continue/abort).
+    fn merge(&self, repo: &Repository, source: &str, message: &str) -> anyhow::Result<()>;
+    /// `git rebase <onto>` (shell-out). On conflict exits into `MidRebase`.
+    fn rebase(&self, repo: &Repository, onto: &str) -> anyhow::Result<()>;
+
+    // In-progress operation backout/continue steps (Phase 11 — S16/S18/S19).
+    // All shell out to system git (the blueprint's blessed convention for
+    // gnarly ops); git2's rebase API can replace them later behind this trait.
+    fn merge_abort(&self, repo: &Repository) -> anyhow::Result<()>;
+    fn rebase_continue(&self, repo: &Repository) -> anyhow::Result<()>;
+    fn rebase_skip(&self, repo: &Repository) -> anyhow::Result<()>;
+    fn rebase_abort(&self, repo: &Repository) -> anyhow::Result<()>;
+    fn cherry_pick_continue(&self, repo: &Repository) -> anyhow::Result<()>;
+    fn cherry_pick_abort(&self, repo: &Repository) -> anyhow::Result<()>;
+    fn revert_continue(&self, repo: &Repository) -> anyhow::Result<()>;
+    fn revert_abort(&self, repo: &Repository) -> anyhow::Result<()>;
 }
 
 /// Open a repository by discovering it from the given path.
 pub fn open_repo(path: &std::path::Path) -> anyhow::Result<Repository> {
     Repository::discover(path).context("Not a git repository. Run: git init")
+}
+
+/// Resolve a remote's default branch via `refs/remotes/<remote>/HEAD` (the
+/// symbolic ref `git remote set-head` maintains). Falls back to `main` then
+/// `master` if the symbolic ref is absent (S13 — cross-branch Sync target).
+pub fn default_branch(repo: &Repository, remote: &str) -> Option<String> {
+    let sym = format!("refs/remotes/{}/HEAD", remote);
+    if let Ok(reference) = repo.find_reference(&sym) {
+        if let Some(target) = reference.symbolic_target() {
+            // e.g. "refs/remotes/origin/main" → "main"
+            let prefix = format!("refs/remotes/{}/", remote);
+            if let Some(name) = target.strip_prefix(&prefix) {
+                return Some(name.to_string());
+            }
+        }
+    }
+    for fallback in ["main", "master"] {
+        let r = format!("refs/remotes/{}/{}", remote, fallback);
+        if repo.find_reference(&r).is_ok() {
+            return Some(fallback.to_string());
+        }
+    }
+    None
 }
 
 /// Run `git <args>` with the repository's workdir as cwd. Inherits stdio so
@@ -145,6 +192,27 @@ fn run_git_in_repo(repo: &Repository, args: &[&str]) -> anyhow::Result<()> {
     let status = std::process::Command::new("git")
         .args(args)
         .current_dir(workdir)
+        .status()
+        .with_context(|| format!("Failed to run: git {}", args.join(" ")))?;
+    if !status.success() {
+        anyhow::bail!("git {} exited with status {}", args.join(" "), status);
+    }
+    Ok(())
+}
+
+/// Like `run_git_in_repo` but forces a non-interactive editor. `--continue`
+/// ops (rebase/cherry-pick/revert) reuse the prepared commit message and would
+/// otherwise block on `$EDITOR` — this makes them accept it unattended (and
+/// keeps tests / non-TTY runs from hanging).
+fn run_git_noninteractive(repo: &Repository, args: &[&str]) -> anyhow::Result<()> {
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| anyhow::anyhow!("Repository has no workdir (bare repo?)"))?;
+    let status = std::process::Command::new("git")
+        .args(args)
+        .current_dir(workdir)
+        .env("GIT_EDITOR", "true")
+        .env("GIT_SEQUENCE_EDITOR", "true")
         .status()
         .with_context(|| format!("Failed to run: git {}", args.join(" ")))?;
     if !status.success() {
@@ -1123,6 +1191,114 @@ impl GitOperations for Git2Operations {
         run_git_in_repo(repo, &["reset", "--hard", &target])
     }
 
+    // Divergence reconciliation (Phase 12 — S9/S13).
+    fn fetch(&self, repo: &Repository, remote: &str, prune: bool) -> anyhow::Result<()> {
+        let args: &[&str] = if prune {
+            &["fetch", "--prune"]
+        } else {
+            &["fetch"]
+        };
+        let mut full = args.to_vec();
+        full.push(remote);
+        let output = run_git_capture(repo, &full)?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+        let class = classify_git_stderr(&format!("{}\n{}", stdout, stderr));
+        Err(anyhow::Error::new(ClassifiedFailure {
+            class,
+            raw_stderr: stderr,
+        }))
+    }
+
+    fn merge(&self, repo: &Repository, source: &str, message: &str) -> anyhow::Result<()> {
+        // Resolve the merge source (e.g. "origin/main") to an annotated commit.
+        let (obj, _r) = repo
+            .revparse_ext(source)
+            .with_context(|| format!("Could not resolve merge source '{}'", source))?;
+        let oid = obj.id();
+        let annotated = repo
+            .find_annotated_commit(oid)
+            .with_context(|| format!("'{}' does not point to a commit", source))?;
+
+        let (analysis, _pref) = repo
+            .merge_analysis(&[&annotated])
+            .context("Failed to analyze merge")?;
+
+        if analysis.is_up_to_date() {
+            return Ok(()); // nothing to integrate
+        }
+
+        // Fast-forward: move the current branch ref forward, no merge commit
+        // (used by the ahead==0 reconcile guard). Safe checkout — the reconcile
+        // precondition is a clean tree, so this never clobbers uncommitted work.
+        if analysis.is_fast_forward() {
+            let head = repo.head().context("HEAD unavailable for fast-forward")?;
+            let refname = head
+                .name()
+                .ok_or_else(|| anyhow::anyhow!("HEAD has no ref name"))?
+                .to_string();
+            let mut reference = repo.find_reference(&refname)?;
+            reference.set_target(oid, "reconcile: fast-forward")?;
+            repo.set_head(&refname)?;
+            // Force is safe here: the reconcile precondition is a clean tree
+            // (the user committed before diverging), so there is no uncommitted
+            // work to clobber, and the working tree must actually advance to the
+            // target — a SAFE checkout can no-op when the index still reflects
+            // the old tree.
+            repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+                .context("Fast-forward checkout failed")?;
+            return Ok(());
+        }
+
+        // Normal 3-way merge. On conflict this writes conflict markers, sets
+        // MERGE_HEAD, and leaves RepositoryState::Merge — we surface that as an
+        // Err so the pipeline pauses into the Phase 11 verbs (MidMerge).
+        repo.merge(&[&annotated], None, None)
+            .context("Merge failed")?;
+        let index = repo.index().context("Failed to read index after merge")?;
+        if index.has_conflicts() {
+            anyhow::bail!("merge left conflicts to resolve");
+        }
+        // Clean merge — land the merge commit (2 parents) via the merge-aware
+        // commit(), which also clears MERGE_HEAD/MERGE_MSG (S17).
+        self.commit(repo, message).map(|_| ())
+    }
+
+    fn rebase(&self, repo: &Repository, onto: &str) -> anyhow::Result<()> {
+        run_git_in_repo(repo, &["rebase", onto])
+    }
+
+    // In-progress backout/continue steps (Phase 11). Continues run
+    // non-interactively (reuse the prepared message); aborts/skips don't need
+    // an editor. Inherited stdio surfaces git's own conflict output to the user.
+    fn merge_abort(&self, repo: &Repository) -> anyhow::Result<()> {
+        run_git_in_repo(repo, &["merge", "--abort"])
+    }
+    fn rebase_continue(&self, repo: &Repository) -> anyhow::Result<()> {
+        run_git_noninteractive(repo, &["rebase", "--continue"])
+    }
+    fn rebase_skip(&self, repo: &Repository) -> anyhow::Result<()> {
+        run_git_in_repo(repo, &["rebase", "--skip"])
+    }
+    fn rebase_abort(&self, repo: &Repository) -> anyhow::Result<()> {
+        run_git_in_repo(repo, &["rebase", "--abort"])
+    }
+    fn cherry_pick_continue(&self, repo: &Repository) -> anyhow::Result<()> {
+        run_git_noninteractive(repo, &["cherry-pick", "--continue"])
+    }
+    fn cherry_pick_abort(&self, repo: &Repository) -> anyhow::Result<()> {
+        run_git_in_repo(repo, &["cherry-pick", "--abort"])
+    }
+    fn revert_continue(&self, repo: &Repository) -> anyhow::Result<()> {
+        run_git_noninteractive(repo, &["revert", "--continue"])
+    }
+    fn revert_abort(&self, repo: &Repository) -> anyhow::Result<()> {
+        run_git_in_repo(repo, &["revert", "--abort"])
+    }
+
     fn get_status_summary(&self, repo: &Repository) -> anyhow::Result<StatusSummary> {
         crate::context::build_context(repo).map(|ctx| ctx.status)
     }
@@ -1285,6 +1461,16 @@ pub fn execute_step(
         PipelineStep::DiscardLocal { remote, branch } => {
             ops.discard_local_to_remote(repo, remote, branch)
         }
+        PipelineStep::Merge { source, message } => ops.merge(repo, source, message),
+        PipelineStep::Rebase { onto } => ops.rebase(repo, onto),
+        PipelineStep::MergeAbort => ops.merge_abort(repo),
+        PipelineStep::RebaseContinue => ops.rebase_continue(repo),
+        PipelineStep::RebaseSkip => ops.rebase_skip(repo),
+        PipelineStep::RebaseAbort => ops.rebase_abort(repo),
+        PipelineStep::CherryPickContinue => ops.cherry_pick_continue(repo),
+        PipelineStep::CherryPickAbort => ops.cherry_pick_abort(repo),
+        PipelineStep::RevertContinue => ops.revert_continue(repo),
+        PipelineStep::RevertAbort => ops.revert_abort(repo),
     }
 }
 
@@ -2039,5 +2225,139 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
             classified.class,
             classified.raw_stderr
         );
+    }
+}
+
+// =============================================================================
+// Phase 11 — in-progress backout/continue outcome tests (real git in tempdir).
+// =============================================================================
+#[cfg(test)]
+mod phase11_ops_tests {
+    use super::{Git2Operations, GitOperations};
+    use git2::Repository;
+    use std::path::Path;
+    use tempfile::TempDir;
+
+    fn git(path: &Path, args: &[&str]) -> std::process::Output {
+        std::process::Command::new("git")
+            .args(args)
+            .current_dir(path)
+            .output()
+            .expect("failed to spawn git")
+    }
+    fn git_ok(path: &Path, args: &[&str]) {
+        let o = git(path, args);
+        assert!(
+            o.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&o.stderr)
+        );
+    }
+
+    /// A repo mid-rebase, stopped on a conflict in f.txt. Returns the opened repo
+    /// and the pre-rebase branch tip (what an abort must restore HEAD to).
+    fn setup_conflicting_rebase(path: &Path) -> (Repository, git2::Oid) {
+        git_ok(path, &["init", "-q", "-b", "main", "."]);
+        git_ok(path, &["config", "user.email", "t@t.co"]);
+        git_ok(path, &["config", "user.name", "T"]);
+        std::fs::write(path.join("f.txt"), "base\n").unwrap();
+        git_ok(path, &["add", "f.txt"]);
+        git_ok(path, &["commit", "-qm", "base"]);
+        git_ok(path, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(path.join("f.txt"), "feature\n").unwrap();
+        git_ok(path, &["commit", "-qam", "feature"]);
+        git_ok(path, &["checkout", "-q", "main"]);
+        std::fs::write(path.join("f.txt"), "main\n").unwrap();
+        git_ok(path, &["commit", "-qam", "main"]);
+        let repo = Repository::open(path).unwrap();
+        let orig = repo.head().unwrap().target().unwrap();
+        let o = git(path, &["rebase", "feature"]);
+        assert!(!o.status.success(), "rebase should have conflicted");
+        (Repository::open(path).unwrap(), orig)
+    }
+
+    /// A repo mid-merge, stopped on a conflict in f.txt. Returns the opened repo
+    /// and the pre-merge branch tip.
+    fn setup_conflicting_merge(path: &Path) -> (Repository, git2::Oid) {
+        git_ok(path, &["init", "-q", "-b", "main", "."]);
+        git_ok(path, &["config", "user.email", "t@t.co"]);
+        git_ok(path, &["config", "user.name", "T"]);
+        std::fs::write(path.join("f.txt"), "base\n").unwrap();
+        git_ok(path, &["add", "f.txt"]);
+        git_ok(path, &["commit", "-qm", "base"]);
+        git_ok(path, &["checkout", "-q", "-b", "feature"]);
+        std::fs::write(path.join("f.txt"), "feature\n").unwrap();
+        git_ok(path, &["commit", "-qam", "feature"]);
+        git_ok(path, &["checkout", "-q", "main"]);
+        std::fs::write(path.join("f.txt"), "main\n").unwrap();
+        git_ok(path, &["commit", "-qam", "main"]);
+        let repo = Repository::open(path).unwrap();
+        let orig = repo.head().unwrap().target().unwrap();
+        let o = git(path, &["merge", "feature"]);
+        assert!(!o.status.success(), "merge should have conflicted");
+        (Repository::open(path).unwrap(), orig)
+    }
+
+    #[test]
+    fn rebase_abort_restores_original_head() {
+        let dir = TempDir::new().unwrap();
+        let (repo, orig) = setup_conflicting_rebase(dir.path());
+        assert_ne!(
+            repo.state(),
+            git2::RepositoryState::Clean,
+            "should be mid-rebase"
+        );
+        Git2Operations.rebase_abort(&repo).unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
+        assert_eq!(
+            repo.head().unwrap().target().unwrap(),
+            orig,
+            "abort must restore the pre-rebase HEAD oid"
+        );
+    }
+
+    #[test]
+    fn rebase_continue_completes_after_resolution() {
+        let dir = TempDir::new().unwrap();
+        let (repo, _orig) = setup_conflicting_rebase(dir.path());
+        // Resolve + stage the conflict, then continue.
+        std::fs::write(dir.path().join("f.txt"), "resolved\n").unwrap();
+        git_ok(dir.path(), &["add", "f.txt"]);
+        Git2Operations.rebase_continue(&repo).unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        assert_eq!(
+            repo.state(),
+            git2::RepositoryState::Clean,
+            "rebase should be complete"
+        );
+        assert!(
+            !repo.head_detached().unwrap(),
+            "should land back on a branch"
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("f.txt")).unwrap(),
+            "resolved\n"
+        );
+    }
+
+    #[test]
+    fn merge_abort_restores_original_head() {
+        let dir = TempDir::new().unwrap();
+        let (repo, orig) = setup_conflicting_merge(dir.path());
+        assert_eq!(
+            repo.state(),
+            git2::RepositoryState::Merge,
+            "should be mid-merge"
+        );
+        Git2Operations.merge_abort(&repo).unwrap();
+        let repo = Repository::open(dir.path()).unwrap();
+        assert_eq!(repo.state(), git2::RepositoryState::Clean);
+        assert!(
+            repo.find_reference("MERGE_HEAD").is_err(),
+            "MERGE_HEAD must be gone"
+        );
+        assert_eq!(repo.head().unwrap().target().unwrap(), orig);
     }
 }

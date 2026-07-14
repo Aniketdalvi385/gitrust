@@ -137,6 +137,19 @@ pub fn intent_danger(op: &ScopedWriteOp, ctx: &RepoContext) -> DangerLevel {
                 DangerLevel::Irreversible
             }
         }
+
+        // In-progress backout/continue ops (Phase 11). Aborts/skips are the
+        // low-danger exit — they restore or drop pre-op state and git's
+        // ORIG_HEAD is the safety net. Continues advance an op the user already
+        // started; still reflog-recoverable → Caution.
+        W::MergeAbort
+        | W::RebaseAbort
+        | W::RebaseSkip
+        | W::CherryPickAbort
+        | W::RevertAbort
+        | W::RebaseContinue
+        | W::CherryPickContinue
+        | W::RevertContinue => DangerLevel::Caution,
     }
 }
 
@@ -190,6 +203,10 @@ pub fn step_danger(step: &PipelineStep, ctx: &RepoContext) -> DangerLevel {
             }
         }
 
+        // Divergence reconciliation (Phase 12). Both integrate remote history;
+        // conflict-capable but reflog/ORIG_HEAD-recoverable → Caution.
+        P::Merge { .. } | P::Rebase { .. } => DangerLevel::Caution,
+
         // Local damage, reflog-recoverable
         P::DiscardLocal { .. } | P::RemoveRemote { .. } => DangerLevel::Destructive,
 
@@ -201,6 +218,18 @@ pub fn step_danger(step: &PipelineStep, ctx: &RepoContext) -> DangerLevel {
                 DangerLevel::Destructive
             }
         }
+
+        // In-progress backout/continue ops (Phase 11) — all Caution; aborts are
+        // the low-danger exit and (via format_step_label ordering + copy) are
+        // named first as the anxious user's way out.
+        P::MergeAbort
+        | P::RebaseAbort
+        | P::RebaseSkip
+        | P::CherryPickAbort
+        | P::RevertAbort
+        | P::RebaseContinue
+        | P::CherryPickContinue
+        | P::RevertContinue => DangerLevel::Caution,
     }
 }
 
@@ -334,6 +363,28 @@ mod tests {
         // Sanity: add staging step is Caution, not Safe
         let step = PipelineStep::Add { files: vec![] };
         assert_eq!(step_danger(&step, &ctx_clean("x")), DangerLevel::Caution);
+    }
+
+    #[test]
+    fn aborts_are_low_danger() {
+        // Phase 11: aborts/skips restore or drop pre-op state — the anxious
+        // user's exit. They must never grade above Caution.
+        for step in [
+            PipelineStep::MergeAbort,
+            PipelineStep::RebaseAbort,
+            PipelineStep::RebaseSkip,
+            PipelineStep::CherryPickAbort,
+            PipelineStep::RevertAbort,
+        ] {
+            let level = step_danger(&step, &ctx_clean("main"));
+            assert_eq!(
+                level,
+                DangerLevel::Caution,
+                "{:?} must be low danger (Caution), got {:?}",
+                step,
+                level
+            );
+        }
     }
 
     #[test]
