@@ -100,9 +100,51 @@ pub fn try_canonical(query: &str) -> Option<IntentType> {
         "show" | "show head" | "last commit" | "commit details" | "last commit details" => {
             IntentType::ReadOnly(ReadOnlyOp::Show { target: None })
         }
-        "undo" | "undo last commit" | "undo commit" | "unstage commit" => {
-            IntentType::ScopedWrite(ScopedWriteOp::Undo)
+        // All undo-language classifies to the ambiguous UndoIntent (P6). The
+        // deterministic ChoiceGate — never the classifier — picks the semantic.
+        // No arm here emits `ScopedWriteOp::Undo` directly.
+        "undo" | "undo last commit" | "undo commit" | "take back" | "take it back"
+        | "that was wrong" | "undo that" => IntentType::ScopedWrite(ScopedWriteOp::UndoIntent),
+        // Repair vocabulary (Phase 13 — S32/S38/S39). oid/paths resolve at build.
+        "revert" | "revert last commit" | "revert that" | "revert commit" => {
+            IntentType::ScopedWrite(ScopedWriteOp::Revert { oid: String::new() })
         }
+        "unstage" | "unstage all" | "unstage everything" | "unstage commit" => {
+            IntentType::ScopedWrite(ScopedWriteOp::Unstage { paths: vec![] })
+        }
+        "amend" | "amend commit" | "amend last commit" => {
+            IntentType::ScopedWrite(ScopedWriteOp::Amend {
+                message: None,
+                include_staged: true,
+            })
+        }
+        // Forensic recovery (Phase 14 — S24/26/27). Distinct from `glit --recover`
+        // (the snapshot path): this hunts reflogs + dangling objects for lost
+        // commits and restores to a rescue branch.
+        "find my lost work"
+        | "find lost work"
+        | "i lost a commit"
+        | "i lost my work"
+        | "lost commit"
+        | "lost commits"
+        | "recover lost work"
+        | "recover lost commit"
+        | "find lost commits" => IntentType::ScopedWrite(ScopedWriteOp::ForensicRecover),
+        // Destructive-phrase routing (Phase 14 — S62). Deterministic table (NOT
+        // the LLM) maps innocent-sounding cleanup language to the ambiguous
+        // CleanupIntent; a ChoiceGate then spells out what would be deleted. No
+        // arm emits a concrete Clean/Reset::Hard — the gate decides.
+        "clean up"
+        | "clean up my repo"
+        | "clean up repo"
+        | "start fresh"
+        | "get rid of my changes"
+        | "get rid of these changes"
+        | "throw away my changes"
+        | "throw away changes"
+        | "discard everything"
+        | "discard all my changes"
+        | "nuke my changes" => IntentType::ScopedWrite(ScopedWriteOp::CleanupIntent),
         // Remote-sync queries — fetch first so ahead/behind is actually fresh.
         "fetch"
         | "check remote"
@@ -402,7 +444,47 @@ fn build_intent_type(ri: &RawIntent, query: &str) -> anyhow::Result<IntentType> 
                 },
                 "init" => ScopedWriteOp::Init,
                 "delete_repo" => ScopedWriteOp::DeleteRepo,
-                "undo" => ScopedWriteOp::Undo,
+                // P6: undo-language is ambiguous → UndoIntent, never a concrete
+                // undo semantic. The ChoiceGate decides.
+                "undo" => ScopedWriteOp::UndoIntent,
+                // Phase 14: forensic recovery (find/restore lost commits) and the
+                // ambiguous destructive-cleanup intent (S62 — the ChoiceGate, not
+                // the LLM, picks what to delete). Neither emits a concrete
+                // destructive step here.
+                "find_lost_work" | "forensic_recover" | "recover_lost" => {
+                    ScopedWriteOp::ForensicRecover
+                }
+                "cleanup" | "clean_up" | "start_fresh" | "discard_changes" => {
+                    ScopedWriteOp::CleanupIntent
+                }
+                "amend" => ScopedWriteOp::Amend {
+                    message: if ri.message.is_empty() {
+                        None
+                    } else {
+                        Some(ri.message.clone())
+                    },
+                    include_staged: true,
+                },
+                "revert" => ScopedWriteOp::Revert {
+                    // Empty = HEAD (resolved at build time). A specific target in
+                    // feature_hint resolves there too.
+                    oid: ri.feature_hint.clone(),
+                },
+                "unstage" => ScopedWriteOp::Unstage {
+                    paths: ri.files.clone(),
+                },
+                "set_upstream" => ScopedWriteOp::SetUpstream {
+                    remote: if ri.remote_name.is_empty() {
+                        "origin".to_string()
+                    } else {
+                        ri.remote_name.clone()
+                    },
+                    // Empty = current branch (resolved at build time).
+                    branch: ri.feature_hint.clone(),
+                },
+                "squash" => ScopedWriteOp::SquashLastN {
+                    n: ri.count.unwrap_or(2) as u32,
+                },
                 "pull_rebase" | "rebase" => ScopedWriteOp::PullRebase {
                     remote: if ri.remote_name.is_empty() {
                         "origin".to_string()
@@ -692,6 +774,7 @@ fn classifier_schema() -> serde_json::Value {
                     "fetch", "merge_preview",
                     "pull_rebase", "rebase", "force_push", "force_push_with_lease",
                     "discard_local", "reset_to_remote",
+                    "amend", "revert", "unstage", "set_upstream", "squash",
                     ""
                 ]
             },

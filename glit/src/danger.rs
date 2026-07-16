@@ -150,6 +150,27 @@ pub fn intent_danger(op: &ScopedWriteOp, ctx: &RepoContext) -> DangerLevel {
         | W::RebaseContinue
         | W::CherryPickContinue
         | W::RevertContinue => DangerLevel::Caution,
+
+        // Repair vocabulary (Phase 13). Amend/Squash rewrite HEAD — reflog-
+        // recoverable locally → Caution. The Hard-adjacent escalation for a
+        // PUSHED commit (force-push required) is enforced by the build-path
+        // `PushedCommitRewrite` TypeToConfirm gate, not by this marker (pushed-
+        // ness isn't in `RepoContext`). Revert is history-preserving and team-
+        // safe — the steered-toward default. Unstage is index-only (contents
+        // safe). SetUpstream is config-only.
+        W::UndoIntent
+        | W::Amend { .. }
+        | W::SquashLastN { .. }
+        | W::Revert { .. }
+        | W::Unstage { .. }
+        | W::SetUpstream { .. } => DangerLevel::Caution,
+
+        // Forensic recovery only creates a rescue ref → Caution. The cleanup
+        // intent is ambiguous until the gate resolves it; the resolved step
+        // (Clean/Reset::Hard) carries the real danger, so the intent itself is
+        // graded conservatively as Destructive to colour its preview honestly.
+        W::ForensicRecover => DangerLevel::Caution,
+        W::CleanupIntent => DangerLevel::Destructive,
     }
 }
 
@@ -219,6 +240,13 @@ pub fn step_danger(step: &PipelineStep, ctx: &RepoContext) -> DangerLevel {
             }
         }
 
+        // Clean deletes UNTRACKED files (Phase 14 / S62). Graded ABOVE hard reset:
+        // a hard reset's discarded commits are reflog-recoverable (~90 days), but
+        // untracked files have NO reflog and NO object-db copy — only GLit's
+        // trash-net stands between them and permanent loss. Irreversible from
+        // git's point of view.
+        P::Clean { .. } => DangerLevel::Irreversible,
+
         // In-progress backout/continue ops (Phase 11) — all Caution; aborts are
         // the low-danger exit and (via format_step_label ordering + copy) are
         // named first as the anxious user's way out.
@@ -230,6 +258,15 @@ pub fn step_danger(step: &PipelineStep, ctx: &RepoContext) -> DangerLevel {
         | P::RebaseContinue
         | P::CherryPickContinue
         | P::RevertContinue => DangerLevel::Caution,
+
+        // Repair vocabulary (Phase 13) — reflog-recoverable / index-only /
+        // config-only, all Caution. The pushed-commit-rewrite escalation is the
+        // build-path TypeToConfirm gate, not this marker.
+        P::Amend { .. }
+        | P::Revert { .. }
+        | P::Unstage { .. }
+        | P::SetUpstream { .. }
+        | P::SquashLastN { .. } => DangerLevel::Caution,
     }
 }
 
@@ -385,6 +422,26 @@ mod tests {
                 level
             );
         }
+    }
+
+    #[test]
+    fn clean_grades_above_hard_reset() {
+        // S62: untracked deletion (Clean) outranks hard reset — hard reset has a
+        // reflog, untracked files have only the trash-net.
+        let clean = step_danger(&PipelineStep::Clean { trash_net: true }, &ctx_clean("main"));
+        let hard = step_danger(
+            &PipelineStep::Reset {
+                mode: ResetMode::Hard,
+            },
+            &ctx_clean("main"),
+        );
+        assert_eq!(clean, DangerLevel::Irreversible);
+        assert_eq!(hard, DangerLevel::Destructive);
+        // Ordering is by enum discriminant (Safe < Caution < Destructive < Irreversible).
+        assert!(
+            clean as u8 > hard as u8,
+            "Clean must grade strictly above Reset::Hard"
+        );
     }
 
     #[test]

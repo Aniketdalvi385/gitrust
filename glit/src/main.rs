@@ -17,6 +17,7 @@ mod prompts;
 mod recovery;
 mod resolver;
 mod setup;
+mod trash;
 mod validation;
 
 use anyhow::Context;

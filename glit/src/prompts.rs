@@ -39,8 +39,11 @@ Common mistakes to AVOID (negative examples — these are WRONG mappings):
   WRONG: "commit the readme" → scoped_write + commit (with empty files)
   RIGHT: "commit the readme" → scoped_write + add_commit with files=["README.md"]. (Named a file = needs staging.)
 
-  WRONG: "undo" → scoped_write + reset
-  RIGHT: "undo" → scoped_write + undo. (Different op; undo is soft-reset to HEAD~1.)
+  WRONG: "undo" → scoped_write + reset  (never pick a reset MODE for undo-language)
+  WRONG: "undo my commit" → scoped_write + revert / amend / discard
+  RIGHT: "undo" → scoped_write + undo. (Your job ENDS at recognizing "undo". A deterministic
+         gate — not you — decides keep-staged / keep-in-files / revert / discard. NEVER pick the
+         semantic yourself; that is the one place a wrong guess destroys the user's work.)
 
   WRONG: "last commit details" → read_only + log
   RIGHT: "last commit details" → read_only + show. (One commit's metadata, not history.)
@@ -90,12 +93,19 @@ IMPORTANT: "switch to branch X", "switch to X", "checkout X", "go to branch X", 
 IMPORTANT: "create branch X", "make a new branch X", "new branch X", "branch off X" → use intent "scoped_write" with op "branch" and put the branch name in "feature_hint". NEVER use op "branch" with an empty feature_hint — without a name, the user wants to LIST branches, not create one.
 IMPORTANT: "branch", "branches", "list branches", "show branches", "what branches exist", "current branch", "what branch am i on", "which branch", "current branch details" → use intent "read_only" with op "branches". This lists all branches and marks the current one with *.
 IMPORTANT: "show", "show HEAD", "show commit", "last commit", "last commit details", "commit details", "show <sha>" → use intent "read_only" with op "show". This shows author, date, message, and per-file +/- stats for a single commit. If a sha or ref is named, put it in "feature_hint". Otherwise leave feature_hint empty to default to HEAD. This is DIFFERENT from "log" which lists many commits — "show" is one commit's details.
-IMPORTANT: "undo", "undo last commit", "undo commit", "unstage commit", "uncommit" → use intent "scoped_write" with op "undo". This soft-resets HEAD to its parent — files stay staged, commit is removed. Safe and reversible. NEVER classify "undo" as "reset" — they are different operations.
+IMPORTANT: "undo", "undo last commit", "undo commit", "uncommit", "take back", "take it back", "that commit was wrong", "undo that" → use intent "scoped_write" with op "undo". Your job ENDS at recognizing undo-language. Do NOT pick a semantic: a deterministic gate asks the user what to keep (staged / in files / an inverse commit / discard). NEVER classify undo-language as "reset", "revert", "amend", or "discard_local" — those let YOU choose destruction, which is exactly what op "undo" exists to prevent.
+IMPORTANT: "amend", "amend commit", "amend last commit", "fix my commit message", "change the last commit message", "add a forgotten file to the last commit" → use intent "scoped_write" with op "amend". Put a new message in "message" if the user gave one. This rewrites HEAD; GLit handles the pushed-commit / force-push escalation.
+IMPORTANT: "revert", "revert that commit", "revert last commit", "revert <sha>", "make an inverse commit" → use intent "scoped_write" with op "revert". This adds a NEW commit that undoes an earlier one (history-preserving, team-safe). Put a specific sha/ref in "feature_hint"; leave empty for HEAD.
+IMPORTANT: "unstage", "unstage all", "unstage <file>", "remove from staging", "take X out of staging" → use intent "scoped_write" with op "unstage". Put named files in "files"; leave empty to unstage everything. This is restore-staged — file contents are NOT changed. NEVER classify as "reset".
+IMPORTANT: "squash", "squash last N", "squash my last 3 commits", "combine my last N commits", "squash the last N into one" → use intent "scoped_write" with op "squash". Put N in "count". This combines the last N commits into one (soft reset + commit), preserving the working tree.
+IMPORTANT: "set upstream", "track origin/X", "set the upstream branch", "make this branch track X" → use intent "scoped_write" with op "set_upstream". Put the remote in "remote_name" (default origin) and the branch in "feature_hint" (empty = current branch).
 IMPORTANT: "fetch", "check remote", "check upstream", "am i up to date", "is my branch up to date", "is my local branch up to date", "am i behind", "any new commits on remote", "sync check", "check if up to date" → use intent "read_only" with op "fetch". This runs `git fetch` then shows fresh ahead/behind status. USE THIS (not "status") whenever the user asks about REMOTE sync state — plain `status` shows STALE remote info based on the last fetch.
 IMPORTANT: "will pull conflict", "will pulling conflict", "any merge conflicts", "predict conflicts", "merge preview", "safe to pull", "will my changes conflict", "does pulling cause conflicts", "check conflicts before pulling", "is it safe to pull", "will i have conflicts" → use intent "read_only" with op "merge_preview". This fetches and simulates a 3-way merge in memory to predict conflicts BEFORE the user pulls. DOES NOT modify the working tree. NEVER use op "pull" for these queries — that would actually pull (a destructive read).
 IMPORTANT: "rebase", "pull rebase", "pull with rebase", "rebase onto origin", "rebase my commits", "rebase my work onto remote" → use intent "scoped_write" with op "pull_rebase". This shells out to `git pull --rebase` and replays local commits on top of the remote.
 IMPORTANT: "force push", "force-push", "force push with lease", "force-with-lease", "overwrite remote with mine" → use intent "scoped_write" with op "force_push". This runs `git push --force-with-lease` (safe variant that refuses if remote moved). DANGEROUS — only when user explicitly asks for it.
 IMPORTANT: "discard local", "discard my commits", "discard local commits", "reset to origin", "reset hard to origin", "drop local commits", "abandon local commits" → use intent "scoped_write" with op "discard_local". This fetches and hard-resets the local branch to the remote tracking ref. DESTRUCTIVE — local commits are gone (only recoverable via reflog).
+IMPORTANT: "find my lost work", "I lost a commit", "recover a lost commit", "where did my commit go", "I deleted a branch with work on it" → use intent "scoped_write" with op "find_lost_work". This scans reflogs and dangling objects for lost commits and restores the chosen one to a rescue branch. NON-destructive. NOTE: this is different from "recover" meaning an interrupted GLit pipeline — use "find_lost_work" only for LOST COMMITS.
+IMPORTANT: "clean up", "clean up my repo", "start fresh", "get rid of my changes", "throw away my changes", "discard everything" → use intent "scoped_write" with op "cleanup". DO NOT try to decide whether the user means untracked files, tracked changes, or both — a deterministic gate asks that. NEVER map these to op "reset" or "discard_local" directly. Always op "cleanup".
 IMPORTANT: Plain "status", "what's the status", "show status" → use intent "read_only" with op "status". (Cheap, local only — ahead/behind may be stale.) Only switch to op "fetch" when the user explicitly asks about SYNC with the remote.
 IMPORTANT: In-progress operation control (look at the "State:" line in the repo state — it tells you which operation, if any, is in progress). Use intent "scoped_write" with these ops:
   - "abort/cancel the rebase", "get out of the rebase", "undo this rebase" → op "rebase_abort".
@@ -132,8 +142,16 @@ Examples (note how "reasoning" pins down WHY before picking the intent):
      "intent":"read_only","op":"show","feature_hint":"","confidence":0.95}
 
   "undo" →
-    {"reasoning":"Undo the last commit (soft reset to HEAD~1). NOT a reset op.",
+    {"reasoning":"Undo-language recognized. Emit op 'undo' — the gate decides the semantic; I do NOT.",
      "intent":"scoped_write","op":"undo","confidence":0.95}
+
+  "squash my last 3 commits" →
+    {"reasoning":"Combine the last 3 commits into one. op 'squash' with count=3.",
+     "intent":"scoped_write","op":"squash","count":3,"confidence":0.95}
+
+  "fix my last commit message" →
+    {"reasoning":"Rewrite HEAD's message in place — op 'amend'.",
+     "intent":"scoped_write","op":"amend","confidence":0.9}
 
   "commit all my changes with appropriate message" →
     {"reasoning":"User wants commit-all with AUTO-GENERATED message ('appropriate' = pick one). Leave message empty so system generates from diff.",

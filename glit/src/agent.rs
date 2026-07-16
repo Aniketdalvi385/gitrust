@@ -96,9 +96,12 @@ pub async fn run_agent(
     let mut repo = git2::Repository::open(&repo_path)
         .map_err(|_| anyhow::anyhow!("Not a git repository: {}", repo_path.display()))?;
 
-    // Check for interrupted pipeline from a previous crash
+    // Check for interrupted pipeline from a previous crash. Scoped to THIS
+    // repo's workdir (S56) so a crash in another worktree/repo can't prompt
+    // recovery here.
     let recovery_mgr = FileRecoveryManager;
-    if let Ok(Some(snapshot)) = recovery_mgr.check_for_interrupted() {
+    let this_workdir = repo.workdir().map(|p| p.to_string_lossy().into_owned());
+    if let Ok(Some(snapshot)) = recovery_mgr.check_for_interrupted(this_workdir.as_deref()) {
         println!(
             "⚠  An interrupted pipeline was found (captured at {}).",
             snapshot.captured_at
@@ -106,6 +109,10 @@ pub async fn run_agent(
         println!("   Run 'glit --recover' to restore the repository to its pre-pipeline state.");
         println!("   Or delete ~/.glit/snapshots/ to ignore it.\n");
     }
+
+    // Prune expired trash-net backups (Phase 14). Best-effort — never fail the
+    // run over housekeeping.
+    let _ = crate::trash::prune_trash(config.trash_retention_days);
 
     // Pre-flight: make sure git identity is configured. First-time users
     // hit a deep-in-the-pipeline failure on first commit without this.
@@ -173,7 +180,9 @@ pub async fn run_agent(
         }
     }
 
-    // Dispatch based on intent
+    // Dispatch based on intent. Keep the raw query for the few builders that need
+    // it (e.g. UndoIntent's multi-commit count detection — parsing, not deciding).
+    let raw_query = intent_result.raw_query.clone();
     match intent_result.intent {
         // MergePreview needs &mut repo so it can offer a follow-up resolution action.
         IntentType::ReadOnly(ReadOnlyOp::MergePreview { remote }) => {
@@ -181,7 +190,16 @@ pub async fn run_agent(
         }
         IntentType::ReadOnly(op) => handle_read_only(&repo, op, &context),
         IntentType::ScopedWrite(op) => {
-            handle_scoped_write(&mut repo, op, config, &*gate, auto_confirm, show_all).await
+            handle_scoped_write(
+                &mut repo,
+                op,
+                &raw_query,
+                config,
+                &*gate,
+                auto_confirm,
+                show_all,
+            )
+            .await
         }
         IntentType::FeaturePipeline(op) => {
             handle_feature_pipeline(&mut repo, op, config, &*gate, auto_confirm, show_all).await
@@ -752,18 +770,28 @@ async fn handle_merge_preview(
         return Ok(());
     }
     let op = actions.remove(chosen_idx);
-    handle_scoped_write(repo, op, config, gate, auto_confirm, false).await
+    // These menu actions are concrete non-undo ops, so no raw query is needed
+    // for count parsing.
+    handle_scoped_write(repo, op, "", config, gate, auto_confirm, false).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_scoped_write(
     repo: &mut git2::Repository,
     op: ScopedWriteOp,
+    raw_query: &str,
     config: &Config,
     gate: &dyn ConfirmationGate,
     _auto_confirm: bool,
     show_all: bool,
 ) -> anyhow::Result<()> {
-    let steps = build_scoped_steps(repo, op, config, gate, show_all).await?;
+    // Forensic recovery restores imperatively (a rescue branch, no snapshot, no
+    // pipeline) — it can't be expressed as `Vec<PipelineStep>`, so handle it here.
+    if matches!(op, ScopedWriteOp::ForensicRecover) {
+        return handle_forensic_recover(repo, config, gate);
+    }
+
+    let steps = build_scoped_steps(repo, op, raw_query, config, gate, show_all).await?;
     if steps.is_empty() {
         println!("  Nothing to do.");
         return Ok(());
@@ -776,6 +804,7 @@ async fn handle_scoped_write(
 async fn build_scoped_steps(
     repo: &git2::Repository,
     op: ScopedWriteOp,
+    raw_query: &str,
     config: &Config,
     gate: &dyn ConfirmationGate,
     show_all: bool,
@@ -910,7 +939,44 @@ async fn build_scoped_steps(
         ScopedWriteOp::StashPop => Ok(vec![PipelineStep::StashPop]),
         ScopedWriteOp::Pull { remote } => Ok(vec![PipelineStep::Pull { remote }]),
 
-        ScopedWriteOp::Undo => build_undo_step(repo, gate),
+        // P6: UndoIntent is the classifier's only undo target. The deterministic
+        // ChoiceGate resolves the semantic. `Undo` (soft-reset) is never a
+        // classifier target now, but keep the arm as an internal safety-net that
+        // routes through the same gate (should never be hit).
+        ScopedWriteOp::UndoIntent | ScopedWriteOp::Undo => build_undo_intent(repo, raw_query, gate),
+
+        // S62: destructive-cleanup language terminates at a deterministic
+        // ChoiceGate that spells out what would be deleted before any Clean /
+        // Reset::Hard is constructed. Never the LLM.
+        ScopedWriteOp::CleanupIntent => build_cleanup_intent(repo, gate),
+
+        // Forensic recovery is handled imperatively in `handle_scoped_write`
+        // (it restores to a rescue branch, not via a pipeline). Should not reach
+        // here, but return no steps if it does.
+        ScopedWriteOp::ForensicRecover => Ok(vec![]),
+
+        ScopedWriteOp::Amend {
+            message,
+            include_staged,
+        } => build_amend_step(repo, message, include_staged, config, gate).await,
+
+        ScopedWriteOp::Revert { oid } => build_revert_step(repo, oid, gate),
+
+        ScopedWriteOp::Unstage { paths } => build_unstage_step(repo, paths),
+
+        ScopedWriteOp::SetUpstream { remote, branch } => {
+            let branch = if branch.trim().is_empty() {
+                current_branch_name(repo)
+            } else {
+                branch
+            };
+            if branch == "HEAD" {
+                return Err(anyhow::anyhow!("No branch to set upstream for."));
+            }
+            Ok(vec![PipelineStep::SetUpstream { remote, branch }])
+        }
+
+        ScopedWriteOp::SquashLastN { n } => build_squash_step(repo, n, config, gate).await,
 
         ScopedWriteOp::PullRebase { remote } => {
             let branch = current_branch_name(repo);
@@ -956,7 +1022,11 @@ async fn build_scoped_steps(
                 println!("  Aborted.");
                 return Ok(vec![]);
             }
-            Ok(vec![PipelineStep::ForcePush { remote, branch }])
+            Ok(vec![PipelineStep::ForcePush {
+                remote,
+                branch,
+                expect_oid: None,
+            }])
         }
 
         ScopedWriteOp::DiscardLocal { remote } => {
@@ -1433,11 +1503,34 @@ async fn reconcile_flow(
             }];
             match mode {
                 ReconcileMode::SameBranch => (with_push(steps, &remote, &branch, repo), None),
-                // Never auto-push a rewritten branch (Phase 13 owns force-with-lease).
-                ReconcileMode::CrossBranchSync => (
-                    steps,
-                    Some(crate::copy::sync_rebase_force_note(&target_ref)),
-                ),
+                // Phase 13 CLOSES Phase 12's loose end: a Sync-rebase of a
+                // PUBLISHED branch now completes the push in-band through the
+                // PushedCommitRewrite escalation (TypeToConfirm) + force-with-lease
+                // pinned to the fetched tracking oid. If the branch was never
+                // pushed, there's nothing to force — just rebase. If the user
+                // declines the escalation, we rebase without pushing and print the
+                // note.
+                ReconcileMode::CrossBranchSync => {
+                    if branch_has_upstream(repo, &branch) {
+                        let with_force =
+                            escalate_pushed_rewrite(repo, steps.clone(), &branch, config, gate)?;
+                        if with_force.is_empty() {
+                            // Declined — rebase only, no push.
+                            (
+                                steps,
+                                Some(crate::copy::sync_rebase_force_note(&target_ref)),
+                            )
+                        } else {
+                            (with_force, None)
+                        }
+                    } else {
+                        // Not published — nothing to force-push against.
+                        (
+                            steps,
+                            Some(crate::copy::sync_rebase_force_note(&target_ref)),
+                        )
+                    }
+                }
             }
         }
         1 => {
@@ -1978,6 +2071,25 @@ async fn execute_pipeline(
                     // so it reads as supporting text, not another action.
                     println!("  {}  {}", dim("│"), dim(&line));
                 }
+                // S30: after a destructive step that the trash-net backed up,
+                // tell the user where the backup lives and for how long — the
+                // sentence git itself cannot say.
+                if matches!(
+                    step,
+                    PipelineStep::Clean { .. }
+                        | PipelineStep::Reset {
+                            mode: ResetMode::Hard
+                        }
+                        | PipelineStep::DiscardLocal { .. }
+                ) {
+                    if let Ok(dir) = crate::trash::trash_dir() {
+                        let note = crate::copy::trash_backup_note(
+                            &dir.display().to_string(),
+                            config.trash_retention_days,
+                        );
+                        println!("  {}  {}", dim("│"), dim(&note));
+                    }
+                }
                 if i < last_idx {
                     println!("  {}", dim("│"));
                 }
@@ -2183,16 +2295,30 @@ async fn execute_pipeline(
 // =============================================================================
 
 /// Execute recovery from a persisted snapshot.
+///
+/// "recover" precedence (Phase 14): a pending interrupted-pipeline snapshot for
+/// THIS repo means the snapshot path — finish the interrupted thing first. When
+/// there is none, this is not an error: point the user sideways to the forensic
+/// flow (`glit "find my lost work"`), which recovers lost commits from reflogs
+/// and dangling objects.
 pub fn execute_recovery() -> anyhow::Result<()> {
     let recovery_mgr = FileRecoveryManager;
-    let snapshot = recovery_mgr
-        .check_for_interrupted()?
-        .ok_or_else(|| anyhow::anyhow!("No interrupted pipeline found in ~/.glit/snapshots/"))?;
-
-    println!("Found interrupted pipeline from {}.", snapshot.captured_at);
 
     let repo_path = find_repo_root()?;
     let repo = git2::Repository::open(&repo_path)?;
+    let this_workdir = repo.workdir().map(|p| p.to_string_lossy().into_owned());
+
+    // Scoped to this repo (S56) — another repo's snapshot must not be restored here.
+    let snapshot = match recovery_mgr.check_for_interrupted(this_workdir.as_deref())? {
+        Some(s) => s,
+        None => {
+            println!("{}", crate::copy::RECOVER_NONE_TRY_FORENSIC);
+            return Ok(());
+        }
+    };
+
+    println!("Found interrupted pipeline from {}.", snapshot.captured_at);
+
     let current_head = repo.head().ok().and_then(|h| h.target());
 
     // Situation-aware: never fight git's own state machine, and never silently
@@ -2408,10 +2534,44 @@ fn find_repo_root() -> anyhow::Result<std::path::PathBuf> {
 
 /// Build the single Undo step (soft-reset HEAD~1), capturing the parent OID
 /// up-front so the executor doesn't re-resolve a moving reference.
-fn build_undo_step(
+/// Detect an explicit multi-commit count in an undo phrase ("undo the last 3
+/// commits"). Returns the N when > 1. Parsing only — never decides a semantic.
+fn undo_multi_commit_count(raw_query: &str) -> Option<u32> {
+    let q = raw_query.to_lowercase();
+    // Look for a small integer following "last"/"past" or preceding "commits".
+    let tokens: Vec<&str> = q.split_whitespace().collect();
+    for (i, t) in tokens.iter().enumerate() {
+        if let Ok(n) = t.parse::<u32>() {
+            let prev = i.checked_sub(1).map(|j| tokens[j]);
+            let next = tokens.get(i + 1).copied();
+            let contextual = matches!(prev, Some("last" | "past" | "recent"))
+                || matches!(next, Some("commits" | "commit"));
+            if contextual && n > 1 {
+                return Some(n);
+            }
+        }
+    }
+    None
+}
+
+/// The undo disambiguation gate (S34/P6). The LLM's job ended at recognizing
+/// undo-language; this deterministic ChoiceGate decides the semantic. No undo
+/// phrase can reach a destructive mode without this gate having offered every
+/// option. HEAD-only in v1: a count > 1 halts with guidance (never acts on an
+/// LLM-extracted count).
+fn build_undo_intent(
     repo: &git2::Repository,
+    raw_query: &str,
     gate: &dyn ConfirmationGate,
 ) -> anyhow::Result<Vec<PipelineStep>> {
+    // Step 0: multi-commit undo halts before touching anything (P6).
+    if let Some(n) = undo_multi_commit_count(raw_query) {
+        return Err(anyhow::anyhow!(
+            "{}",
+            crate::copy::undo_multi_commit_guidance(n)
+        ));
+    }
+
     if repo.head_detached().unwrap_or(false) {
         return Err(anyhow::anyhow!(
             "Cannot undo in detached HEAD state. Checkout a branch first."
@@ -2423,6 +2583,7 @@ fn build_undo_step(
     let head_commit = head
         .peel_to_commit()
         .map_err(|_| anyhow::anyhow!("HEAD does not point to a commit."))?;
+    let head_oid = head_commit.id();
 
     let parent = match head_commit.parent(0) {
         Ok(p) => p,
@@ -2433,25 +2594,483 @@ fn build_undo_step(
         }
     };
 
-    let undone_sha = head_commit.id().to_string()[..7].to_string();
+    let undone_sha = head_oid.to_string()[..7].to_string();
     let undone_summary = head_commit.summary().unwrap_or("(no message)").to_string();
 
+    // Is HEAD already published? If so, reorder the gate to put the safe option
+    // (Revert) first and explain why.
+    let branch = current_branch_name(repo);
+    let pushed =
+        branch != "HEAD" && crate::git_ops::commit_is_pushed(repo, "origin", &branch, head_oid);
+
+    // The four semantics. Each is a (label, consequence, builder).
+    use crate::commands::{ChoiceOption, ResetMode};
+    let keep_staged = ChoiceOption {
+        label: "Keep them staged".to_string(),
+        consequence: crate::copy::UNDO_KEEP_STAGED_CONSEQUENCE.to_string(),
+    };
+    let keep_in_files = ChoiceOption {
+        label: "Keep them in files".to_string(),
+        consequence: crate::copy::UNDO_KEEP_IN_FILES_CONSEQUENCE.to_string(),
+    };
+    let revert_consequence = if pushed {
+        format!(
+            "{}{}",
+            crate::copy::UNDO_PUSHED_WHY,
+            crate::copy::UNDO_REVERT_CONSEQUENCE
+        )
+    } else {
+        crate::copy::UNDO_REVERT_CONSEQUENCE.to_string()
+    };
+    let revert = ChoiceOption {
+        label: "Make an inverse commit (revert)".to_string(),
+        consequence: revert_consequence,
+    };
+    let discard = ChoiceOption {
+        label: "Discard completely".to_string(),
+        consequence: crate::copy::UNDO_DISCARD_CONSEQUENCE.to_string(),
+    };
+
+    // Semantics enum kept parallel to the option ordering so index → step is
+    // unambiguous regardless of the pushed reorder.
+    enum UndoChoice {
+        KeepStaged,
+        KeepInFiles,
+        Revert,
+        Discard,
+    }
+    let (options, semantics): (Vec<ChoiceOption>, Vec<UndoChoice>) = if pushed {
+        (
+            vec![revert, keep_staged, keep_in_files, discard],
+            vec![
+                UndoChoice::Revert,
+                UndoChoice::KeepStaged,
+                UndoChoice::KeepInFiles,
+                UndoChoice::Discard,
+            ],
+        )
+    } else {
+        (
+            vec![keep_staged, keep_in_files, revert, discard],
+            vec![
+                UndoChoice::KeepStaged,
+                UndoChoice::KeepInFiles,
+                UndoChoice::Revert,
+                UndoChoice::Discard,
+            ],
+        )
+    };
+
+    let question = crate::copy::undo_gate_question(&undone_sha, &undone_summary);
+    let choice = match gate.prompt(&GateType::ChoiceGate { question, options })? {
+        GateResponse::Chose(i) => i,
+        _ => {
+            println!("  Nothing changed.");
+            return Ok(vec![]);
+        }
+    };
+
+    match &semantics[choice] {
+        UndoChoice::KeepStaged => Ok(vec![PipelineStep::Undo {
+            to_oid: parent.id().to_string(),
+            undone_summary,
+            undone_sha,
+        }]),
+        UndoChoice::KeepInFiles => Ok(vec![PipelineStep::Reset {
+            mode: ResetMode::Mixed,
+        }]),
+        UndoChoice::Revert => Ok(vec![PipelineStep::Revert {
+            oid: head_oid.to_string(),
+        }]),
+        UndoChoice::Discard => {
+            // The ONLY destructive path — a type-to-confirm before the step is
+            // even constructed. (AutoConfirmGate already refused the ChoiceGate
+            // above, so `--yes` never reaches here.)
+            let ctx = crate::context::build_context(repo)
+                .unwrap_or_else(|_| crate::context::RepoContext::empty());
+            let op_for_explain = ScopedWriteOp::Reset {
+                mode: ResetMode::Hard,
+            };
+            let resp = gate.prompt(&GateType::TypeToConfirm {
+                expected: undone_sha.clone(),
+                message: format!(
+                    "Type '{}' to DISCARD commit {} \"{}\" and all its changes:",
+                    undone_sha, undone_sha, undone_summary
+                ),
+                explanation: Some(crate::explain::explain(&op_for_explain)),
+                danger: crate::danger::intent_danger(&op_for_explain, &ctx),
+            })?;
+            if !matches!(resp, GateResponse::Confirmed) {
+                println!("  Aborted.");
+                return Ok(vec![]);
+            }
+            Ok(vec![PipelineStep::Reset {
+                mode: ResetMode::Hard,
+            }])
+        }
+    }
+}
+
+/// Destructive-cleanup gate (S62/P6). Innocent-sounding "clean up" / "start
+/// fresh" language never reaches a concrete `Clean`/`Reset::Hard` from the LLM;
+/// this deterministic ChoiceGate spells out exactly what would be deleted
+/// (tracked vs untracked, with counts) first. Degenerate guard: nothing dirty →
+/// no gate. The trash-net backs everything up before deletion (in git_ops).
+fn build_cleanup_intent(
+    repo: &git2::Repository,
+    gate: &dyn ConfirmationGate,
+) -> anyhow::Result<Vec<PipelineStep>> {
+    use crate::commands::ChoiceOption;
+
+    // Count what each destructive option would affect.
+    let (tracked, untracked) = cleanup_counts(repo);
+
+    // Degenerate guard: render no gate when there is nothing to clean.
+    if tracked == 0 && untracked == 0 {
+        println!("{}", crate::copy::CLEANUP_NOTHING);
+        return Ok(vec![]);
+    }
+
+    // Build only the options that apply, keeping a parallel semantic list so the
+    // chosen index maps unambiguously (mirrors the undo gate).
+    #[derive(Clone, Copy)]
+    enum CleanupChoice {
+        Tracked,
+        Untracked,
+        Both,
+        Abort,
+    }
+    let mut options: Vec<ChoiceOption> = Vec::new();
+    let mut semantics: Vec<CleanupChoice> = Vec::new();
+    if tracked > 0 {
+        options.push(ChoiceOption {
+            label: "Discard tracked changes".to_string(),
+            consequence: crate::copy::cleanup_tracked_consequence(tracked),
+        });
+        semantics.push(CleanupChoice::Tracked);
+    }
+    if untracked > 0 {
+        options.push(ChoiceOption {
+            label: "Delete untracked files".to_string(),
+            consequence: crate::copy::cleanup_untracked_consequence(untracked),
+        });
+        semantics.push(CleanupChoice::Untracked);
+    }
+    if tracked > 0 && untracked > 0 {
+        options.push(ChoiceOption {
+            label: "Both".to_string(),
+            consequence: crate::copy::CLEANUP_BOTH_CONSEQUENCE.to_string(),
+        });
+        semantics.push(CleanupChoice::Both);
+    }
+    options.push(ChoiceOption {
+        label: "Abort".to_string(),
+        consequence: crate::copy::CLEANUP_ABORT_CONSEQUENCE.to_string(),
+    });
+    semantics.push(CleanupChoice::Abort);
+
+    let choice = match gate.prompt(&GateType::ChoiceGate {
+        question: crate::copy::CLEANUP_GATE_QUESTION.to_string(),
+        options,
+    })? {
+        GateResponse::Chose(i) => i,
+        _ => {
+            println!("  Nothing changed.");
+            return Ok(vec![]);
+        }
+    };
+
+    // Map choice → concrete steps. `Reset::Hard` and `Clean` each back up their
+    // own destroy-set via the git_ops trash-net; ordering `Reset` before `Clean`
+    // when both is chosen keeps tracked/untracked backups in separate dirs.
+    let steps = match semantics[choice] {
+        CleanupChoice::Tracked => vec![PipelineStep::Reset {
+            mode: ResetMode::Hard,
+        }],
+        CleanupChoice::Untracked => vec![PipelineStep::Clean { trash_net: true }],
+        CleanupChoice::Both => vec![
+            PipelineStep::Reset {
+                mode: ResetMode::Hard,
+            },
+            PipelineStep::Clean { trash_net: true },
+        ],
+        CleanupChoice::Abort => {
+            println!("  Nothing changed.");
+            vec![]
+        }
+    };
+    Ok(steps)
+}
+
+/// (tracked-modified count, untracked count) for the cleanup gate.
+fn cleanup_counts(repo: &git2::Repository) -> (usize, usize) {
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_ignored(false);
+    let mut tracked = 0usize;
+    let mut untracked = 0usize;
+    if let Ok(statuses) = repo.statuses(Some(&mut opts)) {
+        for e in statuses.iter() {
+            let s = e.status();
+            if s.contains(git2::Status::WT_NEW) {
+                untracked += 1;
+            } else if s.intersects(
+                git2::Status::WT_MODIFIED
+                    | git2::Status::WT_TYPECHANGE
+                    | git2::Status::WT_DELETED
+                    | git2::Status::WT_RENAMED,
+            ) {
+                tracked += 1;
+            }
+        }
+    }
+    (tracked, untracked)
+}
+
+/// Forensic recovery flow (S24/26/27, P5). Scans for lost commits, shows the
+/// RecoveryBrowser, and restores the chosen commit onto a `rescue/*` branch —
+/// NEVER touching the current branch/index/working tree (Q4). Imperative (no
+/// snapshot, no pipeline): the only mutation is creating a ref.
+fn handle_forensic_recover(
+    repo: &git2::Repository,
+    config: &Config,
+    gate: &dyn ConfirmationGate,
+) -> anyhow::Result<()> {
+    let cfg = crate::recovery::LostScanConfig::with_retention_days(30);
+    let scan = crate::recovery::find_lost_commits(repo, &cfg);
+
+    if scan.commits.is_empty() {
+        // S29 honesty: gc'd / never-committed work may be unrecoverable.
+        println!("{}", crate::copy::FORENSIC_NONE_FOUND);
+        return Ok(());
+    }
+    if scan.total_found > scan.commits.len() {
+        println!(
+            "{}",
+            crate::copy::forensic_truncated(scan.commits.len(), scan.total_found)
+        );
+    }
+
+    let candidates = scan.commits.clone();
+    let choice = match gate.prompt(&GateType::RecoveryBrowser {
+        candidates: candidates.clone(),
+    })? {
+        GateResponse::Chose(i) => i,
+        _ => {
+            println!("  Nothing recovered.");
+            return Ok(());
+        }
+    };
+    let chosen = &candidates[choice];
+
+    // rescue/<date>-<short-oid>. Date from a local timestamp (chrono is a dep;
+    // Local::now is allowed in production — this is not a workflow script).
+    let short = &chosen.oid[..chosen.oid.len().min(7)];
+    let date = chrono::Local::now().format("%Y%m%d").to_string();
+    let branch = format!("rescue/{}-{}", date, short);
+
+    Git2Operations.create_branch_at(repo, &branch, &chosen.oid)?;
+    println!("{}", crate::copy::forensic_restored(&branch, short));
+    let _ = config;
+    Ok(())
+}
+
+/// Build an Amend step, escalating with a PushedCommitRewrite type-to-confirm
+/// when HEAD is already published (S32/S33). Returns the amend step, and on the
+/// pushed path also a force-push step pinned to the fetched tracking oid.
+async fn build_amend_step(
+    repo: &git2::Repository,
+    message: Option<String>,
+    include_staged: bool,
+    config: &Config,
+    gate: &dyn ConfirmationGate,
+) -> anyhow::Result<Vec<PipelineStep>> {
+    let _ = config;
+    if repo.head_detached().unwrap_or(false) {
+        return Err(anyhow::anyhow!(
+            "Cannot amend in detached HEAD state. Checkout a branch first."
+        ));
+    }
+    let head_oid = repo
+        .head()
+        .ok()
+        .and_then(|h| h.target())
+        .ok_or_else(|| anyhow::anyhow!("No commit to amend — repository is empty."))?;
+    let branch = current_branch_name(repo);
+
+    let amend = PipelineStep::Amend {
+        message,
+        include_staged,
+    };
+
+    // PushedCommitRewrite escalation (S33): if HEAD is on the remote, amending
+    // rewrites published history → force push with lease, gated by TypeToConfirm.
+    if branch != "HEAD" && crate::git_ops::commit_is_pushed(repo, &config.remote, &branch, head_oid)
+    {
+        return escalate_pushed_rewrite(repo, vec![amend], &branch, config, gate);
+    }
+    Ok(vec![amend])
+}
+
+/// Build a Revert step. HEAD-only in v1 when `oid` is empty. Revert is the
+/// team-safe public undo — no escalation needed (no history rewrite).
+fn build_revert_step(
+    repo: &git2::Repository,
+    oid: String,
+    gate: &dyn ConfirmationGate,
+) -> anyhow::Result<Vec<PipelineStep>> {
+    let target = if oid.trim().is_empty() {
+        repo.head()
+            .ok()
+            .and_then(|h| h.target())
+            .ok_or_else(|| anyhow::anyhow!("No commit to revert — repository is empty."))?
+            .to_string()
+    } else {
+        // Resolve to a full oid so the step is concrete.
+        repo.revparse_single(&oid)
+            .map_err(|_| anyhow::anyhow!("'{}' is not a valid commit to revert.", oid))?
+            .id()
+            .to_string()
+    };
+    let short = &target[..7.min(target.len())];
     let resp = gate.prompt(&GateType::SimpleConfirm {
-        message: format!(
-            "Undo commit {} \"{}\"? Files will return to staged.",
-            undone_sha, undone_summary
-        ),
+        message: format!("Revert {} with a new inverse commit?", short),
     })?;
     if !matches!(resp, GateResponse::Confirmed) {
         println!("  Aborted.");
         return Ok(vec![]);
     }
+    Ok(vec![PipelineStep::Revert { oid: target }])
+}
 
-    Ok(vec![PipelineStep::Undo {
-        to_oid: parent.id().to_string(),
-        undone_summary,
-        undone_sha,
-    }])
+/// Build an Unstage step. Enumerates the concrete staged paths when the request
+/// was "unstage all" (empty paths) — nothing ambiguous reaches the executor.
+fn build_unstage_step(
+    repo: &git2::Repository,
+    paths: Vec<String>,
+) -> anyhow::Result<Vec<PipelineStep>> {
+    let resolved = if paths.is_empty() {
+        // Enumerate what's actually staged vs HEAD.
+        let ctx = crate::context::build_context(repo)
+            .unwrap_or_else(|_| crate::context::RepoContext::empty());
+        ctx.status.staged.clone()
+    } else {
+        paths
+    };
+    if resolved.is_empty() {
+        println!("  Nothing staged to unstage.");
+        return Ok(vec![]);
+    }
+    Ok(vec![PipelineStep::Unstage { paths: resolved }])
+}
+
+/// Build a SquashLastN pipeline (S40): resolve the merged message, reject merge
+/// commits, escalate on pushed commits. Preserves the working tree.
+async fn build_squash_step(
+    repo: &git2::Repository,
+    n: u32,
+    config: &Config,
+    gate: &dyn ConfirmationGate,
+) -> anyhow::Result<Vec<PipelineStep>> {
+    if n < 2 {
+        return Err(anyhow::anyhow!(
+            "Squash needs at least 2 commits (got {}). Nothing to combine.",
+            n
+        ));
+    }
+    if repo.head_detached().unwrap_or(false) {
+        return Err(anyhow::anyhow!(
+            "Cannot squash in detached HEAD state. Checkout a branch first."
+        ));
+    }
+    // Walk the last n commits: reject any merge commit, collect summaries, find
+    // the oldest so we can escalate if it's published.
+    let head = repo
+        .head()
+        .map_err(|_| anyhow::anyhow!("No commits to squash — repository is empty."))?;
+    let mut commit = head.peel_to_commit().context("HEAD is not a commit")?;
+    let mut summaries: Vec<String> = Vec::new();
+    let mut oldest_oid = commit.id();
+    for i in 0..n {
+        if commit.parent_count() > 1 {
+            return Err(anyhow::anyhow!(
+                "Commit {} is a merge commit — squash can't combine merge commits.",
+                &commit.id().to_string()[..7]
+            ));
+        }
+        summaries.push(commit.summary().unwrap_or("(no message)").to_string());
+        oldest_oid = commit.id();
+        commit = commit.parent(0).with_context(|| {
+            format!("Cannot squash {} commits — only {} ancestor(s) exist", n, i)
+        })?;
+    }
+
+    // Seed the squashed message from the combined summaries; let the user edit.
+    let initial = summaries.join("\n");
+    let message = match gate.prompt(&GateType::EditableText {
+        initial,
+        label: format!("Squashed commit message ({} commits):", n),
+    })? {
+        GateResponse::TextProvided(m) if !m.trim().is_empty() => m,
+        _ => {
+            println!("  Aborted.");
+            return Ok(vec![]);
+        }
+    };
+
+    let squash = PipelineStep::SquashLastN { n, message };
+
+    // PushedCommitRewrite (S33/S40): if the oldest squashed commit is published,
+    // squashing rewrites shared history → escalate + force-push with lease.
+    let branch = current_branch_name(repo);
+    if branch != "HEAD"
+        && crate::git_ops::commit_is_pushed(repo, &config.remote, &branch, oldest_oid)
+    {
+        return escalate_pushed_rewrite(repo, vec![squash], &branch, config, gate);
+    }
+    Ok(vec![squash])
+}
+
+/// Shared PushedCommitRewrite escalation (S33): a type-to-confirm on the branch
+/// name, and on confirm append a force-push pinned to the fetched tracking oid
+/// (`--force-with-lease=<branch>:<oid>`). Used by amend + squash on a published
+/// commit, and by the Sync-rebase completion.
+fn escalate_pushed_rewrite(
+    repo: &git2::Repository,
+    mut steps: Vec<PipelineStep>,
+    branch: &str,
+    config: &Config,
+    gate: &dyn ConfirmationGate,
+) -> anyhow::Result<Vec<PipelineStep>> {
+    println!("  {}", crate::copy::PUSHED_REWRITE_WARNING);
+    let ctx = crate::context::build_context(repo)
+        .unwrap_or_else(|_| crate::context::RepoContext::empty());
+    let op_for_explain = ScopedWriteOp::ForcePush {
+        remote: config.remote.clone(),
+    };
+    let resp = gate.prompt(&GateType::TypeToConfirm {
+        expected: branch.to_string(),
+        message: crate::copy::pushed_rewrite_confirm(branch),
+        explanation: Some(crate::explain::explain(&op_for_explain)),
+        danger: crate::danger::intent_danger(&op_for_explain, &ctx),
+    })?;
+    if !matches!(resp, GateResponse::Confirmed) {
+        println!("  Aborted — nothing was rewritten.");
+        return Ok(vec![]);
+    }
+    // Pin the lease to the tracking oid we have RIGHT NOW (TOCTOU hardening).
+    let expect_oid = repo
+        .find_reference(&format!("refs/remotes/{}/{}", config.remote, branch))
+        .ok()
+        .and_then(|r| r.target())
+        .map(|o| o.to_string());
+    steps.push(PipelineStep::ForcePush {
+        remote: config.remote.clone(),
+        branch: branch.to_string(),
+        expect_oid,
+    });
+    Ok(steps)
 }
 
 /// When the pre-check found we're in detached HEAD and the user's intent
@@ -2467,17 +3086,31 @@ async fn handle_detached_head_rescue(
         .map(|o| o.to_string()[..7].to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
+    // S21: how many commits would be stranded (reachable from HEAD, on no
+    // branch) if the user switched away without branching first.
+    let stranded = match crate::context::detect_situation(repo) {
+        crate::commands::RepoSituation::DetachedHead { stranded_commits } => stranded_commits,
+        _ => 0,
+    };
+
     println!();
     println!("⚠  You are in DETACHED HEAD state.");
     println!(
         "   Currently at commit {} — not on any branch.",
         current_sha
     );
+    if stranded > 0 {
+        println!(
+            "   You have {} commit(s) here that are on NO branch — switching away now would strand them.",
+            stranded
+        );
+    }
     println!("   Any commit you make here will be orphaned (lose-able) unless you save it.");
     println!();
 
     let resp = gate.prompt(&GateType::Choose {
         message: "What would you like to do?".to_string(),
+        // Branch-here is listed FIRST (index 0) — the anxious user's exit (S21).
         options: vec![
             "Create a branch HERE to save work".to_string(),
             "Switch back to your previous branch (no changes made)".to_string(),
@@ -2511,6 +3144,15 @@ async fn handle_detached_head_rescue(
             Ok(())
         }
         GateResponse::Chose(1) => {
+            // S21 guard: refuse to switch away while commits would be stranded —
+            // steer back to branch-here rather than silently losing them.
+            if stranded > 0 {
+                return Err(anyhow::anyhow!(
+                    "Won't switch away — {} commit(s) here are on no branch and would be stranded. \
+                     Re-run and choose \"Create a branch HERE\" first to keep them.",
+                    stranded
+                ));
+            }
             // Try to switch to a sensible default branch.
             for fallback in &["main", "master"] {
                 let git_ops = Git2Operations;
@@ -2851,7 +3493,7 @@ fn summarize_step(
             undone_sha, undone_summary
         )),
         P::PullRebase { remote, branch } => Some(format!("→ Rebased onto {}/{}", remote, branch)),
-        P::ForcePush { remote, branch } => Some(format!(
+        P::ForcePush { remote, branch, .. } => Some(format!(
             "→ Force-pushed to {}/{} (with-lease)",
             remote, branch
         )),
@@ -2869,6 +3511,19 @@ fn summarize_step(
         P::CherryPickAbort => Some("→ Cherry-pick aborted".to_string()),
         P::RevertContinue => Some("→ Revert continued".to_string()),
         P::RevertAbort => Some("→ Revert aborted".to_string()),
+        P::Amend { .. } => Some("→ Amended the last commit".to_string()),
+        P::Revert { oid } => {
+            let short = if oid.len() >= 7 { &oid[..7] } else { oid };
+            Some(format!("→ Reverted {} (inverse commit added)", short))
+        }
+        P::Unstage { paths } => Some(format!("→ Unstaged {} path(s)", paths.len())),
+        P::SetUpstream { remote, branch } => {
+            Some(format!("→ Upstream set to {}/{}", remote, branch))
+        }
+        P::SquashLastN { n, .. } => Some(format!("→ Squashed the last {} commits into one", n)),
+        P::Clean { .. } => {
+            Some("→ Deleted untracked files (backed up to the trash-net)".to_string())
+        }
         P::Status | P::Log { .. } | P::Diff { .. } => None,
     }
 }
@@ -3062,6 +3717,21 @@ fn step_name(step: &PipelineStep) -> &'static str {
         PipelineStep::CherryPickAbort => "git cherry-pick --abort",
         PipelineStep::RevertContinue => "git revert --continue",
         PipelineStep::RevertAbort => "git revert --abort",
+        PipelineStep::Amend { .. } => "git commit --amend",
+        PipelineStep::Revert { .. } => "git revert --no-edit",
+        PipelineStep::Unstage { .. } => "git restore --staged",
+        PipelineStep::SetUpstream { .. } => "git branch --set-upstream-to",
+        PipelineStep::SquashLastN { n, .. } => {
+            // Leak a small static-ish string; this is display-only. Use a match
+            // on common N to avoid allocation lifetime issues in a &str return.
+            match n {
+                1 => "git reset --soft HEAD~1 && git commit",
+                2 => "git reset --soft HEAD~2 && git commit",
+                3 => "git reset --soft HEAD~3 && git commit",
+                _ => "git reset --soft HEAD~N && git commit",
+            }
+        }
+        PipelineStep::Clean { .. } => "git clean -fd",
     }
 }
 
@@ -3494,11 +4164,13 @@ mod phase12_reconcile_tests {
         (remote, a)
     }
 
-    // Amendment 1: Sync + Rebase never auto-pushes the (possibly-published)
-    // branch — origin/<feature> stays untouched; the force-push note is deferred
-    // to Phase 13. Guards the duplicate-commit recovery loop.
+    // Phase 13 (Q4) — closes Phase 12's deferred loose end. A Sync+Rebase of a
+    // PUBLISHED branch now completes the push in-band: the PushedCommitRewrite
+    // escalation (TypeToConfirm, which ScriptedGate confirms) runs, and
+    // origin/<feature> advances to the rebased tip via force-with-lease. (Was
+    // previously asserted NOT to push — Phase 12's intentional gap.)
     #[tokio::test]
-    async fn sync_rebase_does_not_autopush_feature() {
+    async fn sync_rebase_completes_forcepush_when_published() {
         let (_remote, a) = feature_diverged_from_main();
         let mut repo = Repository::open(a.path()).unwrap();
         let before = repo
@@ -3507,18 +4179,27 @@ mod phase12_reconcile_tests {
             .to_string();
 
         let cfg = Config::default();
-        let gate = ScriptedGate::new(0); // Rebase
+        let gate = ScriptedGate::new(0); // Rebase, then confirm the TypeToConfirm
         reconcile_flow(&mut repo, ReconcileMode::CrossBranchSync, 0, 0, &cfg, &gate)
             .await
-            .expect("cross-branch rebase should succeed locally");
+            .expect("cross-branch rebase + force-push should succeed");
 
-        let after = repo
+        // Re-read the remote tracking ref after the push.
+        git(a.path(), &["fetch", "origin"]);
+        let after = Repository::open(a.path())
+            .unwrap()
             .refname_to_id("refs/remotes/origin/feature")
             .unwrap()
             .to_string();
-        assert_eq!(
+        assert_ne!(
             before, after,
-            "Sync must NOT auto-push a rebased (published) branch"
+            "Sync+Rebase of a published branch must force-push the rebased tip (Phase 13)"
+        );
+        // And the pushed tip must match local HEAD (the rebased commit).
+        let local_head = repo.head().unwrap().target().unwrap().to_string();
+        assert_eq!(
+            after, local_head,
+            "remote feature should now point at the rebased local HEAD"
         );
     }
 
@@ -3552,5 +4233,576 @@ mod phase12_reconcile_tests {
         );
         let tip = repo.head().unwrap().peel_to_commit().unwrap();
         assert_eq!(tip.parent_count(), 2, "merge should record 2 parents");
+    }
+}
+
+// =============================================================================
+// Phase 13 — repair vocabulary + the undo disambiguation gate (S32–S40, P6).
+// All assertions outcome-based: gate-invocation flags, tree/parent oids,
+// subprocess args (via the emitted PipelineStep), classifier tokens.
+// =============================================================================
+#[cfg(test)]
+mod phase13_repair_tests {
+    use super::*;
+    use crate::commands::{PipelineStep, ResetMode, ScopedWriteOp};
+    use crate::confirm::ScriptedGate;
+    use git2::Repository;
+    use std::process::Command;
+    use tempfile::TempDir;
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .expect("spawn git");
+        assert!(
+            out.status.success(),
+            "git {:?} failed:\n{}",
+            args,
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// A repo with `n` linear commits on `main`, identity set. Returns the repo
+    /// and its dir.
+    fn repo_with_commits(n: usize) -> (Repository, TempDir) {
+        let dir = TempDir::new().unwrap();
+        git(dir.path(), &["init", "-b", "main", "."]);
+        git(dir.path(), &["config", "user.name", "T"]);
+        git(dir.path(), &["config", "user.email", "t@t.com"]);
+        for i in 0..n {
+            std::fs::write(dir.path().join(format!("f{i}.txt")), format!("v{i}\n")).unwrap();
+            git(dir.path(), &["add", "."]);
+            git(dir.path(), &["commit", "-m", &format!("c{i}")]);
+        }
+        let repo = Repository::open(dir.path()).unwrap();
+        (repo, dir)
+    }
+
+    // -- #1 (centerpiece): no undo phrase reaches Reset::Hard without the
+    // ChoiceGate having offered all four options, and Discard additionally
+    // requires a TypeToConfirm.
+    #[test]
+    fn undo_gate_offers_four_options_and_discard_needs_type_to_confirm() {
+        let (repo, _d) = repo_with_commits(2);
+
+        // Choice index 3 = Discard in the unpushed ordering.
+        let gate = ScriptedGate::new(3);
+        let steps = build_undo_intent(&repo, "undo", &gate).unwrap();
+
+        assert!(
+            gate.choice_shown.get(),
+            "the ChoiceGate must have been shown"
+        );
+        assert_eq!(
+            gate.last_choice_options.get(),
+            4,
+            "the undo gate must offer exactly four options"
+        );
+        assert!(
+            gate.type_to_confirm_shown.get(),
+            "Discard must require a TypeToConfirm before Reset::Hard is built"
+        );
+        assert!(
+            matches!(
+                steps.as_slice(),
+                [PipelineStep::Reset {
+                    mode: ResetMode::Hard
+                }]
+            ),
+            "Discard resolves to a hard reset, got {:?}",
+            steps
+        );
+    }
+
+    // -- #1 companion: the other three choices never emit a hard reset.
+    #[test]
+    fn undo_gate_nondiscard_choices_never_hard_reset() {
+        // 0 keep-staged → Undo (soft); 1 keep-in-files → Reset Mixed; 2 → Revert.
+        for (idx, want) in [(0usize, "undo"), (1usize, "mixed"), (2usize, "revert")] {
+            let (repo, _d) = repo_with_commits(2);
+            let gate = ScriptedGate::new(idx);
+            let steps = build_undo_intent(&repo, "undo", &gate).unwrap();
+            assert_eq!(gate.last_choice_options.get(), 4, "still four options");
+            assert!(
+                !steps.iter().any(|s| matches!(
+                    s,
+                    PipelineStep::Reset {
+                        mode: ResetMode::Hard
+                    }
+                )),
+                "choice {} ({}) must not hard-reset: {:?}",
+                idx,
+                want,
+                steps
+            );
+            match (idx, steps.as_slice()) {
+                (0, [PipelineStep::Undo { .. }]) => {}
+                (
+                    1,
+                    [PipelineStep::Reset {
+                        mode: ResetMode::Mixed,
+                    }],
+                ) => {}
+                (2, [PipelineStep::Revert { .. }]) => {}
+                _ => panic!("choice {} produced unexpected steps {:?}", idx, steps),
+            }
+        }
+    }
+
+    // -- #11: multi-commit undo ("undo the last 3 commits") halts with guidance,
+    // builds no gate, touches nothing.
+    #[test]
+    fn multi_commit_undo_halts_without_gate() {
+        let (repo, _d) = repo_with_commits(3);
+        let before = repo.head().unwrap().target().unwrap();
+        let gate = ScriptedGate::new(3);
+        let err = build_undo_intent(&repo, "undo the last 3 commits", &gate)
+            .expect_err("multi-commit undo must halt");
+        assert!(
+            err.to_string()
+                .contains("Multi-commit undo isn't supported"),
+            "should return the guidance, got: {}",
+            err
+        );
+        assert!(!gate.choice_shown.get(), "no gate for multi-commit undo");
+        assert_eq!(
+            repo.head().unwrap().target().unwrap(),
+            before,
+            "HEAD must be untouched"
+        );
+    }
+
+    // -- #2: --yes refuses the undo ChoiceGate (inherits the reconcile precedent).
+    #[test]
+    fn undo_under_yes_refuses() {
+        let (repo, _d) = repo_with_commits(2);
+        let gate = crate::confirm::AutoConfirmGate;
+        let err = build_undo_intent(&repo, "undo", &gate)
+            .expect_err("--yes must refuse the undo ChoiceGate");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("strategy")
+                || msg.contains("reconciliation")
+                || msg.contains("interactively"),
+            "refusal should name the reason, got: {}",
+            msg
+        );
+    }
+
+    // -- #3: when HEAD is pushed, the gate reorders Revert first and says why.
+    #[test]
+    fn undo_gate_reorders_revert_first_when_pushed() {
+        let remote = TempDir::new().unwrap();
+        git(remote.path(), &["init", "--bare", "-b", "main", "."]);
+        let (repo, dir) = repo_with_commits(2);
+        git(
+            dir.path(),
+            &["remote", "add", "origin", remote.path().to_str().unwrap()],
+        );
+        git(dir.path(), &["push", "-u", "origin", "main"]);
+        let repo = Repository::open(dir.path()).unwrap();
+
+        let gate = ScriptedGate::new(0); // pick whatever is first
+        let _ = build_undo_intent(&repo, "undo", &gate).unwrap();
+        let labels = gate.last_choice_labels.borrow();
+        assert!(
+            labels
+                .first()
+                .map(|l| l.contains("revert"))
+                .unwrap_or(false),
+            "pushed HEAD must put Revert first, got {:?}",
+            *labels
+        );
+    }
+
+    // -- #6: SquashLastN(3) turns 3 commits into 1 with an identical tree oid.
+    #[tokio::test]
+    async fn squash_last_3_preserves_tree() {
+        let (repo, _d) = repo_with_commits(4);
+        let pre_tree = repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .tree()
+            .unwrap()
+            .id();
+        let pre_count = repo.revwalk_count();
+
+        let cfg = Config::default();
+        let gate = ScriptedGate::new(0);
+        let steps = build_squash_step(&repo, 3, &cfg, &gate).await.unwrap();
+        // Execute the squash step directly (git2 path — no hooks in this repo).
+        let mut repo_mut = Repository::open(_d.path()).unwrap();
+        for step in &steps {
+            crate::git_ops::execute_step(&Git2Operations, &mut repo_mut, step).unwrap();
+        }
+
+        let post_tree = repo_mut
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .tree()
+            .unwrap()
+            .id();
+        assert_eq!(pre_tree, post_tree, "squash must preserve the tree oid");
+        let post_count = repo_mut.revwalk_count();
+        assert_eq!(
+            post_count,
+            pre_count - 2,
+            "3 commits collapse into 1 (net -2), got {} → {}",
+            pre_count,
+            post_count
+        );
+    }
+
+    // -- #7a: Revert produces a commit whose tree equals the pre-target tree.
+    #[tokio::test]
+    async fn revert_tree_equals_pre_target() {
+        let (repo, dir) = repo_with_commits(2);
+        // Tree BEFORE the last commit (i.e. after reverting it we should match).
+        let parent_tree = repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .parent(0)
+            .unwrap()
+            .tree()
+            .unwrap()
+            .id();
+
+        let gate = ScriptedGate::new(0);
+        let steps = build_revert_step(&repo, String::new(), &gate).unwrap();
+        let mut repo_mut = Repository::open(dir.path()).unwrap();
+        for step in &steps {
+            crate::git_ops::execute_step(&Git2Operations, &mut repo_mut, step).unwrap();
+        }
+        let post_tree = repo_mut
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .tree()
+            .unwrap()
+            .id();
+        assert_eq!(
+            parent_tree, post_tree,
+            "reverting the last commit should restore the parent tree"
+        );
+    }
+
+    // -- #4 & #7b: hook parity. A failing pre-commit BLOCKS amend (Q3) but a
+    // revert SUCCEEDS (git revert doesn't run pre-commit) — the deliberate
+    // contrast.
+    #[test]
+    fn amend_blocked_but_revert_succeeds_under_failing_pre_commit() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_r, dir) = repo_with_commits(2);
+        let hooks = dir.path().join(".git/hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\necho blocked >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let mut repo = Repository::open(dir.path()).unwrap();
+        let head_before = repo.head().unwrap().target().unwrap();
+
+        // Amend routes through system git (hooks=auto) → HookRejected, HEAD unchanged.
+        let exec = crate::executor::DefaultExecutor {
+            git_ops: Git2Operations,
+            hooks_mode: "auto".to_string(),
+        };
+        let amend_err = crate::executor::StepExecutor::execute(
+            &exec,
+            &mut repo,
+            &PipelineStep::Amend {
+                message: Some("reworded".into()),
+                include_staged: false,
+            },
+        )
+        .expect_err("amend must be blocked by the failing pre-commit hook");
+        assert!(
+            amend_err
+                .downcast_ref::<crate::git_ops::ClassifiedFailure>()
+                .map(|c| matches!(c.class, crate::git_ops::FailureClass::HookRejected { .. }))
+                .unwrap_or(false),
+            "amend failure should be HookRejected, got {:?}",
+            amend_err
+        );
+        assert_eq!(
+            repo.head().unwrap().target().unwrap(),
+            head_before,
+            "amend must leave HEAD unchanged when the hook blocks"
+        );
+
+        // Revert SUCCEEDS despite the same failing pre-commit — git revert does
+        // not run pre-commit. (Deliberate contrast to the amend assertion above.)
+        let head_oid = repo.head().unwrap().target().unwrap().to_string();
+        crate::git_ops::execute_step(
+            &Git2Operations,
+            &mut repo,
+            &PipelineStep::Revert { oid: head_oid },
+        )
+        .expect("revert should SUCCEED — git revert doesn't run pre-commit");
+        assert_ne!(
+            repo.head().unwrap().target().unwrap(),
+            head_before,
+            "revert must have added an inverse commit"
+        );
+    }
+
+    // -- #5: amend on a PUSHED commit escalates (TypeToConfirm) and appends a
+    // force-push pinned to the fetched tracking oid (--force-with-lease=<b>:<oid>).
+    #[tokio::test]
+    async fn amend_on_pushed_escalates_and_pins_lease() {
+        let remote = TempDir::new().unwrap();
+        git(remote.path(), &["init", "--bare", "-b", "main", "."]);
+        let (_r, dir) = repo_with_commits(2);
+        git(
+            dir.path(),
+            &["remote", "add", "origin", remote.path().to_str().unwrap()],
+        );
+        git(dir.path(), &["push", "-u", "origin", "main"]);
+        let repo = Repository::open(dir.path()).unwrap();
+        let tracking = repo
+            .refname_to_id("refs/remotes/origin/main")
+            .unwrap()
+            .to_string();
+
+        let cfg = Config::default();
+        let gate = ScriptedGate::new(0); // confirms the TypeToConfirm
+        let steps = build_amend_step(&repo, Some("reworded".into()), false, &cfg, &gate)
+            .await
+            .unwrap();
+
+        assert!(
+            gate.type_to_confirm_shown.get(),
+            "pushed amend must escalate with TypeToConfirm"
+        );
+        match steps.as_slice() {
+            [PipelineStep::Amend { .. }, PipelineStep::ForcePush {
+                expect_oid, branch, ..
+            }] => {
+                assert_eq!(branch, "main");
+                assert_eq!(
+                    expect_oid.as_deref(),
+                    Some(tracking.as_str()),
+                    "lease must be pinned to the fetched tracking oid (TOCTOU)"
+                );
+            }
+            other => panic!("expected [Amend, ForcePush(pinned)], got {:?}", other),
+        }
+    }
+
+    // -- #9: Unstage moves only the named paths out of the index; other staged
+    // paths and file contents survive. It is NOT a reset.
+    #[test]
+    fn unstage_scoped_leaves_other_staged_files() {
+        let (_r, dir) = repo_with_commits(1);
+        // Stage two new files.
+        std::fs::write(dir.path().join("a.txt"), "a\n").unwrap();
+        std::fs::write(dir.path().join("b.txt"), "b\n").unwrap();
+        git(dir.path(), &["add", "a.txt", "b.txt"]);
+        let mut repo = Repository::open(dir.path()).unwrap();
+
+        crate::git_ops::execute_step(
+            &Git2Operations,
+            &mut repo,
+            &PipelineStep::Unstage {
+                paths: vec!["a.txt".into()],
+            },
+        )
+        .unwrap();
+
+        let index = repo.index().unwrap();
+        assert!(
+            index.get_path(std::path::Path::new("a.txt"), 0).is_none(),
+            "a.txt should be unstaged"
+        );
+        assert!(
+            index.get_path(std::path::Path::new("b.txt"), 0).is_some(),
+            "b.txt must remain staged (scoped unstage, not a reset)"
+        );
+        // File contents untouched on disk.
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).unwrap(),
+            "a\n"
+        );
+    }
+
+    // -- #10: no direct-undo token in the classifier — every undo phrase maps to
+    // UndoIntent, never ScopedWriteOp::Undo.
+    #[test]
+    fn classifier_never_emits_direct_undo() {
+        for phrase in [
+            "undo",
+            "undo last commit",
+            "undo commit",
+            "take back",
+            "that was wrong",
+            "undo that",
+        ] {
+            match crate::intent::try_canonical(phrase) {
+                Some(IntentType::ScopedWrite(ScopedWriteOp::UndoIntent)) => {}
+                Some(IntentType::ScopedWrite(ScopedWriteOp::Undo)) => {
+                    panic!("'{}' must NOT map to the direct Undo op (P6)", phrase)
+                }
+                other => panic!("'{}' unexpected canonical mapping: {:?}", phrase, other),
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 14 — forensic recovery + destructive-phrase routing (end-to-end).
+    // -----------------------------------------------------------------------
+
+    /// Init a repo with one commit and configured identity (`f.txt` = "base").
+    fn init_repo_one_commit() -> (TempDir, Repository) {
+        let (repo, dir) = repo_with_commits(0);
+        std::fs::write(dir.path().join("f.txt"), "base\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "base"]);
+        let repo2 = Repository::open(dir.path()).unwrap();
+        let _ = repo;
+        (dir, repo2)
+    }
+
+    // Destructive-phrase routing (S62): "clean up" NEVER reaches a Clean/Reset
+    // step without the ChoiceGate having been shown. ScriptedGate records it.
+    #[tokio::test]
+    async fn cleanup_phrase_requires_choice_gate_before_any_destroy() {
+        let (dir, repo) = init_repo_one_commit();
+        // Make something to clean so the gate isn't skipped by the degenerate guard.
+        std::fs::write(dir.path().join("f.txt"), "modified\n").unwrap();
+        std::fs::write(dir.path().join("junk.txt"), "untracked\n").unwrap();
+
+        // "clean up" classifies to CleanupIntent (deterministic table, not LLM).
+        match crate::intent::try_canonical("clean up") {
+            Some(crate::commands::IntentType::ScopedWrite(ScopedWriteOp::CleanupIntent)) => {}
+            other => panic!("'clean up' must map to CleanupIntent, got {:?}", other),
+        }
+
+        let gate = ScriptedGate::new(0); // pick the first option
+        let steps = build_cleanup_intent(&repo, &gate).unwrap();
+        assert!(
+            gate.choice_shown.get(),
+            "the ChoiceGate MUST be shown before any destructive step is built (S62)"
+        );
+        // Option 0 with both dirty tracked + untracked is "Discard tracked changes".
+        assert!(
+            steps
+                .iter()
+                .any(|s| matches!(s, PipelineStep::Reset { .. } | PipelineStep::Clean { .. })),
+            "a destructive step should be produced after the gate choice"
+        );
+    }
+
+    // Degenerate guard: nothing to clean → no gate rendered, no steps.
+    #[tokio::test]
+    async fn cleanup_phrase_on_clean_tree_renders_no_gate() {
+        let (_dir, repo) = init_repo_one_commit();
+        let gate = ScriptedGate::new(0);
+        let steps = build_cleanup_intent(&repo, &gate).unwrap();
+        assert!(steps.is_empty(), "no steps on a pristine tree");
+        assert!(
+            !gate.choice_shown.get(),
+            "no ChoiceGate should render when there is nothing to clean"
+        );
+    }
+
+    // RecoveryBrowser under --yes is refused (Q2).
+    #[tokio::test]
+    async fn forensic_recover_refused_under_yes() {
+        let (dir, _repo) = init_repo_one_commit();
+        // Create a lost commit so the browser would have candidates.
+        git(dir.path(), &["checkout", "-b", "feature"]);
+        std::fs::write(dir.path().join("f.txt"), "feature\n").unwrap();
+        git(dir.path(), &["commit", "-am", "feat: lost"]);
+        git(dir.path(), &["checkout", "main"]);
+        git(dir.path(), &["branch", "-D", "feature"]);
+
+        let repo = Repository::open(dir.path()).unwrap();
+        let cfg = crate::config::Config::default();
+        let res = handle_forensic_recover(&repo, &cfg, &crate::confirm::AutoConfirmGate);
+        assert!(
+            res.is_err(),
+            "--yes must refuse the RecoveryBrowser (never auto-pick a commit)"
+        );
+    }
+
+    // CENTERPIECE end-to-end: delete a branch, forensic recover restores it to a
+    // rescue/* branch at the exact oid, current HEAD byte-for-byte untouched.
+    #[tokio::test]
+    async fn forensic_recover_restores_rescue_branch_head_untouched() {
+        let (dir, _repo) = init_repo_one_commit();
+        git(dir.path(), &["checkout", "-b", "feature"]);
+        std::fs::write(dir.path().join("f.txt"), "feature work\n").unwrap();
+        git(dir.path(), &["commit", "-am", "feat: export csv"]);
+        let lost_oid = Repository::open(dir.path())
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap();
+        git(dir.path(), &["checkout", "main"]);
+        git(dir.path(), &["branch", "-D", "feature"]);
+
+        let repo = Repository::open(dir.path()).unwrap();
+        let head_before = repo.head().unwrap().target().unwrap();
+        let f_before = std::fs::read(dir.path().join("f.txt")).unwrap();
+
+        let cfg = crate::config::Config::default();
+        let gate = ScriptedGate::new(0); // pick the (most-recent) lost commit
+        handle_forensic_recover(&repo, &cfg, &gate).unwrap();
+
+        // A rescue/* branch now points at the exact lost oid...
+        let rescue = repo
+            .branches(Some(git2::BranchType::Local))
+            .unwrap()
+            .flatten()
+            .find_map(|(b, _)| {
+                let name = b.name().ok().flatten()?.to_string();
+                if name.starts_with("rescue/") {
+                    Some((name, b.get().target().unwrap()))
+                } else {
+                    None
+                }
+            })
+            .expect("a rescue/* branch should have been created");
+        assert_eq!(
+            rescue.1, lost_oid,
+            "rescue branch must point at the lost oid"
+        );
+
+        // ...and current HEAD + working tree are byte-for-byte untouched.
+        let repo_after = Repository::open(dir.path()).unwrap();
+        assert_eq!(
+            repo_after.head().unwrap().target().unwrap(),
+            head_before,
+            "HEAD must be untouched by a forensic restore"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("f.txt")).unwrap(),
+            f_before,
+            "working tree must be byte-for-byte untouched"
+        );
+    }
+}
+
+#[cfg(test)]
+trait RevwalkCount {
+    fn revwalk_count(&self) -> usize;
+}
+
+#[cfg(test)]
+impl RevwalkCount for git2::Repository {
+    fn revwalk_count(&self) -> usize {
+        let mut rw = self.revwalk().unwrap();
+        rw.push_head().unwrap();
+        rw.count()
     }
 }

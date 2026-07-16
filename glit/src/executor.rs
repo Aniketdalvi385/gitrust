@@ -17,15 +17,43 @@ pub struct DefaultExecutor<G: GitOperations> {
 impl<G: GitOperations> StepExecutor for DefaultExecutor<G> {
     fn execute(&self, repo: &mut git2::Repository, step: &PipelineStep) -> anyhow::Result<()> {
         use crate::git_ops::{hooks_for_op, should_route_to_system_git, HookOp};
-        // Hook-aware routing (S47): libgit2 never runs hooks, so route commit
-        // through system `git` when executable commit hooks are present (auto)
-        // or always (system). Push already shells out, so it needs no routing.
-        if let PipelineStep::Commit { message } = step {
-            let present = !hooks_for_op(repo, HookOp::Commit).is_empty();
-            if should_route_to_system_git(&self.hooks_mode, present) {
-                println!("  {}", crate::copy::HOOKS_USING_SYSTEM_GIT);
-                return self.git_ops.commit_system(repo, message).map(|_| ());
+        // Hook-aware routing (S47): libgit2 never runs hooks, so route ops that
+        // CREATE A COMMIT through system `git` when executable commit hooks are
+        // present (auto) or always (system). This covers Commit, Amend, and
+        // SquashLastN — all three commit and so must not silently bypass
+        // pre-commit / commit-msg / prepare-commit-msg (Phase 13 Q3). Push and
+        // Revert already shell out, so they need no routing; Revert in particular
+        // matches system git's hook behavior (no pre-commit on revert).
+        let commit_hooks_present = || !hooks_for_op(repo, HookOp::Commit).is_empty();
+        match step {
+            PipelineStep::Commit { message } => {
+                if should_route_to_system_git(&self.hooks_mode, commit_hooks_present()) {
+                    println!("  {}", crate::copy::HOOKS_USING_SYSTEM_GIT);
+                    return self.git_ops.commit_system(repo, message).map(|_| ());
+                }
             }
+            PipelineStep::Amend {
+                message,
+                include_staged,
+            } => {
+                if should_route_to_system_git(&self.hooks_mode, commit_hooks_present()) {
+                    println!("  {}", crate::copy::HOOKS_USING_SYSTEM_GIT);
+                    return self
+                        .git_ops
+                        .amend_system(repo, message.as_deref(), *include_staged)
+                        .map(|_| ());
+                }
+            }
+            PipelineStep::SquashLastN { n, message } => {
+                if should_route_to_system_git(&self.hooks_mode, commit_hooks_present()) {
+                    println!("  {}", crate::copy::HOOKS_USING_SYSTEM_GIT);
+                    return self
+                        .git_ops
+                        .squash_last_n_system(repo, *n, message)
+                        .map(|_| ());
+                }
+            }
+            _ => {}
         }
         crate::git_ops::execute_step(&self.git_ops, repo, step)
     }

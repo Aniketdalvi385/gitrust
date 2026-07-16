@@ -25,6 +25,11 @@ pub struct Config {
     /// Push already shells out unconditionally, so this knob governs commit.
     #[serde(default = "default_hooks")]
     pub hooks: String,
+    /// How many days GLit keeps trash-net backups (~/.glit/trash/<ts>/) before
+    /// pruning them on startup. The trash-net copies content that would be
+    /// deleted by a hard reset / discard-local / clean (Phase 14, S30/S62).
+    #[serde(default = "default_trash_retention_days")]
+    pub trash_retention_days: u64,
 }
 
 fn default_model() -> String {
@@ -45,6 +50,9 @@ fn default_ollama_url() -> String {
 fn default_hooks() -> String {
     "auto".to_string()
 }
+fn default_trash_retention_days() -> u64 {
+    7
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -55,6 +63,7 @@ impl Default for Config {
             log_enabled: default_log_enabled(),
             ollama_url: default_ollama_url(),
             hooks: default_hooks(),
+            trash_retention_days: default_trash_retention_days(),
         }
     }
 }
@@ -106,6 +115,7 @@ mod tests {
         assert!(config.log_enabled);
         assert_eq!(config.ollama_url, "http://localhost:11434");
         assert_eq!(config.hooks, "auto");
+        assert_eq!(config.trash_retention_days, 7);
     }
 
     #[test]

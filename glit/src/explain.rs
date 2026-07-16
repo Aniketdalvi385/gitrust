@@ -200,6 +200,57 @@ pub fn explain(op: &ScopedWriteOp) -> &'static Explanation {
             recovery: Some(Msg("Nothing to recover — this IS the recovery. Re-run the revert if you still want it.")),
             safety: Some(Msg("Restores via git's own machinery; committed history is untouched.")),
         },
+        // Repair vocabulary (Phase 13). UndoIntent is never executed directly —
+        // it resolves through the ChoiceGate — but explain() is exhaustive, so it
+        // gets a block describing the choice itself.
+        W::UndoIntent => &Explanation {
+            what: Msg("Recognizes that you want to undo the last commit and asks what should happen to its changes."),
+            risks: Msg("The four choices differ: keep staged, keep in files, make an inverse commit, or discard. Only 'discard' loses work."),
+            recovery: Some(Msg("Nothing happens until you choose. 'Discard' additionally requires typing to confirm.")),
+            safety: Some(Msg("The gate always spells out each option's consequence, so no undo ever silently destroys work.")),
+        },
+        W::Amend { .. } => &Explanation {
+            what: Msg("Rewrites your most recent commit — its message and/or the files it contains — in place."),
+            risks: Msg("Amending a commit that's already pushed rewrites published history and requires a force push."),
+            recovery: Some(Msg("The original commit lives in `git reflog` for ~90 days if you need it back.")),
+            safety: Some(Msg("If the commit is already on the remote, GLit escalates to a type-to-confirm before force-pushing with lease.")),
+        },
+        W::Revert { .. } => &Explanation {
+            what: Msg("Creates a NEW commit that undoes the changes of an earlier one — history is preserved."),
+            risks: Msg("If the earlier commit's lines have since changed, the revert can conflict and pause."),
+            recovery: Some(Msg("`git revert --abort` (or `glit \"abort revert\"`) backs out cleanly if it conflicts.")),
+            safety: Some(Msg("The team-safe undo: no history rewrite, no force push — safe even after pushing.")),
+        },
+        W::Unstage { .. } => &Explanation {
+            what: Msg("Moves files out of the staging area so they won't be in the next commit. File contents are untouched."),
+            risks: Msg("Only affects what's staged — your edits stay exactly as they are on disk."),
+            recovery: Some(Msg("Re-stage with `glit \"add\"` whenever you're ready.")),
+            safety: Some(Msg("Uses restore-staged semantics scoped to the named files — never a reset.")),
+        },
+        W::SetUpstream { .. } => &Explanation {
+            what: Msg("Configures which remote branch your current branch tracks, so plain push/pull know where to go."),
+            risks: Msg("Pointing at the wrong remote branch means push/pull target the wrong place. Config-only — no data touched."),
+            recovery: Some(Msg("Re-run with the correct remote/branch to fix it.")),
+            safety: None,
+        },
+        W::SquashLastN { .. } => &Explanation {
+            what: Msg("Combines your last N commits into a single commit, preserving the working tree exactly."),
+            risks: Msg("If any of those commits were already pushed, squashing rewrites published history and needs a force push."),
+            recovery: Some(Msg("The pre-squash commits live in `git reflog` for ~90 days.")),
+            safety: Some(Msg("Uses soft-reset + one commit (no interactive rebase); refuses if any of the N is a merge commit.")),
+        },
+        W::ForensicRecover => &Explanation {
+            what: Msg("Scans reflogs and dangling objects for commits no longer on any branch, and restores the one you pick onto a new rescue branch."),
+            risks: Msg("Nothing destructive — it only creates a branch. Work that was never committed, or already garbage-collected, can't be recovered."),
+            recovery: Some(Msg("The rescue branch is safe to delete if you didn't need it: `git branch -D rescue/...`.")),
+            safety: Some(Msg("Restore never touches your current branch, index, or files — it only adds a rescue/* branch.")),
+        },
+        W::CleanupIntent => &Explanation {
+            what: Msg("Removes local changes you no longer want — the gate asks exactly what to discard (tracked changes and/or untracked files)."),
+            risks: Msg("Untracked files have no git history; once deleted, only GLit's trash-net backup can bring them back."),
+            recovery: Some(Msg("Everything deleted is copied to ~/.glit/trash/ first and kept for the retention window.")),
+            safety: Some(Msg("The gate spells out counts before anything is removed, and the trash-net backs up first (fail-closed).")),
+        },
     }
 }
 
@@ -261,6 +312,18 @@ mod tests {
             ScopedWriteOp::DiscardLocal {
                 remote: "origin".into(),
             },
+            ScopedWriteOp::UndoIntent,
+            ScopedWriteOp::Amend {
+                message: None,
+                include_staged: false,
+            },
+            ScopedWriteOp::Revert { oid: "".into() },
+            ScopedWriteOp::Unstage { paths: vec![] },
+            ScopedWriteOp::SetUpstream {
+                remote: "origin".into(),
+                branch: "main".into(),
+            },
+            ScopedWriteOp::SquashLastN { n: 3 },
         ];
         for op in &ops {
             let e = explain(op);

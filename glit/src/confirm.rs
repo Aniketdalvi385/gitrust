@@ -108,8 +108,54 @@ impl ConfirmationGate for InquireGate {
                     None => Ok(GateResponse::Aborted),
                 }
             }
+
+            GateType::RecoveryBrowser { candidates } => {
+                if candidates.is_empty() {
+                    println!("{}", crate::copy::FORENSIC_NONE_FOUND);
+                    return Ok(GateResponse::Aborted);
+                }
+                println!();
+                println!("{}", crate::copy::FORENSIC_BROWSER_HEADER);
+                let labels: Vec<String> = candidates.iter().map(format_lost_commit).collect();
+                let selected = Select::new("Recover which commit?", labels.clone())
+                    .with_starting_cursor(0)
+                    .prompt()
+                    .context("Recovery browser prompt failed")?;
+                match labels.iter().position(|l| l == &selected) {
+                    Some(idx) => Ok(GateResponse::Chose(idx)),
+                    None => Ok(GateResponse::Aborted),
+                }
+            }
         }
     }
+}
+
+/// One recovery-browser row: "2 hours ago — 'feat: export csv' — 3 files [stash]".
+fn format_lost_commit(c: &crate::recovery::LostCommit) -> String {
+    let age = humanize_age(c.age_secs);
+    let stash = if c.is_stash_shaped { " [stash]" } else { "" };
+    format!(
+        "{} — '{}' — {} file{}{}",
+        age,
+        c.summary,
+        c.files_touched,
+        if c.files_touched == 1 { "" } else { "s" },
+        stash
+    )
+}
+
+/// Compact relative age: "just now" / "5 minutes ago" / "2 hours ago" / "3 days ago".
+fn humanize_age(secs: u64) -> String {
+    let (n, unit) = if secs < 60 {
+        return "just now".to_string();
+    } else if secs < 3600 {
+        (secs / 60, "minute")
+    } else if secs < 86400 {
+        (secs / 3600, "hour")
+    } else {
+        (secs / 86400, "day")
+    };
+    format!("{} {}{} ago", n, unit, if n == 1 { "" } else { "s" })
 }
 
 /// File multi-select bucketed by classifier confidence:
@@ -328,6 +374,14 @@ impl ConfirmationGate for AutoConfirmGate {
                      Run interactively and pick a strategy manually."
                 ))
             }
+            GateType::RecoveryBrowser { .. } => {
+                // --yes must NEVER auto-pick a commit to restore. Refuse,
+                // mirroring ChoiceGate/TypeToConfirm.
+                Err(anyhow::anyhow!(
+                    "--yes flag cannot pick a commit to recover. \
+                     Run interactively and choose from the recovery browser."
+                ))
+            }
         }
     }
 }
@@ -354,6 +408,13 @@ impl ConfirmationGate for MockGate {
 pub struct ScriptedGate {
     pub choice: usize,
     pub choice_shown: std::cell::Cell<bool>,
+    /// The number of options in the most-recently-shown `ChoiceGate` — lets the
+    /// undo-safety test assert the gate offered all four options (Phase 13).
+    pub last_choice_options: std::cell::Cell<usize>,
+    /// The labels of the most-recently-shown `ChoiceGate` (for reorder assertions).
+    pub last_choice_labels: std::cell::RefCell<Vec<String>>,
+    /// True if a `TypeToConfirm` gate was shown (undo-discard requires it).
+    pub type_to_confirm_shown: std::cell::Cell<bool>,
 }
 
 #[cfg(test)]
@@ -362,6 +423,9 @@ impl ScriptedGate {
         Self {
             choice,
             choice_shown: std::cell::Cell::new(false),
+            last_choice_options: std::cell::Cell::new(0),
+            last_choice_labels: std::cell::RefCell::new(Vec::new()),
+            type_to_confirm_shown: std::cell::Cell::new(false),
         }
     }
 }
@@ -371,7 +435,10 @@ impl ConfirmationGate for ScriptedGate {
     fn prompt(&self, gate: &GateType) -> anyhow::Result<GateResponse> {
         match gate {
             GateType::None | GateType::SimpleConfirm { .. } => Ok(GateResponse::Confirmed),
-            GateType::TypeToConfirm { .. } => Ok(GateResponse::Confirmed),
+            GateType::TypeToConfirm { .. } => {
+                self.type_to_confirm_shown.set(true);
+                Ok(GateResponse::Confirmed)
+            }
             GateType::EditableText { initial, .. } => {
                 Ok(GateResponse::TextProvided(initial.clone()))
             }
@@ -393,10 +460,22 @@ impl ConfirmationGate for ScriptedGate {
             }
             GateType::ChoiceGate { options, .. } => {
                 self.choice_shown.set(true);
+                self.last_choice_options.set(options.len());
+                *self.last_choice_labels.borrow_mut() =
+                    options.iter().map(|o| o.label.clone()).collect();
                 if options.is_empty() {
                     Ok(GateResponse::Aborted)
                 } else {
                     Ok(GateResponse::Chose(self.choice.min(options.len() - 1)))
+                }
+            }
+            GateType::RecoveryBrowser { candidates } => {
+                self.choice_shown.set(true);
+                self.last_choice_options.set(candidates.len());
+                if candidates.is_empty() {
+                    Ok(GateResponse::Aborted)
+                } else {
+                    Ok(GateResponse::Chose(self.choice.min(candidates.len() - 1)))
                 }
             }
         }
