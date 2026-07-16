@@ -425,7 +425,17 @@ impl Validator for DefaultValidator {
                 continue;
             }
             let has_relevant_step = steps.iter().any(|s| match op {
-                crate::git_ops::HookOp::Commit => matches!(s, PipelineStep::Commit { .. }),
+                // Commit, Amend, and SquashLastN all create a commit and route
+                // through system git under `auto`/`system` (Phase 13 Q3) — so the
+                // hook-routing note applies to all three. Revert shells out and
+                // matches system git's own hook behavior, so it does NOT trigger
+                // this GLit-vs-git2 parity note.
+                crate::git_ops::HookOp::Commit => matches!(
+                    s,
+                    PipelineStep::Commit { .. }
+                        | PipelineStep::Amend { .. }
+                        | PipelineStep::SquashLastN { .. }
+                ),
                 crate::git_ops::HookOp::Push => matches!(s, PipelineStep::Push { .. }),
             });
             if !has_relevant_step {
@@ -489,6 +499,49 @@ impl Validator for DefaultValidator {
                      This cannot be undone (except via git reflog)."
                         .to_string(),
                 ));
+            }
+        }
+
+        // 10. SquashLastN — block if any of the N commits is a merge commit
+        //     (squash-via-soft-reset can't linearize a merge, S40). This is a
+        //     hard correctness guard; the build path also checks, but keep the
+        //     pre-check as the execution-layer backstop.
+        for step in steps {
+            if let PipelineStep::SquashLastN { n, .. } = step {
+                if let Some(bad) = first_merge_in_last_n(repo, *n) {
+                    results.push(PreCheckResult::Block(format!(
+                        "Commit {} in the last {} is a merge commit — squash can't combine merge commits.",
+                        &bad[..7.min(bad.len())],
+                        n
+                    )));
+                }
+            }
+        }
+
+        // 11. PushedCommitRewrite — informational note when an Amend/Squash
+        //     rewrites a commit that's already on the remote (S33). The
+        //     destructive TypeToConfirm + force-with-lease routing is driven in
+        //     the build path (agent.rs); this is the preview/context line.
+        let rewrites_history = steps.iter().any(|s| {
+            matches!(
+                s,
+                PipelineStep::Amend { .. } | PipelineStep::SquashLastN { .. }
+            )
+        });
+        if rewrites_history {
+            if let Some(branch) = repo
+                .head()
+                .ok()
+                .and_then(|h| h.shorthand().map(String::from))
+            {
+                if let Some(head_oid) = repo.head().ok().and_then(|h| h.target()) {
+                    if crate::git_ops::commit_is_pushed(repo, "origin", &branch, head_oid) {
+                        results.push(PreCheckResult::Warn(
+                            "This rewrites a commit that's already on the remote — completing it needs a force push (with lease)."
+                                .to_string(),
+                        ));
+                    }
+                }
             }
         }
 
@@ -671,6 +724,21 @@ fn index_is_empty_vs_head(repo: &Repository) -> anyhow::Result<bool> {
 
 fn has_submodules(repo: &Repository) -> bool {
     repo.submodules().map(|s| !s.is_empty()).unwrap_or(false)
+}
+
+/// Return the oid (as a string) of the first merge commit among the last `n`
+/// commits from HEAD, if any — squash refuses to linearize merges (S40). Returns
+/// `None` when there are none, or when HEAD/ancestors can't be walked (the build
+/// path already guards those; this is a backstop).
+fn first_merge_in_last_n(repo: &Repository, n: u32) -> Option<String> {
+    let mut commit = repo.head().ok()?.peel_to_commit().ok()?;
+    for _ in 0..n {
+        if commit.parent_count() > 1 {
+            return Some(commit.id().to_string());
+        }
+        commit = commit.parent(0).ok()?;
+    }
+    None
 }
 
 fn is_likely_binary(path: &str) -> bool {
@@ -871,7 +939,7 @@ pub fn format_step_label(step: &PipelineStep) -> (&'static str, String) {
         PipelineStep::PullRebase { remote, branch } => {
             ("rebase", format!("onto {}/{}", remote, branch))
         }
-        PipelineStep::ForcePush { remote, branch } => (
+        PipelineStep::ForcePush { remote, branch, .. } => (
             "force push",
             format!("→ {}/{} (with-lease)", remote, branch),
         ),
@@ -892,6 +960,37 @@ pub fn format_step_label(step: &PipelineStep) -> (&'static str, String) {
         PipelineStep::CherryPickAbort => ("cherry-pick", "abort".to_string()),
         PipelineStep::RevertContinue => ("revert", "continue".to_string()),
         PipelineStep::RevertAbort => ("revert", "abort".to_string()),
+        PipelineStep::Amend { message, .. } => {
+            let detail = match message {
+                Some(m) if m.len() > 50 => format!("\"{}…\"", &m[..50]),
+                Some(m) => format!("\"{}\"", m),
+                None => "keep message".to_string(),
+            };
+            ("amend", detail)
+        }
+        PipelineStep::Revert { oid } => {
+            let short = if oid.len() >= 7 { &oid[..7] } else { oid };
+            ("revert", short.to_string())
+        }
+        PipelineStep::Unstage { paths } => {
+            let detail = if paths.len() <= 3 {
+                paths.join(", ")
+            } else {
+                format!("{} files", paths.len())
+            };
+            ("unstage", detail)
+        }
+        PipelineStep::SetUpstream { remote, branch } => {
+            ("set upstream", format!("→ {}/{}", remote, branch))
+        }
+        PipelineStep::SquashLastN { n, message } => {
+            let preview = if message.len() > 40 {
+                format!("{}…", &message[..40])
+            } else {
+                message.clone()
+            };
+            ("squash", format!("last {} → \"{}\"", n, preview))
+        }
     }
 }
 
@@ -1508,6 +1607,20 @@ mod tests {
                     mode: ResetMode::Hard,
                 }),
                 "undo" => IntentType::ScopedWrite(ScopedWriteOp::Undo),
+                // Phase 13 repair vocabulary — finding #12: the matrix is only
+                // law for the intents it names, so pin the new ones explicitly.
+                "undointent" => IntentType::ScopedWrite(ScopedWriteOp::UndoIntent),
+                "amend" => IntentType::ScopedWrite(ScopedWriteOp::Amend {
+                    message: None,
+                    include_staged: true,
+                }),
+                "revert" => IntentType::ScopedWrite(ScopedWriteOp::Revert { oid: "".into() }),
+                "unstage" => IntentType::ScopedWrite(ScopedWriteOp::Unstage { paths: vec![] }),
+                "squash" => IntentType::ScopedWrite(ScopedWriteOp::SquashLastN { n: 3 }),
+                "setupstream" => IntentType::ScopedWrite(ScopedWriteOp::SetUpstream {
+                    remote: "origin".into(),
+                    branch: "main".into(),
+                }),
                 "stash" => IntentType::ScopedWrite(ScopedWriteOp::Stash),
                 "add" => IntentType::ScopedWrite(ScopedWriteOp::Add {
                     files: FileSelection::All,
@@ -2182,6 +2295,87 @@ mod tests {
                 "merge_abort",
                 Some("rebase is in progress"),
             ),
+            // -----------------------------------------------------------------
+            // Phase 13 repair vocabulary (finding #12): the gate handles these
+            // via the generic ScopedWrite arms, but that behavior is only a
+            // CI-enforced guarantee once the matrix NAMES them.
+            // UndoIntent + Amend: allowed in Normal/Diverged, blocked in the Mid*
+            // states, redirected out of DetachedHead.
+            // -----------------------------------------------------------------
+            (RepoSituation::Normal, "undointent", None),
+            (RepoSituation::Normal, "amend", None),
+            (RepoSituation::Normal, "revert", None),
+            (RepoSituation::Normal, "unstage", None),
+            (RepoSituation::Normal, "squash", None),
+            (RepoSituation::Normal, "setupstream", None),
+            (
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1,
+                },
+                "undointent",
+                None,
+            ),
+            (
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1,
+                },
+                "amend",
+                None,
+            ),
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "undointent",
+                Some("rebase is in progress"),
+            ),
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "amend",
+                Some("rebase is in progress"),
+            ),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec!["f".into()],
+                    resolved: false,
+                },
+                "squash",
+                Some("merge is in progress"),
+            ),
+            (
+                RepoSituation::MidBisect,
+                "amend",
+                Some("bisect is in progress"),
+            ),
+            (
+                RepoSituation::MidRevert { conflicted: vec![] },
+                "revert",
+                Some("revert is in progress"),
+            ),
+            (
+                RepoSituation::DetachedHead {
+                    stranded_commits: 0,
+                },
+                "undointent",
+                Some("@redirect"),
+            ),
+            (
+                RepoSituation::DetachedHead {
+                    stranded_commits: 0,
+                },
+                "amend",
+                Some("@redirect"),
+            ),
+            (RepoSituation::EmptyRepo, "amend", Some("commits yet")),
+            (RepoSituation::EmptyRepo, "undointent", Some("commits yet")),
         ];
 
         for (situation, tag, expect) in &rows {

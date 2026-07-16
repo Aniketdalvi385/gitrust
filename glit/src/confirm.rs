@@ -354,6 +354,13 @@ impl ConfirmationGate for MockGate {
 pub struct ScriptedGate {
     pub choice: usize,
     pub choice_shown: std::cell::Cell<bool>,
+    /// The number of options in the most-recently-shown `ChoiceGate` — lets the
+    /// undo-safety test assert the gate offered all four options (Phase 13).
+    pub last_choice_options: std::cell::Cell<usize>,
+    /// The labels of the most-recently-shown `ChoiceGate` (for reorder assertions).
+    pub last_choice_labels: std::cell::RefCell<Vec<String>>,
+    /// True if a `TypeToConfirm` gate was shown (undo-discard requires it).
+    pub type_to_confirm_shown: std::cell::Cell<bool>,
 }
 
 #[cfg(test)]
@@ -362,6 +369,9 @@ impl ScriptedGate {
         Self {
             choice,
             choice_shown: std::cell::Cell::new(false),
+            last_choice_options: std::cell::Cell::new(0),
+            last_choice_labels: std::cell::RefCell::new(Vec::new()),
+            type_to_confirm_shown: std::cell::Cell::new(false),
         }
     }
 }
@@ -371,7 +381,10 @@ impl ConfirmationGate for ScriptedGate {
     fn prompt(&self, gate: &GateType) -> anyhow::Result<GateResponse> {
         match gate {
             GateType::None | GateType::SimpleConfirm { .. } => Ok(GateResponse::Confirmed),
-            GateType::TypeToConfirm { .. } => Ok(GateResponse::Confirmed),
+            GateType::TypeToConfirm { .. } => {
+                self.type_to_confirm_shown.set(true);
+                Ok(GateResponse::Confirmed)
+            }
             GateType::EditableText { initial, .. } => {
                 Ok(GateResponse::TextProvided(initial.clone()))
             }
@@ -393,6 +406,9 @@ impl ConfirmationGate for ScriptedGate {
             }
             GateType::ChoiceGate { options, .. } => {
                 self.choice_shown.set(true);
+                self.last_choice_options.set(options.len());
+                *self.last_choice_labels.borrow_mut() =
+                    options.iter().map(|o| o.label.clone()).collect();
                 if options.is_empty() {
                     Ok(GateResponse::Aborted)
                 } else {

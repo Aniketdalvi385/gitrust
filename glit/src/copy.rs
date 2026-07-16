@@ -157,11 +157,13 @@ pub fn reconcile_paused_block(op: &str, n: usize) -> String {
     }
 }
 
-// Sync (cross-branch) completion notes.
+// Sync (cross-branch) completion notes. Phase 13 completes the force-push flow
+// in-band (PushedCommitRewrite escalation + force-with-lease), so the note now
+// only covers the case where the user DECLINED the force push.
 pub fn sync_rebase_force_note(target: &str) -> String {
     format!(
-        "Rebased onto {target} — pushing this branch needs a force push; that flow lands next \
-         phase, or push manually with `git push --force-with-lease`."
+        "Rebased onto {target}. Not pushed — pushing this rebased branch needs a force push; \
+         re-run and confirm, or push manually with `git push --force-with-lease`."
     )
 }
 pub const SYNC_MERGE_BEHIND_NOTE: &str =
@@ -174,3 +176,56 @@ pub fn reconcile_up_to_date(target: &str) -> String {
 pub fn reconcile_fast_forwarded(target: &str) -> String {
     format!("Fast-forwarded to {target} — no merge or rebase needed.")
 }
+
+// =============================================================================
+// Undo disambiguation gate (Phase 13 — S34/P6). The classifier only recognizes
+// undo-language → UndoIntent; this deterministic ChoiceGate decides the
+// semantic. The four consequence sentences + the pushed-reorder rationale.
+// =============================================================================
+
+/// The gate question, always naming the target commit so the user sees exactly
+/// what is being undone.
+pub fn undo_gate_question(short_sha: &str, summary: &str) -> String {
+    format!("Undo {short_sha} \"{summary}\" — what should happen to its changes?")
+}
+
+pub const UNDO_KEEP_STAGED_CONSEQUENCE: &str =
+    "keep them staged (soft reset) — the commit is removed, files stay ready to re-commit.";
+pub const UNDO_KEEP_IN_FILES_CONSEQUENCE: &str =
+    "keep them in your files, unstaged (mixed reset) — re-stage what you want before committing.";
+pub const UNDO_REVERT_CONSEQUENCE: &str =
+    "add an inverse commit (revert) — history is preserved; safe even after pushing.";
+pub const UNDO_DISCARD_CONSEQUENCE: &str =
+    "discard them completely (hard reset) — the changes are gone (reflog holds them ~90 days). Requires typing to confirm.";
+
+/// Prepended to the Revert consequence when HEAD is already on the remote — the
+/// gate reorders Revert first and says why.
+pub const UNDO_PUSHED_WHY: &str =
+    "This commit is already on the remote, so revert is the safe default: ";
+
+/// Guidance returned (as an Err) when the user asked to undo more than one
+/// commit — v1 undo is single-HEAD only (P6: never act on an LLM-extracted count).
+pub fn undo_multi_commit_guidance(n: u32) -> String {
+    format!(
+        "Multi-commit undo isn't supported yet. Did you mean: squash the last {n} into one \
+         (glit \"squash last {n}\"), revert a specific commit, or undo just the most recent \
+         (glit \"undo\")?"
+    )
+}
+
+// =============================================================================
+// PushedCommitRewrite escalation (Phase 13 — S33). Rewriting a published commit
+// (amend / squash) needs a force push; escalate with a type-to-confirm.
+// =============================================================================
+
+/// The type-to-confirm message when an amend/squash targets a pushed commit.
+pub fn pushed_rewrite_confirm(branch: &str) -> String {
+    format!(
+        "This rewrites a commit that's already on the remote — pushing it needs a force push. \
+         Type '{branch}' to confirm the rewrite + force-push (with lease):"
+    )
+}
+
+/// Info line shown when the pushed-rewrite escalation is entered.
+pub const PUSHED_REWRITE_WARNING: &str =
+    "Heads up: the target commit is already published. Amending/squashing it rewrites shared history.";

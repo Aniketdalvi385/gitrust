@@ -143,7 +143,46 @@ pub enum ScopedWriteOp {
         remote: String,
     },
     /// "undo last commit" — soft-reset HEAD to its parent, files stay staged.
+    /// This is the concrete soft-reset primitive the undo ChoiceGate resolves
+    /// to for the "keep staged" choice. The classifier NEVER emits it directly;
+    /// all undo-language classifies to `UndoIntent` (P6 — the LLM recognizes
+    /// undo, the deterministic gate decides the semantic).
     Undo,
+    /// Ambiguous undo-language (S34/P6). The classifier's ONLY undo target. A
+    /// deterministic ChoiceGate (`build_undo_intent`) resolves it into one of
+    /// {Undo(soft) / Reset Mixed / Revert / Reset Hard}. No undo phrase reaches
+    /// a destructive mode without the gate having offered every option.
+    UndoIntent,
+    /// "amend"/"fix my last commit message"/"add forgotten file" (S32). `message`
+    /// = new message when the user gave one, else keep the existing (`--no-edit`).
+    /// `include_staged` folds currently-staged changes into the commit.
+    Amend {
+        message: Option<String>,
+        include_staged: bool,
+    },
+    /// "revert that commit" (S38) — the default *public* undo: a history-
+    /// preserving inverse commit, team-safe, no force. `oid` resolves to HEAD at
+    /// build time in v1 (empty = HEAD).
+    Revert {
+        oid: String,
+    },
+    /// "unstage" / "unstage <file>" (S39) — `restore --staged` semantics, scoped
+    /// to paths, NEVER a reset mode. Empty here means "all staged"; the concrete
+    /// staged-path list is enumerated at build time (nothing ambiguous reaches
+    /// the executor).
+    Unstage {
+        paths: Vec<String>,
+    },
+    /// "set upstream" / "track origin/<branch>" — configure the branch's upstream.
+    SetUpstream {
+        remote: String,
+        branch: String,
+    },
+    /// "squash my last N commits" (S40) — soft reset to HEAD~N + one commit. No
+    /// interactive rebase; preserves the working tree and the resulting tree oid.
+    SquashLastN {
+        n: u32,
+    },
     /// `git pull --rebase` — replays local commits on top of remote.
     PullRebase {
         remote: String,
@@ -278,10 +317,44 @@ pub enum PipelineStep {
         remote: String,
         branch: String,
     },
-    /// Run `git push --force-with-lease <remote> <branch>` as a subprocess.
+    /// Run `git push --force-with-lease[=<branch>:<oid>] <remote> <branch>` as a
+    /// subprocess. When `expect_oid` is `Some`, the lease is pinned to that oid
+    /// (captured at GLit's own fetch) so a background fetch advancing the tracking
+    /// ref during a long conflict resolution can't silently satisfy the lease
+    /// (TOCTOU hardening). `None` = bare `--force-with-lease` (classifier path).
     ForcePush {
         remote: String,
         branch: String,
+        expect_oid: Option<String>,
+    },
+    /// Amend HEAD (S32). Routed through system git when commit hooks are present
+    /// (executor), so it never becomes a hook bypass (9.3/S47). `message = None`
+    /// keeps the existing message (`--no-edit`).
+    Amend {
+        message: Option<String>,
+        include_staged: bool,
+    },
+    /// Inverse commit of `oid` (S38). Shells out to `git revert --no-edit` for
+    /// sequencer-state parity + MidRevert conflict handoff. `oid` is a full SHA.
+    Revert {
+        oid: String,
+    },
+    /// Unstage the named paths (S39) — `restore --staged` semantics. `paths` is
+    /// always concrete (enumerated at build time), never an empty-means-all sentinel.
+    Unstage {
+        paths: Vec<String>,
+    },
+    /// Set the branch's upstream to `remote/branch`.
+    SetUpstream {
+        remote: String,
+        branch: String,
+    },
+    /// Squash the last `n` commits into one (S40) — soft reset to HEAD~n + a
+    /// single commit with `message` (resolved at build time). Routes through the
+    /// same commit-hook logic as `Commit`/`Amend`.
+    SquashLastN {
+        n: u32,
+        message: String,
     },
     /// Run `git fetch <remote>` then `git reset --hard <remote>/<branch>` as a subprocess.
     DiscardLocal {

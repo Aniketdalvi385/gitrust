@@ -150,6 +150,20 @@ pub fn intent_danger(op: &ScopedWriteOp, ctx: &RepoContext) -> DangerLevel {
         | W::RebaseContinue
         | W::CherryPickContinue
         | W::RevertContinue => DangerLevel::Caution,
+
+        // Repair vocabulary (Phase 13). Amend/Squash rewrite HEAD — reflog-
+        // recoverable locally → Caution. The Hard-adjacent escalation for a
+        // PUSHED commit (force-push required) is enforced by the build-path
+        // `PushedCommitRewrite` TypeToConfirm gate, not by this marker (pushed-
+        // ness isn't in `RepoContext`). Revert is history-preserving and team-
+        // safe — the steered-toward default. Unstage is index-only (contents
+        // safe). SetUpstream is config-only.
+        W::UndoIntent
+        | W::Amend { .. }
+        | W::SquashLastN { .. }
+        | W::Revert { .. }
+        | W::Unstage { .. }
+        | W::SetUpstream { .. } => DangerLevel::Caution,
     }
 }
 
@@ -230,6 +244,15 @@ pub fn step_danger(step: &PipelineStep, ctx: &RepoContext) -> DangerLevel {
         | P::RebaseContinue
         | P::CherryPickContinue
         | P::RevertContinue => DangerLevel::Caution,
+
+        // Repair vocabulary (Phase 13) — reflog-recoverable / index-only /
+        // config-only, all Caution. The pushed-commit-rewrite escalation is the
+        // build-path TypeToConfirm gate, not this marker.
+        P::Amend { .. }
+        | P::Revert { .. }
+        | P::Unstage { .. }
+        | P::SetUpstream { .. }
+        | P::SquashLastN { .. } => DangerLevel::Caution,
     }
 }
 

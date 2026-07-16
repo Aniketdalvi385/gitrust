@@ -100,8 +100,23 @@ pub fn try_canonical(query: &str) -> Option<IntentType> {
         "show" | "show head" | "last commit" | "commit details" | "last commit details" => {
             IntentType::ReadOnly(ReadOnlyOp::Show { target: None })
         }
-        "undo" | "undo last commit" | "undo commit" | "unstage commit" => {
-            IntentType::ScopedWrite(ScopedWriteOp::Undo)
+        // All undo-language classifies to the ambiguous UndoIntent (P6). The
+        // deterministic ChoiceGate — never the classifier — picks the semantic.
+        // No arm here emits `ScopedWriteOp::Undo` directly.
+        "undo" | "undo last commit" | "undo commit" | "take back" | "take it back"
+        | "that was wrong" | "undo that" => IntentType::ScopedWrite(ScopedWriteOp::UndoIntent),
+        // Repair vocabulary (Phase 13 — S32/S38/S39). oid/paths resolve at build.
+        "revert" | "revert last commit" | "revert that" | "revert commit" => {
+            IntentType::ScopedWrite(ScopedWriteOp::Revert { oid: String::new() })
+        }
+        "unstage" | "unstage all" | "unstage everything" | "unstage commit" => {
+            IntentType::ScopedWrite(ScopedWriteOp::Unstage { paths: vec![] })
+        }
+        "amend" | "amend commit" | "amend last commit" => {
+            IntentType::ScopedWrite(ScopedWriteOp::Amend {
+                message: None,
+                include_staged: true,
+            })
         }
         // Remote-sync queries — fetch first so ahead/behind is actually fresh.
         "fetch"
@@ -402,7 +417,37 @@ fn build_intent_type(ri: &RawIntent, query: &str) -> anyhow::Result<IntentType> 
                 },
                 "init" => ScopedWriteOp::Init,
                 "delete_repo" => ScopedWriteOp::DeleteRepo,
-                "undo" => ScopedWriteOp::Undo,
+                // P6: undo-language is ambiguous → UndoIntent, never a concrete
+                // undo semantic. The ChoiceGate decides.
+                "undo" => ScopedWriteOp::UndoIntent,
+                "amend" => ScopedWriteOp::Amend {
+                    message: if ri.message.is_empty() {
+                        None
+                    } else {
+                        Some(ri.message.clone())
+                    },
+                    include_staged: true,
+                },
+                "revert" => ScopedWriteOp::Revert {
+                    // Empty = HEAD (resolved at build time). A specific target in
+                    // feature_hint resolves there too.
+                    oid: ri.feature_hint.clone(),
+                },
+                "unstage" => ScopedWriteOp::Unstage {
+                    paths: ri.files.clone(),
+                },
+                "set_upstream" => ScopedWriteOp::SetUpstream {
+                    remote: if ri.remote_name.is_empty() {
+                        "origin".to_string()
+                    } else {
+                        ri.remote_name.clone()
+                    },
+                    // Empty = current branch (resolved at build time).
+                    branch: ri.feature_hint.clone(),
+                },
+                "squash" => ScopedWriteOp::SquashLastN {
+                    n: ri.count.unwrap_or(2) as u32,
+                },
                 "pull_rebase" | "rebase" => ScopedWriteOp::PullRebase {
                     remote: if ri.remote_name.is_empty() {
                         "origin".to_string()
@@ -692,6 +737,7 @@ fn classifier_schema() -> serde_json::Value {
                     "fetch", "merge_preview",
                     "pull_rebase", "rebase", "force_push", "force_push_with_lease",
                     "discard_local", "reset_to_remote",
+                    "amend", "revert", "unstage", "set_upstream", "squash",
                     ""
                 ]
             },
