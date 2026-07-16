@@ -188,11 +188,107 @@ pub trait GitOperations {
     fn cherry_pick_abort(&self, repo: &Repository) -> anyhow::Result<()>;
     fn revert_continue(&self, repo: &Repository) -> anyhow::Result<()>;
     fn revert_abort(&self, repo: &Repository) -> anyhow::Result<()>;
+
+    // Forensic recovery + destructive-safety (Phase 14 — S21/S24/S62).
+    /// Create a branch `name` pointing at `oid`, WITHOUT checking it out and
+    /// WITHOUT touching HEAD/index/working tree — the non-destructive restore
+    /// target for the recovery browser. Non-force, so it never clobbers an
+    /// existing branch.
+    fn create_branch_at(&self, repo: &Repository, name: &str, oid: &str) -> anyhow::Result<()>;
+    /// Delete untracked files (`git clean -fd`). Backs up the untracked set to
+    /// the trash-net FIRST (fail-closed) — see the trash-net convention below.
+    fn clean(&self, repo: &Repository) -> anyhow::Result<()>;
+
+    // ── Trash-net convention (Phase 14 invariant, sibling to "the LLM never
+    //    executes"): ANY destructive method that deletes content NOT in the
+    //    object database — untracked files, tracked working-tree modifications —
+    //    MUST back that content up to the trash-net (`crate::trash`) BEFORE the
+    //    destructive git call, and MUST fail-closed: if the backup errors, return
+    //    `Err` and do NOT destroy. Today that means `reset` (Hard),
+    //    `discard_local_to_remote`, and `clean`. New destructive methods inherit
+    //    this by convention — see `backup_worktree_delta` / `backup_untracked`.
 }
 
 /// Open a repository by discovering it from the given path.
 pub fn open_repo(path: &std::path::Path) -> anyhow::Result<Repository> {
     Repository::discover(path).context("Not a git repository. Run: git init")
+}
+
+// =============================================================================
+// Trash-net backup helpers (Phase 14). Each backs up EXACTLY what its op
+// destroys (verified, not assumed): hard reset / discard-local destroy tracked
+// working-tree modifications; clean destroys untracked files. Both take the
+// trash root explicitly so the fail-closed contract is unit-testable at this
+// seam (pass an unwritable root → Err → caller aborts, nothing deleted).
+// =============================================================================
+
+/// Files under the workdir that a `reset --hard` (or discard-local) would
+/// discard: tracked entries with working-tree modifications (modified/typechange
+/// /deleted-in-worktree). Untracked files are NOT included — reset does not touch
+/// them. Returns repo-relative paths.
+fn tracked_modified_paths(repo: &Repository) -> Vec<std::path::PathBuf> {
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(false).include_ignored(false);
+    let mut out = Vec::new();
+    if let Ok(statuses) = repo.statuses(Some(&mut opts)) {
+        for e in statuses.iter() {
+            let s = e.status();
+            if s.intersects(
+                git2::Status::WT_MODIFIED
+                    | git2::Status::WT_TYPECHANGE
+                    | git2::Status::WT_DELETED
+                    | git2::Status::WT_RENAMED,
+            ) {
+                if let Some(p) = e.path() {
+                    out.push(std::path::PathBuf::from(p));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Untracked entries that `git clean -fd` would delete. Sets
+/// `recurse_untracked_dirs(true)` so an untracked DIRECTORY is enumerated as its
+/// contained files, not a single collapsed entry — otherwise the recursive
+/// backup would have nothing to copy and files inside untracked dirs would be
+/// deleted un-backed-up (the trash-net's one job, exactly where untracked
+/// content lives). Returns repo-relative paths.
+fn untracked_paths(repo: &Repository) -> Vec<std::path::PathBuf> {
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_ignored(false);
+    let mut out = Vec::new();
+    if let Ok(statuses) = repo.statuses(Some(&mut opts)) {
+        for e in statuses.iter() {
+            if e.status().contains(git2::Status::WT_NEW) {
+                if let Some(p) = e.path() {
+                    out.push(std::path::PathBuf::from(p));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Back up `paths` (repo-relative) to `trash_root` before a destructive op.
+/// Fail-closed: propagates any backup error so the caller aborts. Returns the
+/// backup dir when something was backed up, `None` when `paths` is empty (no
+/// backup needed — e.g. a clean working tree).
+fn backup_before_destroy(
+    repo: &Repository,
+    trash_root: &std::path::Path,
+    paths: &[std::path::PathBuf],
+) -> anyhow::Result<Option<std::path::PathBuf>> {
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    let workdir = repo
+        .workdir()
+        .ok_or_else(|| anyhow::anyhow!("cannot back up: bare repository has no working tree"))?;
+    let dir = crate::trash::backup_to_trash(trash_root, workdir, paths)?;
+    Ok(Some(dir))
 }
 
 /// Resolve a remote's default branch via `refs/remotes/<remote>/HEAD` (the
@@ -617,6 +713,51 @@ pub fn should_route_to_system_git(hooks_mode: &str, hooks_present: bool) -> bool
 /// Default git2-backed implementation.
 pub struct Git2Operations;
 
+impl Git2Operations {
+    /// `reset` with an explicit trash root so the fail-closed contract is
+    /// testable at this seam. For `Hard`, backs up tracked working-tree
+    /// modifications to `trash_root` BEFORE resetting; a backup error aborts the
+    /// reset (nothing discarded). Soft/Mixed don't touch the working tree, so
+    /// they skip the backup.
+    pub fn reset_with_trash_root(
+        &self,
+        repo: &Repository,
+        mode: ResetMode,
+        trash_root: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        if matches!(mode, ResetMode::Hard) {
+            let paths = tracked_modified_paths(repo);
+            backup_before_destroy(repo, trash_root, &paths)?; // fail-closed
+        }
+        let head = repo.head().context("No HEAD to reset to")?;
+        let commit = head
+            .peel_to_commit()
+            .context("HEAD does not point to a commit")?;
+        let reset_type = match mode {
+            ResetMode::Soft => git2::ResetType::Soft,
+            ResetMode::Mixed => git2::ResetType::Mixed,
+            ResetMode::Hard => git2::ResetType::Hard,
+        };
+        repo.reset(commit.as_object(), reset_type, None)
+            .with_context(|| format!("Reset ({:?}) failed", mode))?;
+        Ok(())
+    }
+
+    /// `clean` with an explicit trash root. Backs up the untracked set to
+    /// `trash_root` BEFORE `git clean -fd`; a backup error aborts (nothing
+    /// deleted). Returns the trash dir when a backup was written.
+    pub fn clean_with_trash_root(
+        &self,
+        repo: &Repository,
+        trash_root: &std::path::Path,
+    ) -> anyhow::Result<Option<std::path::PathBuf>> {
+        let paths = untracked_paths(repo);
+        let backup = backup_before_destroy(repo, trash_root, &paths)?; // fail-closed
+        run_git_in_repo(repo, &["clean", "-fd"])?;
+        Ok(backup)
+    }
+}
+
 impl GitOperations for Git2Operations {
     fn add(&self, repo: &Repository, files: &[String]) -> anyhow::Result<()> {
         let mut index = repo.index().context("Failed to read index")?;
@@ -879,21 +1020,8 @@ impl GitOperations for Git2Operations {
     }
 
     fn reset(&self, repo: &Repository, mode: ResetMode) -> anyhow::Result<()> {
-        let head = repo.head().context("No HEAD to reset to")?;
-        let commit = head
-            .peel_to_commit()
-            .context("HEAD does not point to a commit")?;
-        let object = commit.as_object();
-
-        let reset_type = match mode {
-            ResetMode::Soft => git2::ResetType::Soft,
-            ResetMode::Mixed => git2::ResetType::Mixed,
-            ResetMode::Hard => git2::ResetType::Hard,
-        };
-
-        repo.reset(object, reset_type, None)
-            .with_context(|| format!("Reset ({:?}) failed", mode))?;
-        Ok(())
+        let trash_root = crate::trash::trash_dir()?;
+        self.reset_with_trash_root(repo, mode, &trash_root)
     }
 
     fn log(&self, repo: &Repository, count: u8) -> anyhow::Result<Vec<String>> {
@@ -1381,6 +1509,12 @@ impl GitOperations for Git2Operations {
     ) -> anyhow::Result<()> {
         // Fetch first so the remote-tracking ref is fresh.
         run_git_in_repo(repo, &["fetch", remote])?;
+        // Trash-net (fail-closed): this is a `reset --hard`, so back up tracked
+        // working-tree modifications BEFORE it. (Discarded commits stay in the
+        // reflog and need no backup.) A backup error aborts the discard.
+        let trash_root = crate::trash::trash_dir()?;
+        let paths = tracked_modified_paths(repo);
+        backup_before_destroy(repo, &trash_root, &paths)?;
         let target = format!("{}/{}", remote, branch);
         run_git_in_repo(repo, &["reset", "--hard", &target])
     }
@@ -1491,6 +1625,24 @@ impl GitOperations for Git2Operations {
     }
     fn revert_abort(&self, repo: &Repository) -> anyhow::Result<()> {
         run_git_in_repo(repo, &["revert", "--abort"])
+    }
+
+    fn create_branch_at(&self, repo: &Repository, name: &str, oid: &str) -> anyhow::Result<()> {
+        let oid = git2::Oid::from_str(oid)
+            .with_context(|| format!("Invalid oid for branch restore: {}", oid))?;
+        let commit = repo
+            .find_commit(oid)
+            .with_context(|| format!("Cannot find commit {} to restore", oid))?;
+        // Non-force, no checkout, no HEAD/index/worktree change — purely creates
+        // a ref, so it can never worsen the current situation (Phase 14, Q4).
+        repo.branch(name, &commit, false)
+            .with_context(|| format!("Failed to create rescue branch '{}'", name))?;
+        Ok(())
+    }
+
+    fn clean(&self, repo: &Repository) -> anyhow::Result<()> {
+        let trash_root = crate::trash::trash_dir()?;
+        self.clean_with_trash_root(repo, &trash_root).map(|_| ())
     }
 
     fn get_status_summary(&self, repo: &Repository) -> anyhow::Result<StatusSummary> {
@@ -1659,6 +1811,7 @@ pub fn execute_step(
         }
         PipelineStep::Merge { source, message } => ops.merge(repo, source, message),
         PipelineStep::Rebase { onto } => ops.rebase(repo, onto),
+        PipelineStep::Clean { .. } => ops.clean(repo),
         PipelineStep::Amend {
             message,
             include_staged,
@@ -2433,6 +2586,109 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
             classified.class,
             classified.raw_stderr
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Trash-net seam (Phase 14). Fail-closed + byte-identical, tested at the
+    // git_ops method seam via the `*_with_trash_root` entry points.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn clean_backs_up_nested_untracked_dir_then_deletes() {
+        let dir = TempDir::new().unwrap();
+        let repo = init_repo_with_commit(&dir);
+        let trash = TempDir::new().unwrap();
+        // A NESTED untracked dir — the case git2 status collapses to one entry.
+        std::fs::create_dir_all(dir.path().join("newdir/inner")).unwrap();
+        std::fs::write(dir.path().join("newdir/inner/file.txt"), b"deep content").unwrap();
+
+        let backup = Git2Operations
+            .clean_with_trash_root(&repo, trash.path())
+            .unwrap()
+            .expect("a backup dir should have been written");
+
+        // Deleted from the working tree...
+        assert!(
+            !dir.path().join("newdir/inner/file.txt").exists(),
+            "clean must delete the untracked file"
+        );
+        // ...and byte-identical in the trash (the recursion hole would drop this).
+        let backed = std::fs::read(backup.join("newdir/inner/file.txt")).unwrap();
+        assert_eq!(backed, b"deep content");
+    }
+
+    #[test]
+    fn reset_hard_backs_up_tracked_delta_not_untracked() {
+        let dir = TempDir::new().unwrap();
+        let repo = init_repo_with_commit(&dir);
+        let trash = TempDir::new().unwrap();
+        // Modify a tracked file (at risk) and add an untracked one (NOT at risk).
+        std::fs::write(dir.path().join("test.txt"), b"modified tracked").unwrap();
+        std::fs::write(dir.path().join("untracked.txt"), b"safe").unwrap();
+
+        Git2Operations
+            .reset_with_trash_root(&repo, ResetMode::Hard, trash.path())
+            .unwrap();
+
+        // The tracked modification was backed up byte-identical...
+        let dirs: Vec<_> = std::fs::read_dir(trash.path()).unwrap().flatten().collect();
+        assert_eq!(dirs.len(), 1, "one timestamped backup dir");
+        let backup = dirs[0].path();
+        assert_eq!(
+            std::fs::read(backup.join("test.txt")).unwrap(),
+            b"modified tracked"
+        );
+        // ...and the untracked file was NOT backed up (reset doesn't destroy it).
+        assert!(
+            !backup.join("untracked.txt").exists(),
+            "untracked file must not be in the reset backup (reset never touches it)"
+        );
+        // Working tree reset to committed content.
+        assert_eq!(
+            std::fs::read(dir.path().join("test.txt")).unwrap(),
+            b"hello"
+        );
+    }
+
+    #[test]
+    fn reset_hard_fails_closed_when_trash_unwritable() {
+        let dir = TempDir::new().unwrap();
+        let repo = init_repo_with_commit(&dir);
+        // Trash root under a regular file → create_dir_all fails → backup Err.
+        let blocker = TempDir::new().unwrap();
+        let file_path = blocker.path().join("not-a-dir");
+        std::fs::write(&file_path, b"x").unwrap();
+        let bad_root = file_path.join("trash");
+
+        std::fs::write(dir.path().join("test.txt"), b"precious edit").unwrap();
+        let res = Git2Operations.reset_with_trash_root(&repo, ResetMode::Hard, &bad_root);
+        assert!(res.is_err(), "reset must fail-closed on backup failure");
+        // Nothing was destroyed: the working-tree edit survives intact.
+        assert_eq!(
+            std::fs::read(dir.path().join("test.txt")).unwrap(),
+            b"precious edit",
+            "fail-closed: the tracked modification must survive"
+        );
+    }
+
+    #[test]
+    fn create_branch_at_restores_without_touching_head() {
+        let dir = TempDir::new().unwrap();
+        let repo = init_repo_with_commit(&dir);
+        let target = repo.head().unwrap().target().unwrap();
+        let head_before = repo.head().unwrap().target().unwrap();
+
+        Git2Operations
+            .create_branch_at(&repo, "rescue/test", &target.to_string())
+            .unwrap();
+
+        // The rescue branch points at the target oid...
+        let b = repo
+            .find_branch("rescue/test", git2::BranchType::Local)
+            .unwrap();
+        assert_eq!(b.get().target().unwrap(), target);
+        // ...and HEAD is untouched.
+        assert_eq!(repo.head().unwrap().target().unwrap(), head_before);
     }
 }
 

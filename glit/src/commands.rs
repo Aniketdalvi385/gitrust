@@ -153,6 +153,18 @@ pub enum ScopedWriteOp {
     /// {Undo(soft) / Reset Mixed / Revert / Reset Hard}. No undo phrase reaches
     /// a destructive mode without the gate having offered every option.
     UndoIntent,
+    /// "find my lost work" / "I lost a commit" / "recover" (Phase 14, S24/26/27).
+    /// Runs the forensic scan → RecoveryBrowser → restore-to-rescue-branch. It
+    /// only CREATES a ref (never touches current HEAD/index/worktree), so it is
+    /// allowed in ANY situation — the situation gate treats it as read-only
+    /// against current state. Distinct from `glit --recover` (the snapshot path).
+    ForensicRecover,
+    /// Ambiguous destructive-cleanup language (Phase 14, S62 / P6): "clean up",
+    /// "start fresh", "throw away my changes". The classifier's ONLY cleanup
+    /// target — like `UndoIntent`, a deterministic ChoiceGate spells out what
+    /// would be deleted (tracked vs untracked, with counts) before any
+    /// `Clean`/`Reset::Hard` is constructed. The LLM never picks the semantic.
+    CleanupIntent,
     /// "amend"/"fix my last commit message"/"add forgotten file" (S32). `message`
     /// = new message when the user gave one, else keep the existing (`--no-edit`).
     /// `include_staged` folds currently-staged changes into the commit.
@@ -392,6 +404,14 @@ pub enum PipelineStep {
     Rebase {
         onto: String,
     },
+    /// Delete untracked files (`git clean -fd`) — Phase 14 / S62. `trash_net` is
+    /// always `true`: the destroyed untracked content is backed up to
+    /// `~/.glit/trash/` first (it has no reflog — the trash-net is its only
+    /// safety). Produced ONLY by the destructive-phrase ChoiceGate, never the
+    /// classifier. Graded `Irreversible` (above hard reset) in `danger.rs`.
+    Clean {
+        trash_net: bool,
+    },
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -541,6 +561,15 @@ pub enum GateType {
     ChoiceGate {
         question: String,
         options: Vec<ChoiceOption>,
+    },
+    /// Forensic recovery browser (Phase 14 — S24/S26/S27). Lists lost-commit
+    /// candidates; the user picks one to restore. Restore is ALWAYS
+    /// non-destructive (a `rescue/*` branch at the chosen oid), so a wrong pick
+    /// costs only a spare branch. `--yes` REFUSES this gate (never auto-pick a
+    /// commit to restore — see `AutoConfirmGate`). Single-select in v1
+    /// (`GateResponse::Chose`); multi-restore is Tier-2.
+    RecoveryBrowser {
+        candidates: Vec<crate::recovery::LostCommit>,
     },
 }
 

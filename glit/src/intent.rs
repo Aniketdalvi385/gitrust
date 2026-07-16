@@ -118,6 +118,33 @@ pub fn try_canonical(query: &str) -> Option<IntentType> {
                 include_staged: true,
             })
         }
+        // Forensic recovery (Phase 14 — S24/26/27). Distinct from `glit --recover`
+        // (the snapshot path): this hunts reflogs + dangling objects for lost
+        // commits and restores to a rescue branch.
+        "find my lost work"
+        | "find lost work"
+        | "i lost a commit"
+        | "i lost my work"
+        | "lost commit"
+        | "lost commits"
+        | "recover lost work"
+        | "recover lost commit"
+        | "find lost commits" => IntentType::ScopedWrite(ScopedWriteOp::ForensicRecover),
+        // Destructive-phrase routing (Phase 14 — S62). Deterministic table (NOT
+        // the LLM) maps innocent-sounding cleanup language to the ambiguous
+        // CleanupIntent; a ChoiceGate then spells out what would be deleted. No
+        // arm emits a concrete Clean/Reset::Hard — the gate decides.
+        "clean up"
+        | "clean up my repo"
+        | "clean up repo"
+        | "start fresh"
+        | "get rid of my changes"
+        | "get rid of these changes"
+        | "throw away my changes"
+        | "throw away changes"
+        | "discard everything"
+        | "discard all my changes"
+        | "nuke my changes" => IntentType::ScopedWrite(ScopedWriteOp::CleanupIntent),
         // Remote-sync queries — fetch first so ahead/behind is actually fresh.
         "fetch"
         | "check remote"
@@ -420,6 +447,16 @@ fn build_intent_type(ri: &RawIntent, query: &str) -> anyhow::Result<IntentType> 
                 // P6: undo-language is ambiguous → UndoIntent, never a concrete
                 // undo semantic. The ChoiceGate decides.
                 "undo" => ScopedWriteOp::UndoIntent,
+                // Phase 14: forensic recovery (find/restore lost commits) and the
+                // ambiguous destructive-cleanup intent (S62 — the ChoiceGate, not
+                // the LLM, picks what to delete). Neither emits a concrete
+                // destructive step here.
+                "find_lost_work" | "forensic_recover" | "recover_lost" => {
+                    ScopedWriteOp::ForensicRecover
+                }
+                "cleanup" | "clean_up" | "start_fresh" | "discard_changes" => {
+                    ScopedWriteOp::CleanupIntent
+                }
                 "amend" => ScopedWriteOp::Amend {
                     message: if ri.message.is_empty() {
                         None

@@ -15,6 +15,13 @@ pub struct PipelineSnapshot {
     pub branch_name: Option<String>,
     pub captured_at: String,
     pub pipeline_id: String,
+    /// Absolute workdir of the repo this snapshot belongs to (S56). Filters
+    /// `check_for_interrupted` so a crash in worktree/repo A never prompts
+    /// recovery inside worktree/repo B. `#[serde(default)]` keeps pre-Phase-14
+    /// snapshot files (which lack the field) deserializable — they get an empty
+    /// path and simply won't match any repo, which is the safe default.
+    #[serde(default)]
+    pub repo_workdir: String,
 }
 
 /// What `glit --recover` should do, given the repo's CURRENT state versus the
@@ -67,7 +74,14 @@ pub fn recovery_plan(
 /// Trait for recovery management — enables swapping recovery strategy.
 pub trait RecoveryManager {
     fn capture_snapshot(&self, repo: &Repository) -> anyhow::Result<PipelineSnapshot>;
-    fn check_for_interrupted(&self) -> anyhow::Result<Option<PipelineSnapshot>>;
+    /// Find the most-recent interrupted-pipeline snapshot. When `repo_workdir`
+    /// is `Some`, only snapshots captured in that repo are considered (S56 —
+    /// prevents worktree/multi-repo recovery cross-talk). `None` disables the
+    /// filter (used where the current repo isn't known).
+    fn check_for_interrupted(
+        &self,
+        repo_workdir: Option<&str>,
+    ) -> anyhow::Result<Option<PipelineSnapshot>>;
     fn execute_recovery(
         &self,
         repo: &Repository,
@@ -117,6 +131,10 @@ impl RecoveryManager for FileRecoveryManager {
 
         let pipeline_id = uuid::Uuid::new_v4().to_string();
         let captured_at = chrono::Local::now().to_rfc3339();
+        let repo_workdir = repo
+            .workdir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
 
         let snapshot = PipelineSnapshot {
             head_oid,
@@ -124,6 +142,7 @@ impl RecoveryManager for FileRecoveryManager {
             branch_name,
             captured_at,
             pipeline_id,
+            repo_workdir,
         };
 
         // Persist to disk BEFORE any step executes
@@ -136,7 +155,10 @@ impl RecoveryManager for FileRecoveryManager {
         Ok(snapshot)
     }
 
-    fn check_for_interrupted(&self) -> anyhow::Result<Option<PipelineSnapshot>> {
+    fn check_for_interrupted(
+        &self,
+        repo_workdir: Option<&str>,
+    ) -> anyhow::Result<Option<PipelineSnapshot>> {
         let dir = match Self::snapshots_dir() {
             Ok(d) => d,
             Err(_) => return Ok(None),
@@ -153,6 +175,14 @@ impl RecoveryManager for FileRecoveryManager {
                     }
                 }
             }
+        }
+
+        // S56: only consider snapshots from the current repo when a workdir is
+        // given. A snapshot from another repo/worktree must never prompt
+        // recovery here. Legacy snapshots (empty `repo_workdir`) never match a
+        // real workdir, so they are silently skipped under the filter.
+        if let Some(wd) = repo_workdir {
+            snapshots.retain(|s| s.repo_workdir == wd);
         }
 
         // Return the most recent snapshot (there should typically be at most one)
@@ -322,6 +352,218 @@ pub fn classify_push_failure(error: &git2::Error) -> PushFailureType {
     }
 }
 
+// =============================================================================
+// Forensic recovery (Phase 14 — S24/S26/S27; P5). Deterministic, zero-LLM: find
+// commits that are no longer reachable from any ref so the user can restore
+// them onto a rescue branch. TWO sources are required by verified git behavior:
+//
+//   Source A — reflog walk (HEAD + LIVE local-branch reflogs). Carries the
+//     centerpiece: a commit made on a branch that is then deleted still lives in
+//     HEAD's reflog. (Deleted-branch reflogs are REMOVED by `git branch -D`, so
+//     enumerating them returns nothing — deliberately not attempted.)
+//
+//   Source B — bounded unreachable-object scan (`odb.foreach`). The only path
+//     that surfaces DROPPED STASHES (they vanish from the stash reflog and never
+//     appear in HEAD's reflog) and branches never checked out locally.
+//
+// Residual gap (documented, S29): objects already garbage-collected are gone;
+// never-committed work was never in the odb. The browser's empty-result copy
+// says so plainly (copy::FORENSIC_NONE_FOUND).
+// =============================================================================
+
+/// A commit unreachable from any current ref — a recovery candidate.
+#[derive(Debug, Clone)]
+pub struct LostCommit {
+    pub oid: String,
+    pub age_secs: u64,
+    pub summary: String,
+    pub files_touched: usize,
+    /// Distinctive stash shape ("WIP on …"/"On …", 2–3 parents) — a dropped
+    /// stash (S27). Surfaced only by the odb scan.
+    pub is_stash_shaped: bool,
+}
+
+/// Bounds for `find_lost_commits` so an ancient/huge repo never hangs or floods.
+#[derive(Debug, Clone, Copy)]
+pub struct LostScanConfig {
+    /// Max reflog entries to inspect per reflog (Source A).
+    pub max_per_source: usize,
+    /// Exclude commits older than this many seconds (both sources + the
+    /// reachability walk share this cutoff).
+    pub age_cutoff_secs: u64,
+    /// Hard cap on the number of candidates returned.
+    pub max_candidates: usize,
+    /// Test hook: disable Source B (the odb scan) to prove Source A alone
+    /// carries the deleted-branch centerpiece. Always `false` in production.
+    pub disable_odb_scan: bool,
+}
+
+impl LostScanConfig {
+    /// Sensible defaults: 30-day window, generous but bounded caps.
+    pub fn with_retention_days(days: u64) -> Self {
+        Self {
+            max_per_source: 500,
+            age_cutoff_secs: days.saturating_mul(24 * 60 * 60),
+            max_candidates: 100,
+            disable_odb_scan: false,
+        }
+    }
+}
+
+/// Result of a scan: the (bounded) candidates plus the total seen before the
+/// `max_candidates` cap, so the caller can honestly report truncation.
+#[derive(Debug, Clone)]
+pub struct LostScan {
+    pub commits: Vec<LostCommit>,
+    pub total_found: usize,
+}
+
+/// Find commits unreachable from any current ref. See module docs for the
+/// two-source rationale. Pure read — never mutates the repo.
+pub fn find_lost_commits(repo: &Repository, cfg: &LostScanConfig) -> LostScan {
+    use std::collections::HashSet;
+
+    let now = chrono::Local::now().timestamp();
+    let cutoff = now - cfg.age_cutoff_secs as i64;
+
+    // Reachability set: every oid reachable from any current ref, bounded by the
+    // same age cutoff. Over-tight only yields a harmless false-lost (a redundant
+    // rescue branch) — it can never HIDE a genuinely lost commit.
+    let reachable = reachable_oids(repo, cutoff);
+
+    let mut candidates: Vec<LostCommit> = Vec::new();
+    let mut seen: HashSet<git2::Oid> = HashSet::new();
+
+    let mut consider = |oid: git2::Oid, candidates: &mut Vec<LostCommit>| {
+        if reachable.contains(&oid) || seen.contains(&oid) {
+            return;
+        }
+        if let Some(lc) = lost_commit_if_recent(repo, oid, cutoff) {
+            seen.insert(oid);
+            candidates.push(lc);
+        }
+    };
+
+    // -- Source A: HEAD + live local-branch reflogs.
+    let mut reflog_names: Vec<String> = vec!["HEAD".to_string()];
+    if let Ok(branches) = repo.branches(Some(git2::BranchType::Local)) {
+        for (branch, _) in branches.flatten() {
+            if let Some(name) = branch.name().ok().flatten() {
+                reflog_names.push(format!("refs/heads/{}", name));
+            }
+        }
+    }
+    for name in reflog_names {
+        if let Ok(reflog) = repo.reflog(&name) {
+            for entry in reflog.iter().take(cfg.max_per_source) {
+                consider(entry.id_new(), &mut candidates);
+                consider(entry.id_old(), &mut candidates);
+            }
+        }
+    }
+
+    // -- Source B: bounded unreachable-object scan (finds dropped stashes).
+    if !cfg.disable_odb_scan {
+        if let Ok(odb) = repo.odb() {
+            let mut scanned_commits = 0usize;
+            let _ = odb.foreach(|oid| {
+                if scanned_commits >= cfg.max_per_source {
+                    return true; // keep iterating cheaply; we just stop considering
+                }
+                // Cheap header read filters to commits before any full parse.
+                if let Ok((_, kind)) = odb.read_header(*oid) {
+                    if kind == git2::ObjectType::Commit {
+                        scanned_commits += 1;
+                        consider(*oid, &mut candidates);
+                    }
+                }
+                true
+            });
+        }
+    }
+
+    // Most-recent first.
+    candidates.sort_by(|a, b| a.age_secs.cmp(&b.age_secs));
+    let total_found = candidates.len();
+    candidates.truncate(cfg.max_candidates);
+    LostScan {
+        commits: candidates,
+        total_found,
+    }
+}
+
+/// Build the set of oids reachable from every current ref (branches, tags, HEAD,
+/// remote-tracking), bounded by `cutoff` (stop descending past older commits).
+fn reachable_oids(repo: &Repository, cutoff: i64) -> std::collections::HashSet<git2::Oid> {
+    use std::collections::HashSet;
+    let mut set: HashSet<git2::Oid> = HashSet::new();
+    let mut revwalk = match repo.revwalk() {
+        Ok(r) => r,
+        Err(_) => return set,
+    };
+    // Push every ref target.
+    if let Ok(refs) = repo.references() {
+        for r in refs.flatten() {
+            if let Some(oid) = r.target() {
+                let _ = revwalk.push(oid);
+            }
+        }
+    }
+    let _ = revwalk.push_head();
+    // We only need to recognize oids that could collide with a candidate, and
+    // candidates are all newer than `cutoff`. So stop inserting once a commit is
+    // older than the cutoff — its ancestors are older still and can't be
+    // candidates. This bounds the walk in an ancient repo. Erring by keeping a
+    // few extra (a slightly looser set) only ever suppresses a false-lost, never
+    // hides a real one.
+    for oid in revwalk.flatten() {
+        if let Ok(c) = repo.find_commit(oid) {
+            if c.time().seconds() < cutoff {
+                continue;
+            }
+        }
+        set.insert(oid);
+    }
+    set
+}
+
+/// Parse `oid` as a commit; return a `LostCommit` iff it is a commit newer than
+/// `cutoff`. Peeks nothing that a full `find_commit` doesn't already need.
+fn lost_commit_if_recent(repo: &Repository, oid: git2::Oid, cutoff: i64) -> Option<LostCommit> {
+    let commit = repo.find_commit(oid).ok()?;
+    let secs = commit.time().seconds();
+    if secs < cutoff {
+        return None;
+    }
+    let age_secs = (chrono::Local::now().timestamp() - secs).max(0) as u64;
+    let summary = commit.summary().unwrap_or("(no message)").to_string();
+    let full_msg = commit.message().unwrap_or("");
+    let parents = commit.parent_count();
+    let is_stash_shaped = (full_msg.starts_with("WIP on ") || full_msg.starts_with("On "))
+        && (2..=3).contains(&parents);
+    // files_touched: diff against first parent (or empty tree for a root commit).
+    let files_touched = count_files_touched(repo, &commit);
+    Some(LostCommit {
+        oid: oid.to_string(),
+        age_secs,
+        summary,
+        files_touched,
+        is_stash_shaped,
+    })
+}
+
+/// Number of files changed by `commit` vs its first parent (root commit → whole tree).
+fn count_files_touched(repo: &Repository, commit: &git2::Commit) -> usize {
+    let this_tree = match commit.tree() {
+        Ok(t) => t,
+        Err(_) => return 0,
+    };
+    let parent_tree = commit.parent(0).ok().and_then(|p| p.tree().ok());
+    repo.diff_tree_to_tree(parent_tree.as_ref(), Some(&this_tree), None)
+        .map(|d| d.deltas().count())
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,11 +621,46 @@ mod tests {
         assert!(path.exists(), "snapshot file should exist on disk");
 
         // Also verify check_for_interrupted finds at least one snapshot
-        let found = mgr.check_for_interrupted().unwrap();
+        // (unfiltered — other test threads may share the directory).
+        let found = mgr.check_for_interrupted(None).unwrap();
         assert!(found.is_some(), "should find at least one snapshot");
 
         mgr.delete_snapshot(&snap).unwrap();
         assert!(!path.exists(), "snapshot file should be deleted");
+    }
+
+    // S56: a snapshot captured in repo A must NOT surface when checking scoped
+    // to repo B's workdir. Snapshots share ~/.glit/snapshots across the machine,
+    // so the workdir filter is what prevents worktree/multi-repo cross-talk.
+    #[test]
+    fn check_for_interrupted_scoped_to_repo_workdir() {
+        let dir_a = TempDir::new().unwrap();
+        let repo_a = init_repo_with_commit(&dir_a);
+        let mgr = FileRecoveryManager;
+        let snap = mgr.capture_snapshot(&repo_a).unwrap();
+        assert!(
+            !snap.repo_workdir.is_empty(),
+            "capture must record the workdir"
+        );
+
+        // Repo B: a different workdir path that never captured a snapshot.
+        let dir_b = TempDir::new().unwrap();
+        let workdir_b = dir_b.path().to_string_lossy().into_owned();
+        let found_b = mgr.check_for_interrupted(Some(&workdir_b)).unwrap();
+        assert!(
+            found_b.map(|s| s.pipeline_id) != Some(snap.pipeline_id.clone()),
+            "repo A's snapshot must not surface when scoped to repo B"
+        );
+
+        // Sanity: scoped to repo A's own workdir, it IS found.
+        let found_a = mgr.check_for_interrupted(Some(&snap.repo_workdir)).unwrap();
+        assert_eq!(
+            found_a.map(|s| s.pipeline_id),
+            Some(snap.pipeline_id.clone()),
+            "repo A's snapshot must surface when scoped to repo A"
+        );
+
+        mgr.delete_snapshot(&snap).unwrap();
     }
 
     // Phase 11 — situation-aware recovery. `recovery_plan` must never fight
@@ -395,6 +672,7 @@ mod tests {
             branch_name: Some(branch.to_string()),
             captured_at: "t".to_string(),
             pipeline_id: "id".to_string(),
+            repo_workdir: String::new(),
         }
     }
 
@@ -505,6 +783,7 @@ mod tests {
             branch_name: Some("main".to_string()),
             captured_at: "2024-01-01T00:00:00".to_string(),
             pipeline_id: "test".to_string(),
+            repo_workdir: String::new(),
         };
         let step = PipelineStep::Add {
             files: vec!["test.rs".to_string()],
@@ -525,6 +804,7 @@ mod tests {
             branch_name: Some("main".to_string()),
             captured_at: "2024-01-01T00:00:00".to_string(),
             pipeline_id: "test".to_string(),
+            repo_workdir: String::new(),
         };
         let step = PipelineStep::Push {
             remote: "origin".to_string(),
@@ -547,6 +827,7 @@ mod tests {
             branch_name: Some("main".to_string()),
             captured_at: "2024-01-01T00:00:00".to_string(),
             pipeline_id: "test".to_string(),
+            repo_workdir: String::new(),
         };
         let step = PipelineStep::Reset {
             mode: ResetMode::Hard,
@@ -557,5 +838,176 @@ mod tests {
             }
             _ => panic!("Expected ReflogOnly"),
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Forensic recovery (Phase 14). Uses REAL git via git2 in a tempdir.
+    // -------------------------------------------------------------------------
+
+    /// Commit `content` to `f.txt` on the current HEAD; return the new oid.
+    fn commit_file(repo: &Repository, dir: &TempDir, content: &str, msg: &str) -> git2::Oid {
+        std::fs::write(dir.path().join("f.txt"), content).unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("f.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+        let parents: Vec<&git2::Commit> = parent.iter().collect();
+        repo.commit(Some("HEAD"), &sig, &sig, msg, &tree, &parents)
+            .unwrap()
+    }
+
+    fn cfg_days(days: u64) -> LostScanConfig {
+        LostScanConfig::with_retention_days(days)
+    }
+
+    // CENTERPIECE: commit on a branch, delete the branch, the scan finds it.
+    #[test]
+    fn find_lost_commits_surfaces_deleted_branch_commit() {
+        let dir = TempDir::new().unwrap();
+        let repo = init_repo_with_commit(&dir);
+
+        // Branch off, commit on it, return to the original branch, delete it.
+        let base = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("feature", &base, false).unwrap();
+        repo.set_head("refs/heads/feature").unwrap();
+        let lost = commit_file(&repo, &dir, "feature work\n", "feat: export csv");
+        // Switch back to the base branch (main/master) and delete feature.
+        let base_branch = {
+            // Any local branch that isn't "feature".
+            let mut name = None;
+            for (b, _) in repo
+                .branches(Some(git2::BranchType::Local))
+                .unwrap()
+                .flatten()
+            {
+                if let Some(n) = b.name().ok().flatten() {
+                    if n != "feature" {
+                        name = Some(n.to_string());
+                    }
+                }
+            }
+            name.unwrap()
+        };
+        repo.set_head(&format!("refs/heads/{}", base_branch))
+            .unwrap();
+        repo.reset(base.as_object(), git2::ResetType::Hard, None)
+            .unwrap();
+        repo.find_branch("feature", git2::BranchType::Local)
+            .unwrap()
+            .delete()
+            .unwrap();
+
+        let scan = find_lost_commits(&repo, &cfg_days(30));
+        assert!(
+            scan.commits.iter().any(|c| c.oid == lost.to_string()),
+            "deleted-branch commit must surface; found {:?}",
+            scan.commits.iter().map(|c| &c.summary).collect::<Vec<_>>()
+        );
+        let found = scan
+            .commits
+            .iter()
+            .find(|c| c.oid == lost.to_string())
+            .unwrap();
+        assert_eq!(found.summary, "feat: export csv");
+        assert!(found.files_touched >= 1);
+    }
+
+    // Source A (reflog) ALONE carries the centerpiece — prove it with the odb
+    // scan disabled. (If this failed, we'd know the reflog source was broken.)
+    #[test]
+    fn deleted_branch_commit_found_by_reflog_alone() {
+        let dir = TempDir::new().unwrap();
+        let repo = init_repo_with_commit(&dir);
+        let base = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("feature", &base, false).unwrap();
+        repo.set_head("refs/heads/feature").unwrap();
+        let lost = commit_file(&repo, &dir, "work\n", "feat: reflog-only");
+        // The commit is now in HEAD's reflog regardless of the branch's fate.
+        // Make it genuinely lost: leave feature, hard-reset base, delete feature.
+        repo.set_head("refs/heads/master")
+            .or_else(|_| repo.set_head("refs/heads/main"))
+            .ok();
+        repo.reset(base.as_object(), git2::ResetType::Hard, None)
+            .unwrap();
+        repo.find_branch("feature", git2::BranchType::Local)
+            .unwrap()
+            .delete()
+            .unwrap();
+
+        let mut cfg = cfg_days(30);
+        cfg.disable_odb_scan = true; // Source A (reflog) only.
+        let scan = find_lost_commits(&repo, &cfg);
+        assert!(
+            scan.commits.iter().any(|c| c.oid == lost.to_string()),
+            "reflog source alone must find the deleted-branch commit"
+        );
+    }
+
+    // Dropped stash → surfaced ONLY by Source B (odb scan) with is_stash_shaped.
+    // This test is impossible under a reflog-only design.
+    #[test]
+    fn find_lost_commits_surfaces_dropped_stash() {
+        let dir = TempDir::new().unwrap();
+        let repo = init_repo_with_commit(&dir);
+        // Create a dirty change and stash it via real git so the stash commit is
+        // shaped exactly as git makes it.
+        std::fs::write(dir.path().join("f.txt"), "dirty\n").unwrap();
+        let run = |args: &[&str]| {
+            let out = std::process::Command::new("git")
+                .args(args)
+                .current_dir(dir.path())
+                .env("GIT_AUTHOR_NAME", "Test")
+                .env("GIT_AUTHOR_EMAIL", "test@test.com")
+                .env("GIT_COMMITTER_NAME", "Test")
+                .env("GIT_COMMITTER_EMAIL", "test@test.com")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {:?} failed: {}",
+                args,
+                String::from_utf8_lossy(&out.stderr)
+            );
+        };
+        run(&["stash", "push", "-u", "-m", "wip"]);
+        // Drop it — now it's dangling: gone from the stash reflog, never in HEAD's.
+        run(&["stash", "drop"]);
+
+        let scan = find_lost_commits(&repo, &cfg_days(30));
+        assert!(
+            scan.commits.iter().any(|c| c.is_stash_shaped),
+            "dropped stash must surface with is_stash_shaped; got {:?}",
+            scan.commits
+                .iter()
+                .map(|c| (&c.summary, c.is_stash_shaped))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    // Bounded: max_candidates truncates and total_found reports the real total.
+    #[test]
+    fn find_lost_commits_respects_candidate_cap() {
+        let dir = TempDir::new().unwrap();
+        let repo = init_repo_with_commit(&dir);
+        let base = repo.head().unwrap().peel_to_commit().unwrap();
+        // Make several lost commits by committing then resetting HEAD back each
+        // time — each abandoned commit stays in the reflog.
+        for i in 0..5 {
+            commit_file(&repo, &dir, &format!("v{i}\n"), &format!("lost {i}"));
+            repo.reset(base.as_object(), git2::ResetType::Hard, None)
+                .unwrap();
+        }
+        let mut cfg = cfg_days(30);
+        cfg.max_candidates = 2;
+        let scan = find_lost_commits(&repo, &cfg);
+        assert!(scan.commits.len() <= 2, "cap must bound returned commits");
+        assert!(
+            scan.total_found >= scan.commits.len(),
+            "total_found must be >= returned; total={} returned={}",
+            scan.total_found,
+            scan.commits.len()
+        );
     }
 }

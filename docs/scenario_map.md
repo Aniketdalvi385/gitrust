@@ -489,6 +489,14 @@ ChoiceGate { question, options: Vec<(label, consequence_sentence)> }
     // S9 rebase-vs-merge; S34 undo semantics; S44 remote choice; S62 destructive phrasing
 RecoveryBrowser { candidates: Vec<LostCommit { oid, age, summary, files }> }
     // S24/26/27 — restore always = CreateBranchAt
+    // v1 SHIPPED single-select (one rescue/* branch per invocation): every
+    // ancestor is reachable from that one branch, and re-running is cheap.
+    // "MultiSelect-style" multi-restore → Tier-2 backlog. (Phase 14. Same
+    // "specs bend to reality in writing" treatment as S47's hook finding.)
+    // NOTE (Phase 14, verified): candidates come from TWO sources — HEAD +
+    // live-branch reflogs (carries deleted-branch recovery) AND a bounded
+    // odb.foreach unreachable-commit scan (the only path that finds dropped
+    // stashes; deleted-branch reflogs are REMOVED by `git branch -D`).
 
 // Trash-net principle (new invariant, sibling to "LLM never executes"):
 // Any GLit operation that would delete content NOT in the object database

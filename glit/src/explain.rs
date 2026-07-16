@@ -239,6 +239,18 @@ pub fn explain(op: &ScopedWriteOp) -> &'static Explanation {
             recovery: Some(Msg("The pre-squash commits live in `git reflog` for ~90 days.")),
             safety: Some(Msg("Uses soft-reset + one commit (no interactive rebase); refuses if any of the N is a merge commit.")),
         },
+        W::ForensicRecover => &Explanation {
+            what: Msg("Scans reflogs and dangling objects for commits no longer on any branch, and restores the one you pick onto a new rescue branch."),
+            risks: Msg("Nothing destructive — it only creates a branch. Work that was never committed, or already garbage-collected, can't be recovered."),
+            recovery: Some(Msg("The rescue branch is safe to delete if you didn't need it: `git branch -D rescue/...`.")),
+            safety: Some(Msg("Restore never touches your current branch, index, or files — it only adds a rescue/* branch.")),
+        },
+        W::CleanupIntent => &Explanation {
+            what: Msg("Removes local changes you no longer want — the gate asks exactly what to discard (tracked changes and/or untracked files)."),
+            risks: Msg("Untracked files have no git history; once deleted, only GLit's trash-net backup can bring them back."),
+            recovery: Some(Msg("Everything deleted is copied to ~/.glit/trash/ first and kept for the retention window.")),
+            safety: Some(Msg("The gate spells out counts before anything is removed, and the trash-net backs up first (fail-closed).")),
+        },
     }
 }
 

@@ -45,6 +45,14 @@ pub fn is_write_intent(intent: &IntentType) -> bool {
     )
 }
 
+/// Forensic recovery (Phase 14) only CREATES a rescue ref — it never touches the
+/// current HEAD/index/working tree, so restoring can't worsen any situation
+/// (Q4). It is therefore Allowed in every state, treated as read-only against
+/// current state (even mid-merge / mid-rebase / detached).
+fn is_forensic_recover(i: &IntentType) -> bool {
+    matches!(i, IntentType::ScopedWrite(ScopedWriteOp::ForensicRecover))
+}
+
 fn is_branch_create(i: &IntentType) -> bool {
     matches!(i, IntentType::ScopedWrite(ScopedWriteOp::Branch { .. }))
 }
@@ -189,6 +197,12 @@ pub fn situation_gate(situation: &RepoSituation, intent: &IntentType) -> Situati
         return SituationVerdict::Allowed;
     }
 
+    // Forensic recovery is read-only against current state (only creates a
+    // rescue ref) — Allowed in every situation, before any state gating.
+    if is_forensic_recover(intent) {
+        return SituationVerdict::Allowed;
+    }
+
     // Continue/skip/abort ops are valid ONLY in their matching Mid* state, so
     // route them here regardless of the current situation. This is what makes
     // the canonical fast-path phrases ("abort rebase", …) safe to whitelist.
@@ -213,8 +227,12 @@ pub fn situation_gate(situation: &RepoSituation, intent: &IntentType) -> Situati
                 SituationVerdict::Allowed
             } else if is_checkout(intent) {
                 if *stranded_commits > 0 {
-                    // Phase 10 blocks; the branch-here way-out (S21 gate) is Phase 14.
-                    block(crate::copy::detached_stranded_block(*stranded_commits))
+                    // S21: leaving a detached HEAD with unbranched commits would
+                    // strand them. Route to the rescue gate, which offers
+                    // branch-here FIRST (the anxious user's exit) before the
+                    // switch (Phase 14 — turns the Phase 10 dead-end block into a
+                    // way out).
+                    SituationVerdict::Redirect(Redirect::DetachedHeadRescue)
                 } else {
                     SituationVerdict::Allowed
                 }
@@ -991,6 +1009,7 @@ pub fn format_step_label(step: &PipelineStep) -> (&'static str, String) {
             };
             ("squash", format!("last {} → \"{}\"", n, preview))
         }
+        PipelineStep::Clean { .. } => ("clean", "delete untracked files".to_string()),
     }
 }
 
@@ -1610,6 +1629,10 @@ mod tests {
                 // Phase 13 repair vocabulary — finding #12: the matrix is only
                 // law for the intents it names, so pin the new ones explicitly.
                 "undointent" => IntentType::ScopedWrite(ScopedWriteOp::UndoIntent),
+                // Phase 14 — forensic recovery is read-only against current
+                // state → Allowed everywhere; cleanup is an ordinary write.
+                "forensic" => IntentType::ScopedWrite(ScopedWriteOp::ForensicRecover),
+                "cleanup" => IntentType::ScopedWrite(ScopedWriteOp::CleanupIntent),
                 "amend" => IntentType::ScopedWrite(ScopedWriteOp::Amend {
                     message: None,
                     include_staged: true,
@@ -1719,11 +1742,13 @@ mod tests {
                 None,
             ),
             (
+                // S21 (Phase 14): checkout that would strand commits redirects
+                // to the branch-here rescue, no longer a dead-end block.
                 RepoSituation::DetachedHead {
                     stranded_commits: 2,
                 },
                 "checkout",
-                Some("not on any branch"),
+                Some("@redirect"),
             ),
             (
                 RepoSituation::DetachedHead {
@@ -2376,6 +2401,72 @@ mod tests {
             ),
             (RepoSituation::EmptyRepo, "amend", Some("commits yet")),
             (RepoSituation::EmptyRepo, "undointent", Some("commits yet")),
+            // Phase 14 — forensic recovery is Allowed in EVERY situation (it only
+            // creates a rescue ref; it can't worsen current state). Pin it across
+            // representative blocking states so a future gate change can't
+            // silently start blocking it.
+            (RepoSituation::Normal, "forensic", None),
+            (RepoSituation::EmptyRepo, "forensic", None),
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "forensic",
+                None,
+            ),
+            (
+                RepoSituation::MidMerge {
+                    conflicts: vec!["f".into()],
+                    resolved: false,
+                },
+                "forensic",
+                None,
+            ),
+            (
+                RepoSituation::DetachedHead {
+                    stranded_commits: 2,
+                },
+                "forensic",
+                None,
+            ),
+            (
+                RepoSituation::RemoteRewritten {
+                    old_tip: z,
+                    new_tip: z,
+                },
+                "forensic",
+                None,
+            ),
+            // Cleanup is an ordinary write: Allowed on Normal, blocked mid-op,
+            // redirected on detached (an "other write"). It never routes to
+            // reconcile (it's not push/pull), so it's Allowed under Diverged too.
+            (RepoSituation::Normal, "cleanup", None),
+            (
+                RepoSituation::Diverged {
+                    ahead: 1,
+                    behind: 1,
+                },
+                "cleanup",
+                None,
+            ),
+            (
+                RepoSituation::MidRebase {
+                    current: 1,
+                    total: 3,
+                    conflicted: vec!["f".into()],
+                },
+                "cleanup",
+                Some("rebase is in progress"),
+            ),
+            (
+                RepoSituation::DetachedHead {
+                    stranded_commits: 0,
+                },
+                "cleanup",
+                Some("@redirect"),
+            ),
         ];
 
         for (situation, tag, expect) in &rows {

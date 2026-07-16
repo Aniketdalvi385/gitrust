@@ -108,8 +108,54 @@ impl ConfirmationGate for InquireGate {
                     None => Ok(GateResponse::Aborted),
                 }
             }
+
+            GateType::RecoveryBrowser { candidates } => {
+                if candidates.is_empty() {
+                    println!("{}", crate::copy::FORENSIC_NONE_FOUND);
+                    return Ok(GateResponse::Aborted);
+                }
+                println!();
+                println!("{}", crate::copy::FORENSIC_BROWSER_HEADER);
+                let labels: Vec<String> = candidates.iter().map(format_lost_commit).collect();
+                let selected = Select::new("Recover which commit?", labels.clone())
+                    .with_starting_cursor(0)
+                    .prompt()
+                    .context("Recovery browser prompt failed")?;
+                match labels.iter().position(|l| l == &selected) {
+                    Some(idx) => Ok(GateResponse::Chose(idx)),
+                    None => Ok(GateResponse::Aborted),
+                }
+            }
         }
     }
+}
+
+/// One recovery-browser row: "2 hours ago — 'feat: export csv' — 3 files [stash]".
+fn format_lost_commit(c: &crate::recovery::LostCommit) -> String {
+    let age = humanize_age(c.age_secs);
+    let stash = if c.is_stash_shaped { " [stash]" } else { "" };
+    format!(
+        "{} — '{}' — {} file{}{}",
+        age,
+        c.summary,
+        c.files_touched,
+        if c.files_touched == 1 { "" } else { "s" },
+        stash
+    )
+}
+
+/// Compact relative age: "just now" / "5 minutes ago" / "2 hours ago" / "3 days ago".
+fn humanize_age(secs: u64) -> String {
+    let (n, unit) = if secs < 60 {
+        return "just now".to_string();
+    } else if secs < 3600 {
+        (secs / 60, "minute")
+    } else if secs < 86400 {
+        (secs / 3600, "hour")
+    } else {
+        (secs / 86400, "day")
+    };
+    format!("{} {}{} ago", n, unit, if n == 1 { "" } else { "s" })
 }
 
 /// File multi-select bucketed by classifier confidence:
@@ -328,6 +374,14 @@ impl ConfirmationGate for AutoConfirmGate {
                      Run interactively and pick a strategy manually."
                 ))
             }
+            GateType::RecoveryBrowser { .. } => {
+                // --yes must NEVER auto-pick a commit to restore. Refuse,
+                // mirroring ChoiceGate/TypeToConfirm.
+                Err(anyhow::anyhow!(
+                    "--yes flag cannot pick a commit to recover. \
+                     Run interactively and choose from the recovery browser."
+                ))
+            }
         }
     }
 }
@@ -413,6 +467,15 @@ impl ConfirmationGate for ScriptedGate {
                     Ok(GateResponse::Aborted)
                 } else {
                     Ok(GateResponse::Chose(self.choice.min(options.len() - 1)))
+                }
+            }
+            GateType::RecoveryBrowser { candidates } => {
+                self.choice_shown.set(true);
+                self.last_choice_options.set(candidates.len());
+                if candidates.is_empty() {
+                    Ok(GateResponse::Aborted)
+                } else {
+                    Ok(GateResponse::Chose(self.choice.min(candidates.len() - 1)))
                 }
             }
         }

@@ -96,9 +96,12 @@ pub async fn run_agent(
     let mut repo = git2::Repository::open(&repo_path)
         .map_err(|_| anyhow::anyhow!("Not a git repository: {}", repo_path.display()))?;
 
-    // Check for interrupted pipeline from a previous crash
+    // Check for interrupted pipeline from a previous crash. Scoped to THIS
+    // repo's workdir (S56) so a crash in another worktree/repo can't prompt
+    // recovery here.
     let recovery_mgr = FileRecoveryManager;
-    if let Ok(Some(snapshot)) = recovery_mgr.check_for_interrupted() {
+    let this_workdir = repo.workdir().map(|p| p.to_string_lossy().into_owned());
+    if let Ok(Some(snapshot)) = recovery_mgr.check_for_interrupted(this_workdir.as_deref()) {
         println!(
             "⚠  An interrupted pipeline was found (captured at {}).",
             snapshot.captured_at
@@ -106,6 +109,10 @@ pub async fn run_agent(
         println!("   Run 'glit --recover' to restore the repository to its pre-pipeline state.");
         println!("   Or delete ~/.glit/snapshots/ to ignore it.\n");
     }
+
+    // Prune expired trash-net backups (Phase 14). Best-effort — never fail the
+    // run over housekeeping.
+    let _ = crate::trash::prune_trash(config.trash_retention_days);
 
     // Pre-flight: make sure git identity is configured. First-time users
     // hit a deep-in-the-pipeline failure on first commit without this.
@@ -778,6 +785,12 @@ async fn handle_scoped_write(
     _auto_confirm: bool,
     show_all: bool,
 ) -> anyhow::Result<()> {
+    // Forensic recovery restores imperatively (a rescue branch, no snapshot, no
+    // pipeline) — it can't be expressed as `Vec<PipelineStep>`, so handle it here.
+    if matches!(op, ScopedWriteOp::ForensicRecover) {
+        return handle_forensic_recover(repo, config, gate);
+    }
+
     let steps = build_scoped_steps(repo, op, raw_query, config, gate, show_all).await?;
     if steps.is_empty() {
         println!("  Nothing to do.");
@@ -931,6 +944,16 @@ async fn build_scoped_steps(
         // classifier target now, but keep the arm as an internal safety-net that
         // routes through the same gate (should never be hit).
         ScopedWriteOp::UndoIntent | ScopedWriteOp::Undo => build_undo_intent(repo, raw_query, gate),
+
+        // S62: destructive-cleanup language terminates at a deterministic
+        // ChoiceGate that spells out what would be deleted before any Clean /
+        // Reset::Hard is constructed. Never the LLM.
+        ScopedWriteOp::CleanupIntent => build_cleanup_intent(repo, gate),
+
+        // Forensic recovery is handled imperatively in `handle_scoped_write`
+        // (it restores to a rescue branch, not via a pipeline). Should not reach
+        // here, but return no steps if it does.
+        ScopedWriteOp::ForensicRecover => Ok(vec![]),
 
         ScopedWriteOp::Amend {
             message,
@@ -2048,6 +2071,25 @@ async fn execute_pipeline(
                     // so it reads as supporting text, not another action.
                     println!("  {}  {}", dim("│"), dim(&line));
                 }
+                // S30: after a destructive step that the trash-net backed up,
+                // tell the user where the backup lives and for how long — the
+                // sentence git itself cannot say.
+                if matches!(
+                    step,
+                    PipelineStep::Clean { .. }
+                        | PipelineStep::Reset {
+                            mode: ResetMode::Hard
+                        }
+                        | PipelineStep::DiscardLocal { .. }
+                ) {
+                    if let Ok(dir) = crate::trash::trash_dir() {
+                        let note = crate::copy::trash_backup_note(
+                            &dir.display().to_string(),
+                            config.trash_retention_days,
+                        );
+                        println!("  {}  {}", dim("│"), dim(&note));
+                    }
+                }
                 if i < last_idx {
                     println!("  {}", dim("│"));
                 }
@@ -2253,16 +2295,30 @@ async fn execute_pipeline(
 // =============================================================================
 
 /// Execute recovery from a persisted snapshot.
+///
+/// "recover" precedence (Phase 14): a pending interrupted-pipeline snapshot for
+/// THIS repo means the snapshot path — finish the interrupted thing first. When
+/// there is none, this is not an error: point the user sideways to the forensic
+/// flow (`glit "find my lost work"`), which recovers lost commits from reflogs
+/// and dangling objects.
 pub fn execute_recovery() -> anyhow::Result<()> {
     let recovery_mgr = FileRecoveryManager;
-    let snapshot = recovery_mgr
-        .check_for_interrupted()?
-        .ok_or_else(|| anyhow::anyhow!("No interrupted pipeline found in ~/.glit/snapshots/"))?;
-
-    println!("Found interrupted pipeline from {}.", snapshot.captured_at);
 
     let repo_path = find_repo_root()?;
     let repo = git2::Repository::open(&repo_path)?;
+    let this_workdir = repo.workdir().map(|p| p.to_string_lossy().into_owned());
+
+    // Scoped to this repo (S56) — another repo's snapshot must not be restored here.
+    let snapshot = match recovery_mgr.check_for_interrupted(this_workdir.as_deref())? {
+        Some(s) => s,
+        None => {
+            println!("{}", crate::copy::RECOVER_NONE_TRY_FORENSIC);
+            return Ok(());
+        }
+    };
+
+    println!("Found interrupted pipeline from {}.", snapshot.captured_at);
+
     let current_head = repo.head().ok().and_then(|h| h.target());
 
     // Situation-aware: never fight git's own state machine, and never silently
@@ -2655,6 +2711,171 @@ fn build_undo_intent(
     }
 }
 
+/// Destructive-cleanup gate (S62/P6). Innocent-sounding "clean up" / "start
+/// fresh" language never reaches a concrete `Clean`/`Reset::Hard` from the LLM;
+/// this deterministic ChoiceGate spells out exactly what would be deleted
+/// (tracked vs untracked, with counts) first. Degenerate guard: nothing dirty →
+/// no gate. The trash-net backs everything up before deletion (in git_ops).
+fn build_cleanup_intent(
+    repo: &git2::Repository,
+    gate: &dyn ConfirmationGate,
+) -> anyhow::Result<Vec<PipelineStep>> {
+    use crate::commands::ChoiceOption;
+
+    // Count what each destructive option would affect.
+    let (tracked, untracked) = cleanup_counts(repo);
+
+    // Degenerate guard: render no gate when there is nothing to clean.
+    if tracked == 0 && untracked == 0 {
+        println!("{}", crate::copy::CLEANUP_NOTHING);
+        return Ok(vec![]);
+    }
+
+    // Build only the options that apply, keeping a parallel semantic list so the
+    // chosen index maps unambiguously (mirrors the undo gate).
+    #[derive(Clone, Copy)]
+    enum CleanupChoice {
+        Tracked,
+        Untracked,
+        Both,
+        Abort,
+    }
+    let mut options: Vec<ChoiceOption> = Vec::new();
+    let mut semantics: Vec<CleanupChoice> = Vec::new();
+    if tracked > 0 {
+        options.push(ChoiceOption {
+            label: "Discard tracked changes".to_string(),
+            consequence: crate::copy::cleanup_tracked_consequence(tracked),
+        });
+        semantics.push(CleanupChoice::Tracked);
+    }
+    if untracked > 0 {
+        options.push(ChoiceOption {
+            label: "Delete untracked files".to_string(),
+            consequence: crate::copy::cleanup_untracked_consequence(untracked),
+        });
+        semantics.push(CleanupChoice::Untracked);
+    }
+    if tracked > 0 && untracked > 0 {
+        options.push(ChoiceOption {
+            label: "Both".to_string(),
+            consequence: crate::copy::CLEANUP_BOTH_CONSEQUENCE.to_string(),
+        });
+        semantics.push(CleanupChoice::Both);
+    }
+    options.push(ChoiceOption {
+        label: "Abort".to_string(),
+        consequence: crate::copy::CLEANUP_ABORT_CONSEQUENCE.to_string(),
+    });
+    semantics.push(CleanupChoice::Abort);
+
+    let choice = match gate.prompt(&GateType::ChoiceGate {
+        question: crate::copy::CLEANUP_GATE_QUESTION.to_string(),
+        options,
+    })? {
+        GateResponse::Chose(i) => i,
+        _ => {
+            println!("  Nothing changed.");
+            return Ok(vec![]);
+        }
+    };
+
+    // Map choice → concrete steps. `Reset::Hard` and `Clean` each back up their
+    // own destroy-set via the git_ops trash-net; ordering `Reset` before `Clean`
+    // when both is chosen keeps tracked/untracked backups in separate dirs.
+    let steps = match semantics[choice] {
+        CleanupChoice::Tracked => vec![PipelineStep::Reset {
+            mode: ResetMode::Hard,
+        }],
+        CleanupChoice::Untracked => vec![PipelineStep::Clean { trash_net: true }],
+        CleanupChoice::Both => vec![
+            PipelineStep::Reset {
+                mode: ResetMode::Hard,
+            },
+            PipelineStep::Clean { trash_net: true },
+        ],
+        CleanupChoice::Abort => {
+            println!("  Nothing changed.");
+            vec![]
+        }
+    };
+    Ok(steps)
+}
+
+/// (tracked-modified count, untracked count) for the cleanup gate.
+fn cleanup_counts(repo: &git2::Repository) -> (usize, usize) {
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_ignored(false);
+    let mut tracked = 0usize;
+    let mut untracked = 0usize;
+    if let Ok(statuses) = repo.statuses(Some(&mut opts)) {
+        for e in statuses.iter() {
+            let s = e.status();
+            if s.contains(git2::Status::WT_NEW) {
+                untracked += 1;
+            } else if s.intersects(
+                git2::Status::WT_MODIFIED
+                    | git2::Status::WT_TYPECHANGE
+                    | git2::Status::WT_DELETED
+                    | git2::Status::WT_RENAMED,
+            ) {
+                tracked += 1;
+            }
+        }
+    }
+    (tracked, untracked)
+}
+
+/// Forensic recovery flow (S24/26/27, P5). Scans for lost commits, shows the
+/// RecoveryBrowser, and restores the chosen commit onto a `rescue/*` branch —
+/// NEVER touching the current branch/index/working tree (Q4). Imperative (no
+/// snapshot, no pipeline): the only mutation is creating a ref.
+fn handle_forensic_recover(
+    repo: &git2::Repository,
+    config: &Config,
+    gate: &dyn ConfirmationGate,
+) -> anyhow::Result<()> {
+    let cfg = crate::recovery::LostScanConfig::with_retention_days(30);
+    let scan = crate::recovery::find_lost_commits(repo, &cfg);
+
+    if scan.commits.is_empty() {
+        // S29 honesty: gc'd / never-committed work may be unrecoverable.
+        println!("{}", crate::copy::FORENSIC_NONE_FOUND);
+        return Ok(());
+    }
+    if scan.total_found > scan.commits.len() {
+        println!(
+            "{}",
+            crate::copy::forensic_truncated(scan.commits.len(), scan.total_found)
+        );
+    }
+
+    let candidates = scan.commits.clone();
+    let choice = match gate.prompt(&GateType::RecoveryBrowser {
+        candidates: candidates.clone(),
+    })? {
+        GateResponse::Chose(i) => i,
+        _ => {
+            println!("  Nothing recovered.");
+            return Ok(());
+        }
+    };
+    let chosen = &candidates[choice];
+
+    // rescue/<date>-<short-oid>. Date from a local timestamp (chrono is a dep;
+    // Local::now is allowed in production — this is not a workflow script).
+    let short = &chosen.oid[..chosen.oid.len().min(7)];
+    let date = chrono::Local::now().format("%Y%m%d").to_string();
+    let branch = format!("rescue/{}-{}", date, short);
+
+    Git2Operations.create_branch_at(repo, &branch, &chosen.oid)?;
+    println!("{}", crate::copy::forensic_restored(&branch, short));
+    let _ = config;
+    Ok(())
+}
+
 /// Build an Amend step, escalating with a PushedCommitRewrite type-to-confirm
 /// when HEAD is already published (S32/S33). Returns the amend step, and on the
 /// pushed path also a force-push step pinned to the fetched tracking oid.
@@ -2865,17 +3086,31 @@ async fn handle_detached_head_rescue(
         .map(|o| o.to_string()[..7].to_string())
         .unwrap_or_else(|| "unknown".to_string());
 
+    // S21: how many commits would be stranded (reachable from HEAD, on no
+    // branch) if the user switched away without branching first.
+    let stranded = match crate::context::detect_situation(repo) {
+        crate::commands::RepoSituation::DetachedHead { stranded_commits } => stranded_commits,
+        _ => 0,
+    };
+
     println!();
     println!("⚠  You are in DETACHED HEAD state.");
     println!(
         "   Currently at commit {} — not on any branch.",
         current_sha
     );
+    if stranded > 0 {
+        println!(
+            "   You have {} commit(s) here that are on NO branch — switching away now would strand them.",
+            stranded
+        );
+    }
     println!("   Any commit you make here will be orphaned (lose-able) unless you save it.");
     println!();
 
     let resp = gate.prompt(&GateType::Choose {
         message: "What would you like to do?".to_string(),
+        // Branch-here is listed FIRST (index 0) — the anxious user's exit (S21).
         options: vec![
             "Create a branch HERE to save work".to_string(),
             "Switch back to your previous branch (no changes made)".to_string(),
@@ -2909,6 +3144,15 @@ async fn handle_detached_head_rescue(
             Ok(())
         }
         GateResponse::Chose(1) => {
+            // S21 guard: refuse to switch away while commits would be stranded —
+            // steer back to branch-here rather than silently losing them.
+            if stranded > 0 {
+                return Err(anyhow::anyhow!(
+                    "Won't switch away — {} commit(s) here are on no branch and would be stranded. \
+                     Re-run and choose \"Create a branch HERE\" first to keep them.",
+                    stranded
+                ));
+            }
             // Try to switch to a sensible default branch.
             for fallback in &["main", "master"] {
                 let git_ops = Git2Operations;
@@ -3277,6 +3521,9 @@ fn summarize_step(
             Some(format!("→ Upstream set to {}/{}", remote, branch))
         }
         P::SquashLastN { n, .. } => Some(format!("→ Squashed the last {} commits into one", n)),
+        P::Clean { .. } => {
+            Some("→ Deleted untracked files (backed up to the trash-net)".to_string())
+        }
         P::Status | P::Log { .. } | P::Diff { .. } => None,
     }
 }
@@ -3484,6 +3731,7 @@ fn step_name(step: &PipelineStep) -> &'static str {
                 _ => "git reset --soft HEAD~N && git commit",
             }
         }
+        PipelineStep::Clean { .. } => "git clean -fd",
     }
 }
 
@@ -4406,6 +4654,142 @@ mod phase13_repair_tests {
                 other => panic!("'{}' unexpected canonical mapping: {:?}", phrase, other),
             }
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 14 — forensic recovery + destructive-phrase routing (end-to-end).
+    // -----------------------------------------------------------------------
+
+    /// Init a repo with one commit and configured identity (`f.txt` = "base").
+    fn init_repo_one_commit() -> (TempDir, Repository) {
+        let (repo, dir) = repo_with_commits(0);
+        std::fs::write(dir.path().join("f.txt"), "base\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "base"]);
+        let repo2 = Repository::open(dir.path()).unwrap();
+        let _ = repo;
+        (dir, repo2)
+    }
+
+    // Destructive-phrase routing (S62): "clean up" NEVER reaches a Clean/Reset
+    // step without the ChoiceGate having been shown. ScriptedGate records it.
+    #[tokio::test]
+    async fn cleanup_phrase_requires_choice_gate_before_any_destroy() {
+        let (dir, repo) = init_repo_one_commit();
+        // Make something to clean so the gate isn't skipped by the degenerate guard.
+        std::fs::write(dir.path().join("f.txt"), "modified\n").unwrap();
+        std::fs::write(dir.path().join("junk.txt"), "untracked\n").unwrap();
+
+        // "clean up" classifies to CleanupIntent (deterministic table, not LLM).
+        match crate::intent::try_canonical("clean up") {
+            Some(crate::commands::IntentType::ScopedWrite(ScopedWriteOp::CleanupIntent)) => {}
+            other => panic!("'clean up' must map to CleanupIntent, got {:?}", other),
+        }
+
+        let gate = ScriptedGate::new(0); // pick the first option
+        let steps = build_cleanup_intent(&repo, &gate).unwrap();
+        assert!(
+            gate.choice_shown.get(),
+            "the ChoiceGate MUST be shown before any destructive step is built (S62)"
+        );
+        // Option 0 with both dirty tracked + untracked is "Discard tracked changes".
+        assert!(
+            steps
+                .iter()
+                .any(|s| matches!(s, PipelineStep::Reset { .. } | PipelineStep::Clean { .. })),
+            "a destructive step should be produced after the gate choice"
+        );
+    }
+
+    // Degenerate guard: nothing to clean → no gate rendered, no steps.
+    #[tokio::test]
+    async fn cleanup_phrase_on_clean_tree_renders_no_gate() {
+        let (_dir, repo) = init_repo_one_commit();
+        let gate = ScriptedGate::new(0);
+        let steps = build_cleanup_intent(&repo, &gate).unwrap();
+        assert!(steps.is_empty(), "no steps on a pristine tree");
+        assert!(
+            !gate.choice_shown.get(),
+            "no ChoiceGate should render when there is nothing to clean"
+        );
+    }
+
+    // RecoveryBrowser under --yes is refused (Q2).
+    #[tokio::test]
+    async fn forensic_recover_refused_under_yes() {
+        let (dir, _repo) = init_repo_one_commit();
+        // Create a lost commit so the browser would have candidates.
+        git(dir.path(), &["checkout", "-b", "feature"]);
+        std::fs::write(dir.path().join("f.txt"), "feature\n").unwrap();
+        git(dir.path(), &["commit", "-am", "feat: lost"]);
+        git(dir.path(), &["checkout", "main"]);
+        git(dir.path(), &["branch", "-D", "feature"]);
+
+        let repo = Repository::open(dir.path()).unwrap();
+        let cfg = crate::config::Config::default();
+        let res = handle_forensic_recover(&repo, &cfg, &crate::confirm::AutoConfirmGate);
+        assert!(
+            res.is_err(),
+            "--yes must refuse the RecoveryBrowser (never auto-pick a commit)"
+        );
+    }
+
+    // CENTERPIECE end-to-end: delete a branch, forensic recover restores it to a
+    // rescue/* branch at the exact oid, current HEAD byte-for-byte untouched.
+    #[tokio::test]
+    async fn forensic_recover_restores_rescue_branch_head_untouched() {
+        let (dir, _repo) = init_repo_one_commit();
+        git(dir.path(), &["checkout", "-b", "feature"]);
+        std::fs::write(dir.path().join("f.txt"), "feature work\n").unwrap();
+        git(dir.path(), &["commit", "-am", "feat: export csv"]);
+        let lost_oid = Repository::open(dir.path())
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap();
+        git(dir.path(), &["checkout", "main"]);
+        git(dir.path(), &["branch", "-D", "feature"]);
+
+        let repo = Repository::open(dir.path()).unwrap();
+        let head_before = repo.head().unwrap().target().unwrap();
+        let f_before = std::fs::read(dir.path().join("f.txt")).unwrap();
+
+        let cfg = crate::config::Config::default();
+        let gate = ScriptedGate::new(0); // pick the (most-recent) lost commit
+        handle_forensic_recover(&repo, &cfg, &gate).unwrap();
+
+        // A rescue/* branch now points at the exact lost oid...
+        let rescue = repo
+            .branches(Some(git2::BranchType::Local))
+            .unwrap()
+            .flatten()
+            .find_map(|(b, _)| {
+                let name = b.name().ok().flatten()?.to_string();
+                if name.starts_with("rescue/") {
+                    Some((name, b.get().target().unwrap()))
+                } else {
+                    None
+                }
+            })
+            .expect("a rescue/* branch should have been created");
+        assert_eq!(
+            rescue.1, lost_oid,
+            "rescue branch must point at the lost oid"
+        );
+
+        // ...and current HEAD + working tree are byte-for-byte untouched.
+        let repo_after = Repository::open(dir.path()).unwrap();
+        assert_eq!(
+            repo_after.head().unwrap().target().unwrap(),
+            head_before,
+            "HEAD must be untouched by a forensic restore"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("f.txt")).unwrap(),
+            f_before,
+            "working tree must be byte-for-byte untouched"
+        );
     }
 }
 
