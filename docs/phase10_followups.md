@@ -51,7 +51,7 @@ than fresh logic errors — but they degrade the very detection Phase 10 added.
 ## P10-7 — Priority order masks `StaleLock` behind `DetachedHead`
 - **Where:** `context.rs:196` (detached check is step 3, stale-lock is step 4)
 - **What:** A repo that is both detached and holds a stale lock is classified `DetachedHead`.
-- **Why it matters:** glit guides the user around detached HEAD while every write still fails on the abandoned lock, and the lock remedy is never surfaced. A stale lock blocks *all* writes, so it is arguably the more urgent classification.
+- **Why it matters:** gitrust guides the user around detached HEAD while every write still fails on the abandoned lock, and the lock remedy is never surfaced. A stale lock blocks *all* writes, so it is arguably the more urgent classification.
 - **Fix:** Consider moving the stale-lock check ahead of detached HEAD (or surface both).
 
 ## P10-8 — Non-UTF8 / unreadable conflict paths misclassify an unresolved merge as resolved

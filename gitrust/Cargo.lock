@@ -469,7 +469,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "glit"
+name = "gitrust"
 version = "0.1.0"
 dependencies = [
  "anyhow",

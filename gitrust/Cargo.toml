@@ -1,5 +1,5 @@
 [package]
-name = "glit"
+name = "gitrust"
 version = "0.1.0"
 edition = "2021"
 description = "Agentic Git CLI — natural language interface for Git operations"

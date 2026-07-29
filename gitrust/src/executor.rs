@@ -67,7 +67,7 @@ mod tests {
     use std::os::unix::fs::PermissionsExt;
     use tempfile::TempDir;
 
-    /// S47 ⚗️: libgit2 never runs hooks, so GLit's git2 commit silently bypasses
+    /// S47 ⚗️: libgit2 never runs hooks, so GiTrust's git2 commit silently bypasses
     /// a team's pre-commit gate. With hook-aware routing, a failing executable
     /// pre-commit hook must block the commit and surface as a HookRejected
     /// (Recoverable) failure — the blueprint's own test-matrix scenario that

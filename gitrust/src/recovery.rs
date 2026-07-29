@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use crate::commands::{PipelineStep, PushFailureType, RecoveryAction, ResetMode};
 
 /// Snapshot of repo state captured before any pipeline step executes.
-/// Persisted to ~/.glit/snapshots/<id>.json for crash recovery.
+/// Persisted to ~/.gitrust/snapshots/<id>.json for crash recovery.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PipelineSnapshot {
     pub head_oid: Option<String>,
@@ -24,7 +24,7 @@ pub struct PipelineSnapshot {
     pub repo_workdir: String,
 }
 
-/// What `glit --recover` should do, given the repo's CURRENT state versus the
+/// What `gitrust --recover` should do, given the repo's CURRENT state versus the
 /// snapshot. Recovery must never fight git's own state machine (Phase 11): a
 /// blind HEAD/index restore is only correct when the repo is Clean and the
 /// snapshot was taken on a normal (attached) branch. Pure + table-testable.
@@ -94,12 +94,12 @@ pub trait RecoveryManager {
     fn delete_snapshot_by_id(&self, pipeline_id: &str) -> anyhow::Result<()>;
 }
 
-/// Default file-based recovery manager using ~/.glit/snapshots/.
+/// Default file-based recovery manager using ~/.gitrust/snapshots/.
 pub struct FileRecoveryManager;
 
 impl FileRecoveryManager {
     fn snapshots_dir() -> anyhow::Result<PathBuf> {
-        let dir = crate::config::glit_dir()?.join("snapshots");
+        let dir = crate::config::gitrust_dir()?.join("snapshots");
         fs::create_dir_all(&dir)
             .with_context(|| format!("Failed to create snapshots dir: {}", dir.display()))?;
         Ok(dir)
@@ -312,7 +312,7 @@ impl PipelineStep {
             },
             PipelineStep::Push { .. } => RecoveryAction::NoLocalChange {
                 description: "commit is safe locally — push can be retried".into(),
-                suggestion: "glit push (when network or auth issue is resolved)".into(),
+                suggestion: "gitrust push (when network or auth issue is resolved)".into(),
             },
             PipelineStep::Reset {
                 mode: ResetMode::Hard,
@@ -630,7 +630,7 @@ mod tests {
     }
 
     // S56: a snapshot captured in repo A must NOT surface when checking scoped
-    // to repo B's workdir. Snapshots share ~/.glit/snapshots across the machine,
+    // to repo B's workdir. Snapshots share ~/.gitrust/snapshots across the machine,
     // so the workdir filter is what prevents worktree/multi-repo cross-talk.
     #[test]
     fn check_for_interrupted_scoped_to_repo_workdir() {

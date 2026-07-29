@@ -4,7 +4,7 @@ use git2::Repository;
 use crate::commands::{PipelineStep, ResetMode};
 use crate::context::StatusSummary;
 
-/// Per-file change in a commit — used for `glit show` output.
+/// Per-file change in a commit — used for `gitrust show` output.
 #[derive(Debug, Clone)]
 pub struct FileChange {
     pub path: String,
@@ -435,7 +435,7 @@ impl FailureClass {
                 "commit or stash your edits to {} file(s) first",
                 files.len()
             ),
-            FailureClass::NonFastForward => "glit \"pull\" to reconcile, then push again".into(),
+            FailureClass::NonFastForward => "gitrust \"pull\" to reconcile, then push again".into(),
             FailureClass::AuthFailed => {
                 "verify with: git -C . ls-remote (this uses your system git's credentials)".into()
             }
@@ -981,7 +981,7 @@ impl GitOperations for Git2Operations {
                     anyhow::anyhow!("'{}' is not a valid branch or commit", target)
                 } else {
                     anyhow::anyhow!(
-                        "Branch '{}' not found.\n  Available branches: {}\n  Create it with: glit \"create branch {}\"",
+                        "Branch '{}' not found.\n  Available branches: {}\n  Create it with: gitrust \"create branch {}\"",
                         target,
                         available.join(", "),
                         target
@@ -1009,7 +1009,7 @@ impl GitOperations for Git2Operations {
     fn stash(&self, repo: &mut Repository) -> anyhow::Result<git2::Oid> {
         let sig = repo.signature().context("Git user not configured")?;
         let oid = repo
-            .stash_save(&sig, "GLit auto-stash", None)
+            .stash_save(&sig, "GiTrust auto-stash", None)
             .context("Nothing to stash — working tree is clean")?;
         Ok(oid)
     }
@@ -2399,7 +2399,7 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
         index.write().unwrap();
         assert!(!repo.index().unwrap().has_conflicts());
 
-        // Commit through GLit's own path.
+        // Commit through GiTrust's own path.
         let ops = Git2Operations;
         let oid = ops.commit(&repo, "merge theirs into ours").unwrap();
 

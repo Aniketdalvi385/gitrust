@@ -8,7 +8,7 @@ const { useReducer, useEffect, useRef, useCallback, useState } = React;
 const DEFAULT_MESSAGE = "fix(README): add conflicting thing to README.md";
 
 const PLAN = {
-  command: 'glit "commit my login changes"',
+  command: 'gitrust "commit my login changes"',
   steps: [
     {
       id: 1,
@@ -519,7 +519,7 @@ function App() {
   return (
     <div className="app">
       <div className="hdr">
-        <h1>Glit · Plan Execution Prototype</h1>
+        <h1>GiTrust · Plan Execution Prototype</h1>
         <p className="sub">
           Three keymap variants for the same plan: <code>{PLAN.command}</code>. Switch variants, inject a failure, and walk through the flow on the keyboard. Use the legend on the right for keymap reminders.
         </p>
@@ -873,7 +873,7 @@ function DoneBlock() {
     <div className="done-block">
       <div className="ok">✓ Done · 1 commit on main, ahead of origin by 0</div>
       <div className="meta" style={{ color: "var(--dim)", fontSize: 12.5 }}>
-        Next: <span className="b">glit "status"</span> · undo this with <span className="g">glit undo</span>
+        Next: <span className="b">gitrust "status"</span> · undo this with <span className="g">gitrust undo</span>
       </div>
       <div className="prompt-row" style={{ marginTop: 12 }}>
         <span className="key">r</span> reset prototype · <span className="key">Enter</span> run again
@@ -931,7 +931,7 @@ function Legend({ state, variant }) {
       <h3>Snapshot</h3>
       <div className="snap">
         Pre-run · <span className="sha">{PLAN.snapshotSha}</span>
-        <div className="hint">Captures HEAD + index. Working tree never touched. Undo with <span style={{ color: "var(--green)" }}>glit undo</span>.</div>
+        <div className="hint">Captures HEAD + index. Working tree never touched. Undo with <span style={{ color: "var(--green)" }}>gitrust undo</span>.</div>
       </div>
 
       <h3>Phase</h3>

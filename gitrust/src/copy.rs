@@ -37,7 +37,7 @@ pub const TIMELINE_CONNECTOR_ASCII: &str = "|";
 pub const PLAN_KEYMAP_LEGEND: &str = "[Enter] run · [q] cancel";
 
 pub const PLAN_DONE_FOOTER: &str = "Done";
-pub const PLAN_NEXT_HINT: &str = "Next: glit \"status\" · undo with `glit recover`";
+pub const PLAN_NEXT_HINT: &str = "Next: gitrust \"status\" · undo with `gitrust recover`";
 
 pub const PLAN_CANCELED_FMT: &str = "↪ Canceled · staged work preserved · snapshot @ {sha7}";
 
@@ -54,18 +54,18 @@ pub const PLAN_CANCELED_FMT: &str = "↪ Canceled · staged work preserved · sn
 // (Phase 12: the detached-HEAD write case no longer Blocks with a static
 // string — `situation_gate` returns `Redirect(DetachedHeadRescue)` and the gate
 // drives the branch-here / switch-back way out.)
-// Mid-operation blocks (updated in Phase 11 — GLit now drives continue/abort
+// Mid-operation blocks (updated in Phase 11 — GiTrust now drives continue/abort
 // itself). Abort is named FIRST (the anxious user's exit), then the finish path,
-// both via GLit's own verbs. The "<op> is in progress" phrase is load-bearing:
+// both via GiTrust's own verbs. The "<op> is in progress" phrase is load-bearing:
 // the §13 matrix test asserts it as a substring — keep it when editing.
 pub const REBASE_IN_PROGRESS_BLOCK: &str =
-    "A rebase is in progress. Back out with `glit \"abort rebase\"`, or resolve the conflicts and `glit \"continue rebase\"`.";
+    "A rebase is in progress. Back out with `gitrust \"abort rebase\"`, or resolve the conflicts and `gitrust \"continue rebase\"`.";
 pub const MERGE_IN_PROGRESS_BLOCK: &str =
-    "A merge is in progress. Back out with `glit \"abort merge\"`, or resolve the conflicts and commit.";
+    "A merge is in progress. Back out with `gitrust \"abort merge\"`, or resolve the conflicts and commit.";
 pub const CHERRY_PICK_IN_PROGRESS_BLOCK: &str =
-    "A cherry-pick is in progress. Back out with `glit \"abort cherry-pick\"`, or resolve the conflicts and `glit \"continue cherry-pick\"`.";
+    "A cherry-pick is in progress. Back out with `gitrust \"abort cherry-pick\"`, or resolve the conflicts and `gitrust \"continue cherry-pick\"`.";
 pub const REVERT_IN_PROGRESS_BLOCK: &str =
-    "A revert is in progress. Back out with `glit \"abort revert\"`, or resolve the conflicts and `glit \"continue revert\"`.";
+    "A revert is in progress. Back out with `gitrust \"abort revert\"`, or resolve the conflicts and `gitrust \"continue revert\"`.";
 pub const BISECT_IN_PROGRESS_BLOCK: &str =
     "A bisect is in progress. Finish with `git bisect reset` before making changes.";
 
@@ -85,10 +85,10 @@ pub fn no_inprogress_block(op: &str) -> String {
     format!("There's no {op} in progress.")
 }
 
-// Phase 11 — situation-aware recovery (`glit --recover`). Recovery must never
+// Phase 11 — situation-aware recovery (`gitrust --recover`). Recovery must never
 // fight git's own state machine (see recovery_plan in recovery.rs).
 pub const RECOVER_MID_OP_ADVICE: &str =
-    "A git operation is still in progress — GLit won't reset refs underneath it. Back out with git's own `--abort` (e.g. `git rebase --abort`), or finish it, then retry recovery if still needed.";
+    "A git operation is still in progress — GiTrust won't reset refs underneath it. Back out with git's own `--abort` (e.g. `git rebase --abort`), or finish it, then retry recovery if still needed.";
 pub const RECOVER_DETACHED_WARN: &str =
     "The interrupted operation appears to have completed (the repo is clean, but the snapshot points at a detached commit). Restoring would leave you on a detached HEAD, stranding that commit.";
 
@@ -96,7 +96,7 @@ pub const RECOVER_DETACHED_WARN: &str =
 // Hook-aware routing (Phase 9.3 — S47)
 // =============================================================================
 
-/// Printed before a commit that GLit routes through system `git` so hooks run.
+/// Printed before a commit that GiTrust routes through system `git` so hooks run.
 pub const HOOKS_USING_SYSTEM_GIT: &str = "hooks detected — using system git so they run.";
 
 // =============================================================================
@@ -147,12 +147,12 @@ pub fn reconcile_paused_block(op: &str, n: usize) -> String {
     if op == "merge" {
         format!(
             "Paused on conflicts in {n} file(s) — nothing is lost. Resolve them and commit, \
-             or `glit \"abort merge\"` to return to where you started."
+             or `gitrust \"abort merge\"` to return to where you started."
         )
     } else {
         format!(
             "Paused on conflicts in {n} file(s) — nothing is lost. Resolve them, then \
-             `glit \"continue {op}\"`, or `glit \"abort {op}\"` to return to where you started."
+             `gitrust \"continue {op}\"`, or `gitrust \"abort {op}\"` to return to where you started."
         )
     }
 }
@@ -208,8 +208,8 @@ pub const UNDO_PUSHED_WHY: &str =
 pub fn undo_multi_commit_guidance(n: u32) -> String {
     format!(
         "Multi-commit undo isn't supported yet. Did you mean: squash the last {n} into one \
-         (glit \"squash last {n}\"), revert a specific commit, or undo just the most recent \
-         (glit \"undo\")?"
+         (gitrust \"squash last {n}\"), revert a specific commit, or undo just the most recent \
+         (gitrust \"undo\")?"
     )
 }
 
@@ -235,10 +235,10 @@ pub const PUSHED_REWRITE_WARNING: &str =
 // S26/S27/S30/S62; P5).
 // =============================================================================
 
-/// `glit --recover` found no pending snapshot for this repo. Not an error —
+/// `gitrust --recover` found no pending snapshot for this repo. Not an error —
 /// point the user sideways to the forensic flow (the "recover" precedence rule).
 pub const RECOVER_NONE_TRY_FORENSIC: &str =
-    "No interrupted GLit pipeline found for this repo. If you're looking for lost commits, try `glit \"find my lost work\"`.";
+    "No interrupted GiTrust pipeline found for this repo. If you're looking for lost commits, try `gitrust \"find my lost work\"`.";
 
 /// Header shown before the recovery browser lists lost-commit candidates.
 pub const FORENSIC_BROWSER_HEADER: &str =

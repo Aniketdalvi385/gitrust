@@ -23,23 +23,23 @@ mod validation;
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 
-/// GLit — Agentic Git CLI.
+/// GiTrust — Agentic Git CLI.
 /// Natural language interface for Git. Powered by a local LLM (Ollama).
 ///
 /// Examples:
-///   glit setup
-///   glit "push login changes"
-///   glit "commit and push with message feat: add auth"
-///   glit "show status"
-///   glit --recover
-///   glit              # opens interactive REPL
+///   gitrust setup
+///   gitrust "push login changes"
+///   gitrust "commit and push with message feat: add auth"
+///   gitrust "show status"
+///   gitrust --recover
+///   gitrust              # opens interactive REPL
 #[derive(Parser, Debug)]
 // `disable_help_subcommand`: we define an explicit `Help` subcommand (canonical
 // phrases), which collides with clap's auto-generated `help` and trips a
 // debug-only assertion ("command name 'help' is duplicated") that panics the
 // debug binary at startup. Disabling clap's generated one leaves ours.
 #[command(
-    name = "glit",
+    name = "gitrust",
     about = "Agentic Git CLI",
     version,
     disable_help_subcommand = true
@@ -72,7 +72,7 @@ struct Cli {
 enum Command {
     /// Install Ollama (if missing), start service, and pull the LLM model.
     Setup,
-    /// Show the list of canonical phrases GLit understands.
+    /// Show the list of canonical phrases GiTrust understands.
     Help,
     /// Manage recovery snapshots (preserved when a pipeline fails).
     Recover {
@@ -132,12 +132,12 @@ async fn run() -> anyhow::Result<()> {
     }
 
     match cli.query {
-        // One-shot mode: glit "push login changes"
+        // One-shot mode: gitrust "push login changes"
         Some(query) => {
             agent::run_agent(&query, &config, cli.yes, cli.show_all).await?;
         }
 
-        // Interactive REPL mode: glit (no args)
+        // Interactive REPL mode: gitrust (no args)
         None => {
             run_repl(&config, cli.yes, cli.show_all).await?;
         }
@@ -147,7 +147,7 @@ async fn run() -> anyhow::Result<()> {
 }
 
 fn print_help() {
-    println!("GLit canonical phrases (always work, never need the LLM):\n");
+    println!("GiTrust canonical phrases (always work, never need the LLM):\n");
     println!("  Inspect:    status · log · show · diff · branches · remotes · config");
     println!("  Track:      fetch · safe to pull · merge preview · check remote");
     println!("  Stage:      commit · commit all my files · commit <file>");
@@ -155,7 +155,7 @@ fn print_help() {
     println!("  Sync:       push · publish · pull · rebase");
     println!("  Recover:    undo · stash · stash pop · force push · discard local");
     println!("  Setup:      init · add remote <url> · delete repository");
-    println!("  Tooling:    glit setup · glit help · glit recover --list / --clean");
+    println!("  Tooling:    gitrust setup · gitrust help · gitrust recover --list / --clean");
     println!();
     println!("Anything else: phrase it naturally — the AI will figure it out.");
     println!("Use --yes to auto-confirm non-destructive prompts.");
@@ -171,7 +171,7 @@ fn run_recover_subcommand(list: bool, clean: bool) -> anyhow::Result<()> {
             println!("No preserved snapshots.");
             return Ok(());
         }
-        println!("Preserved snapshots (run `glit recover --clean` to remove):\n");
+        println!("Preserved snapshots (run `gitrust recover --clean` to remove):\n");
         for s in &snapshots {
             println!("  {}  captured {}", s.pipeline_id, s.captured_at);
             if let Some(head) = &s.head_oid {
@@ -219,7 +219,7 @@ fn check_ollama_or_guide() {
         return;
     }
 
-    eprintln!("GLit needs Ollama to run the local LLM.\n");
+    eprintln!("GiTrust needs Ollama to run the local LLM.\n");
     eprintln!("  Install Ollama:");
 
     if cfg!(target_os = "macos") {
@@ -231,7 +231,7 @@ fn check_ollama_or_guide() {
     }
 
     eprintln!("\n  Then run the one-time setup:");
-    eprintln!("    glit setup\n");
+    eprintln!("    gitrust setup\n");
 
     std::process::exit(1);
 }
@@ -244,12 +244,12 @@ async fn run_repl(
 ) -> anyhow::Result<()> {
     use inquire::Text;
 
-    println!("GLit — Agentic Git CLI  (Ctrl-C or empty input to exit)");
+    println!("GiTrust — Agentic Git CLI  (Ctrl-C or empty input to exit)");
     println!("Model: {}  |  Remote: {}", config.model, config.remote);
     println!();
 
     loop {
-        let query = match Text::new("glit>").prompt() {
+        let query = match Text::new("gitrust>").prompt() {
             Ok(q) => q,
             Err(inquire::InquireError::OperationCanceled)
             | Err(inquire::InquireError::OperationInterrupted) => {

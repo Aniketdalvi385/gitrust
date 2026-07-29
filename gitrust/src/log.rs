@@ -4,7 +4,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
 
-/// Structured execution logger writing to ~/.glit/log.
+/// Structured execution logger writing to ~/.gitrust/log.
 /// Writes START/END entries per step so crash recovery can detect
 /// which step was interrupted.
 pub struct ExecutionLog {
@@ -15,7 +15,7 @@ pub struct ExecutionLog {
 
 impl ExecutionLog {
     pub fn new(pipeline_id: &str, enabled: bool) -> anyhow::Result<Self> {
-        let log_dir = crate::config::glit_dir()?;
+        let log_dir = crate::config::gitrust_dir()?;
         fs::create_dir_all(&log_dir)
             .with_context(|| format!("Failed to create log dir: {}", log_dir.display()))?;
         Ok(Self {
@@ -103,7 +103,7 @@ mod tests {
     fn test_log_disabled() {
         let log = ExecutionLog {
             pipeline_id: "test-123".to_string(),
-            log_path: PathBuf::from("/tmp/glit-test-log"),
+            log_path: PathBuf::from("/tmp/gitrust-test-log"),
             enabled: false,
         };
         // Should not error even when disabled

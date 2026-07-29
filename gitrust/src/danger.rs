@@ -242,7 +242,7 @@ pub fn step_danger(step: &PipelineStep, ctx: &RepoContext) -> DangerLevel {
 
         // Clean deletes UNTRACKED files (Phase 14 / S62). Graded ABOVE hard reset:
         // a hard reset's discarded commits are reflog-recoverable (~90 days), but
-        // untracked files have NO reflog and NO object-db copy — only GLit's
+        // untracked files have NO reflog and NO object-db copy — only GiTrust's
         // trash-net stands between them and permanent loss. Irreversible from
         // git's point of view.
         P::Clean { .. } => DangerLevel::Irreversible,

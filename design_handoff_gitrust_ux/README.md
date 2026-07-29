@@ -1,8 +1,8 @@
-# Handoff: Glit UX redesign
+# Handoff: GiTrust UX redesign
 
 ## Overview
 
-This handoff documents a UX pass on **Glit**, an agentic CLI that wraps Git in natural language (Rust, single binary, qwen2.5:3b via Ollama for intent classification). The package covers:
+This handoff documents a UX pass on **GiTrust**, an agentic CLI that wraps Git in natural language (Rust, single binary, qwen2.5:3b via Ollama for intent classification). The package covers:
 
 - **6 cross-cutting principles** for the entire CLI surface
 - **5 selection patterns** (replacing the current flat 4-option picker)
@@ -16,7 +16,7 @@ The goal is concrete, drop-in changes — exact copy strings, exact keymaps, exa
 
 ## About the design files
 
-The files in this bundle are **design references created in HTML** that visualize how Glit's terminal output should look and behave. They are NOT production code.
+The files in this bundle are **design references created in HTML** that visualize how GiTrust's terminal output should look and behave. They are NOT production code.
 
 The actual implementation target is the existing **Rust codebase**. The HTML mockups translate to:
 
@@ -53,10 +53,10 @@ Do these in order — earlier items unlock or de-risk later ones.
 | 1 | **Pin `inquire::Select` cursor to index 0** | One-line fix; the screenshot bug. Resolves Q4. |
 | 2 | **Engine indicator (`⚡` vs `◉`)** | Tiny visual change with outsized trust impact; touches every command. |
 | 3 | **Bucketed file picker (P5)** with per-file reasons | Surfaces existing `ClassificationResult` data; biggest single UX win. |
-| 4 | **Tightened plan-execution box (06½) + Variant C keymap** | Replaces the current `╔═╗ GLit plan ╚═╝` chrome; the prototype is the spec. |
+| 4 | **Tightened plan-execution box (06½) + Variant C keymap** | Replaces the current `╔═╗ GiTrust plan ╚═╝` chrome; the prototype is the spec. |
 | 5 | **Stage labels during LLM call (M2)** | Replaces blank-cursor latency with intent + budgets. |
 | 6 | **Predict + confirm picker (P1)** for merge-conflict resolution | Turns the 4-option flat list into a 1-keystroke confirmation. |
-| 7 | **`.git/glit/aliases.toml` (M8)** + correction recording flow | The flywheel — each user's repo gets smarter the more they use it. |
+| 7 | **`.git/gitrust/aliases.toml` (M8)** + correction recording flow | The flywheel — each user's repo gets smarter the more they use it. |
 | 8 | **Polish flows for NeedsClarification (M3), AmbiguousFeature (M4), TooManyFiles (M5)** | Existing failure modes that deserve first-class UX. |
 | 9 | Everything else in the doc | Status line tightening, reset preview, detached-HEAD rescue, branch-name sanitization. |
 
@@ -66,22 +66,22 @@ Do these in order — earlier items unlock or de-risk later ones.
 
 These apply everywhere — bake them into every output surface.
 
-### 1. Speak Glit, not Git
+### 1. Speak GiTrust, not Git
 
-In any list of resolution options or commands, all options use `glit "…"`, never raw `git …`.
+In any list of resolution options or commands, all options use `gitrust "…"`, never raw `git …`.
 
 **Bad:**
 ```
-1. Merge:        glit "pull"
+1. Merge:        gitrust "pull"
 2. Rebase:       git pull --rebase
 3. Force push:   git push --force-with-lease
 ```
 
 **Good:**
 ```
-1. Merge        glit "pull"
-2. Rebase       glit "rebase onto origin"
-3. Force push   glit "force push"
+1. Merge        gitrust "pull"
+2. Rebase       gitrust "rebase onto origin"
+3. Force push   gitrust "force push"
 ```
 
 Underlying git command can be shown dim on the same line if useful. Never as the primary action.
@@ -129,9 +129,9 @@ If the user didn't ask "why isn't stash working," don't explain it. Put explanat
 Inline the safety net next to the loss, not in a header above the input prompt.
 
 ```
-⚠⚠ glit "reset --hard HEAD~3"
+⚠⚠ gitrust "reset --hard HEAD~3"
    loses 3 commits, 99 uncommitted lines
-   recoverable for 30 days via:  glit undo
+   recoverable for 30 days via:  gitrust undo
 ```
 
 ---
@@ -143,8 +143,8 @@ Inline the safety net next to the loss, not in a header above the input prompt.
 **Replace the current 4-option flat picker (the screenshot) with this:**
 
 ```
-$ glit "do I have conflicts if I pull"
-  dbg → read-only · merge_preview on main      [shown only if GLIT_DEBUG=1, dim]
+$ gitrust "do I have conflicts if I pull"
+  dbg → read-only · merge_preview on main      [shown only if GITRUST_DEBUG=1, dim]
 
 Fetched origin/main · 1 ahead, 1 behind
 
@@ -152,33 +152,33 @@ Fetched origin/main · 1 ahead, 1 behind
   README.md  both sides edited the intro · ~3 lines overlap
 
 Suggested  Merge — keep both histories, resolve once
-  [Enter]  glit "pull"           merge commit · resolve markers in README.md
+  [Enter]  gitrust "pull"           merge commit · resolve markers in README.md
 
 Other options
-  [r]  glit "rebase"         replay your work on top · resolve per commit
-  [f]  glit "force push"     ⚠   rewrites 1 remote commit · you own this branch
-  [d]  glit "discard mine"   ⚠   drops 1 local commit · glit undo restores it for 30d
+  [r]  gitrust "rebase"         replay your work on top · resolve per commit
+  [f]  gitrust "force push"     ⚠   rewrites 1 remote commit · you own this branch
+  [d]  gitrust "discard mine"   ⚠   drops 1 local commit · gitrust undo restores it for 30d
 
   [?] explain conflict markers   [why] why these 4   [q] quit
 ▸ _
 ```
 
 **Key changes from current:**
-- Demote the LLM reasoning line: dim, indented, prefixed with `dbg →`, only shown with `GLIT_DEBUG=1`
+- Demote the LLM reasoning line: dim, indented, prefixed with `dbg →`, only shown with `GITRUST_DEBUG=1`
 - Replace "Merge conflicts predicted" with "Pull will conflict" + status line
 - Annotate the file with WHAT's conflicting ("both sides edited the intro · ~3 lines overlap")
 - One promoted option (Merge), three with single-key shortcuts (`r` `f` `d`)
-- ALL options use `glit "…"`, not raw git
+- ALL options use `gitrust "…"`, not raw git
 - Severity reflects branch reality: force-push on own branch = `⚠`, not `⚠⚠`
-- Recovery promise inline: "glit undo restores it for 30d"
+- Recovery promise inline: "gitrust undo restores it for 30d"
 - Wall-of-text (`?`) and "why these 4" (`why`) hidden behind keys
 
 ### Flow 06½ · Plan-execution box (commit pipeline)
 
-**Replace the current `╔═╗ GLit plan ╚═╝` box.** Use the timeline visual from `prototype.jsx` (Variant C keymap is the recommendation).
+**Replace the current `╔═╗ GiTrust plan ╚═╝` box.** Use the timeline visual from `prototype.jsx` (Variant C keymap is the recommendation).
 
 ```
-$ glit "commit my login changes"
+$ gitrust "commit my login changes"
 ⚡ understanding intent…       ~900ms
 ⚡ matching files (3 of 12)    ~700ms
 ⚡ drafting message            ~500ms
@@ -204,21 +204,21 @@ Plan  · 3 steps · snapshot taken at aa44620
 **On completion:**
 - All nodes green
 - Delta lines: `committed  aa44620 → 0de4a0d`, `pushed  origin/main now at 0de4a0d`
-- Footer: `Done · 1 commit on main, ahead of origin by 0. Next: glit "status" · undo with glit undo`
+- Footer: `Done · 1 commit on main, ahead of origin by 0. Next: gitrust "status" · undo with gitrust undo`
 
 **Specifically drop:**
-- The `╔═══╗` double-line border + centered "GLit plan" title
+- The `╔═══╗` double-line border + centered "GiTrust plan" title
 - `⚠` on `git add` (staging is reversible — don't dilute the marker)
-- Raw `git add` / `git commit` verbs — speak Glit: `stage`, `commit`, `push`
+- Raw `git add` / `git commit` verbs — speak GiTrust: `stage`, `commit`, `push`
 - "(all files)" without filenames — show what's being staged
 - "Pipeline complete" → just "Done"
 
-**Implementation: see `Glit Plan Prototype.html` + `prototype.jsx` for the three keymap variants. Recommended is Variant C.**
+**Implementation: see `GiTrust Plan Prototype.html` + `prototype.jsx` for the three keymap variants. Recommended is Variant C.**
 
 ### Flow 03 · Reset preview + type-to-confirm
 
 ```
-$ glit "reset 3 commits back hard"
+$ gitrust "reset 3 commits back hard"
 
 ⚠⚠ Hard reset · feat/session-refresh → HEAD~3
 
@@ -231,7 +231,7 @@ $ glit "reset 3 commits back hard"
     src/auth/login.rs    −87 +12   (undoes today's work)
     src/auth/session.rs  deleted    (file goes away)
 
-  ↻ Snapshot saved · glit undo → restores all of the above for 30 days
+  ↻ Snapshot saved · gitrust undo → restores all of the above for 30 days
 
 Type the branch name (so you know what you're resetting):
   feat/session-refresh
@@ -276,7 +276,7 @@ What do you want to do?
 **Don't lecture.**
 
 ```
-$ glit "make a branch called feat/Login Page (v2)"
+$ gitrust "make a branch called feat/Login Page (v2)"
 
 Git won't allow spaces or parens in branch names.
 
@@ -296,7 +296,7 @@ Mostly working already. Three tightenings:
 
 1. **Surface the silent typo-rescue** with one dim breadcrumb line:
    ```
-   $ glit 'statsus'
+   $ gitrust 'statsus'
      ↳ ran status
    ```
 2. **Quantify "last fetched"** with a relative timestamp, color yellow past ~10min:
@@ -306,8 +306,8 @@ Mostly working already. Three tightenings:
 3. **Turn "Diverged from upstream" into an inline action keymap** so the user doesn't have to retype:
    ```
    ⚠ Diverged from origin/main — you and someone else both moved on.
-     [Enter]  glit "pull"           merge their commit in
-     [r]      glit "rebase"         replay your commit on top
+     [Enter]  gitrust "pull"           merge their commit in
+     [r]      gitrust "rebase"         replay your commit on top
      [w]      keep working          you can resolve later
    ```
 
@@ -315,10 +315,10 @@ Normalize on `↑1 ↓1` arrows everywhere (the branch list already uses this; t
 
 ### Flow snapshot listing
 
-Rename `glit snapshots` → `glit undo`. Both work; lead with `undo` because that's the panic-time command.
+Rename `gitrust snapshots` → `gitrust undo`. Both work; lead with `undo` because that's the panic-time command.
 
 ```
-$ glit undo
+$ gitrust undo
 
 What would you like to undo?  last 7 days, newest first
 
@@ -336,7 +336,7 @@ What would you like to undo?  last 7 days, newest first
 **Key:**
 - Relative timestamps, not ISO
 - Describe what restoring will **do**, not just the snapshot name
-- Surface `glit undo` by name on every `⚠⚠` / `⛔` screen
+- Surface `gitrust undo` by name on every `⚠⚠` / `⛔` screen
 
 ---
 
@@ -346,14 +346,14 @@ When the user has to pick from a set, use these in this priority order:
 
 ### P1 · Predict + confirm (PRIMARY — replaces most pickers)
 
-Glit can compute Rust-side: branch ownership (who authored recent commits), repo's merge history (last 20 merges = X rebases, Y merges), conflict size, etc. Use those signals to predict the most likely correct action and present it with one-keystroke confirmation. The full picker hides behind `[?]`.
+GiTrust can compute Rust-side: branch ownership (who authored recent commits), repo's merge history (last 20 merges = X rebases, Y merges), conflict size, etc. Use those signals to predict the most likely correct action and present it with one-keystroke confirmation. The full picker hides behind `[?]`.
 
 ```
 ⚠ Pull will conflict on README.md (~3 lines)
 
 Suggested · Rebase  (this repo uses rebase 18/20 times; you're solo on this branch)
 
-  [Enter]  do it           glit "rebase"
+  [Enter]  do it           gitrust "rebase"
   [m]      merge instead   creates a merge commit
   [?]      all options     incl. force-push, discard
   [q]      back
@@ -405,7 +405,7 @@ How should the histories combine?  your branch · feat/session-refresh
        Runs:        git pull --rebase origin main
        Affects:     README.md (3 lines conflict)
        Result:      linear history · your commit becomes a3f9c12'
-       If it goes wrong:  glit undo restores to before pull
+       If it goes wrong:  gitrust undo restores to before pull
                           (snapshot taken automatically)
        [Enter] do this    [↓] next option
   ▶ Force-push     overwrites remote ⚠⚠
@@ -434,16 +434,16 @@ Detail block has a fixed shape per option: **Runs / Affects / Result / If it goe
   → Rebase fits.  [Enter] do it  ·  [?] show me the other options anyway
 ```
 
-- Two questions max. Each has a smart default Glit pre-fills.
+- Two questions max. Each has a smart default GiTrust pre-fills.
 - Questions are about **intent**, not implementation
-- Opt-in via `glit config verbosity beginner`; off by default
+- Opt-in via `gitrust config verbosity beginner`; off by default
 
 ### P5 · Bucketed file multi-select
 
 Uses the existing `ClassificationResult { related, uncertain, unrelated }` from the two-pass resolver. **No new classifier work needed** — just surface what's there.
 
 ```
-$ glit "commit my login changes"
+$ gitrust "commit my login changes"
 
 Select files to stage  ·  matched on "login"  ·  4 of 12 changed files selected
 
@@ -486,10 +486,10 @@ Single glyph per response shows which engine answered:
 | `◉` | LLM (qwen2.5:3b) | 400ms–2s, ~92% accurate |
 
 ```
-$ glit "push"
+$ gitrust "push"
   ⚡ pushed origin/main · 0de4a0d → 1a3f4b8       (fast-path · 12ms)
 
-$ glit "ship my login work to prod"
+$ gitrust "ship my login work to prod"
   ◉ understanding…                                (llm · ~1s)
 ```
 
@@ -500,7 +500,7 @@ Builds power-user behavior naturally — users learn which phrasings hit fast-pa
 Ollama's `format: json` mode doesn't stream, so surface **stages** of the pipeline with their typical latency budgets.
 
 ```
-$ glit "ship my login work to prod"
+$ gitrust "ship my login work to prod"
   ⠋ understanding intent…       ~1s        [spinner, current stage]
   ✓ matched intent: push                    [done; shows actual time]
   ⠋ matching files (12 changed)  ~700ms
@@ -514,10 +514,10 @@ The 60% of queries that hit fast-path get NO spinner — just the `⚡` glyph co
 
 ### M3 · NeedsClarification (3% of queries)
 
-Currently surfaced as an editable prompt. Upgrade: also offer Glit's top 2-3 guesses as one-key picks.
+Currently surfaced as an editable prompt. Upgrade: also offer GiTrust's top 2-3 guesses as one-key picks.
 
 ```
-$ glit "the auth thing"
+$ gitrust "the auth thing"
   ◉ not sure what you want. My best guesses:
     [a]  commit your auth changes        5 modified files in src/auth/
     [b]  switch to branch feat/oauth     last touched 12m ago
@@ -531,7 +531,7 @@ $ glit "the auth thing"
 Reuse the P5 bucketed picker — items are matched features instead of files. The type prefix (`files`, `branch`, `recent`) tells the user what kind of match it is.
 
 ```
-$ glit "commit the auth thing"
+$ gitrust "commit the auth thing"
   ◉ 3 things match "auth" in this repo:
     [1]  files  ·  src/auth/* + tests/auth_test.rs    5 files, +120
     [2]  branch ·  feat/oauth-refresh                  2 ahead
@@ -545,7 +545,7 @@ $ glit "commit the auth thing"
 Don't flat-refuse — narrow.
 
 ```
-$ glit "commit everything"
+$ gitrust "commit everything"
   ⚠ 87 modified files — too many to reason about safely.
 
   Narrow by:
@@ -558,11 +558,11 @@ $ glit "commit everything"
 
 ### M6 · Closed operation set (trust narrative)
 
-Because the LLM picks from a fixed ~25-op enum (not free text), there is no "the AI made up a destructive command" failure mode. Say this out loud in `glit help` or first-run copy:
+Because the LLM picks from a fixed ~25-op enum (not free text), there is no "the AI made up a destructive command" failure mode. Say this out loud in `gitrust help` or first-run copy:
 
-> Glit always picks from a known list of ~25 git operations. It will never invent a command.
+> GiTrust always picks from a known list of ~25 git operations. It will never invent a command.
 
-Differentiates Glit from cloud LLM CLI wrappers where this fear is legitimate.
+Differentiates GiTrust from cloud LLM CLI wrappers where this fear is legitimate.
 
 ### M7 · Reasoning lines are Rust, not LLM
 
@@ -570,21 +570,21 @@ Any "why" text in the UI (e.g. "this repo uses rebase 18/20 times; you're solo o
 
 Surface this trust in copy somewhere:
 
-> Glit's reasoning lines are computed from your actual repo — the AI never writes warnings.
+> GiTrust's reasoning lines are computed from your actual repo — the AI never writes warnings.
 
 ### M8 · Corrections grow the fast-path
 
 When the user redirects a misclassification (the `[w]rong?` flow below), do NOT try to fine-tune qwen. Write the correction to a per-repo aliases file consulted **before** the LLM:
 
 ```toml
-# .git/glit/aliases.toml
+# .git/gitrust/aliases.toml
 [aliases]
 "changes today"        = { op = "log", since = "1d" }
 "my work-in-progress"  = { op = "diff", scope = "uncommitted" }
 "ship to staging"      = { op = "push", target = "staging" }
 
 # Aliases are checked before the LLM. Edit by hand or via:
-#   glit alias "<phrasing>" → <op>
+#   gitrust alias "<phrasing>" → <op>
 ```
 
 Three corrections on the same phrasing make it a 100%-reliable instant response. File is human-readable + diffable; teams can commit it to share dialect.
@@ -593,7 +593,7 @@ Three corrections on the same phrasing make it a 100%-reliable instant response.
 
 ## Universal keymap conventions
 
-These apply to every picker/prompt Glit shows:
+These apply to every picker/prompt GiTrust shows:
 
 | Key | Meaning |
 |-----|---------|
@@ -623,7 +623,7 @@ These apply to every picker/prompt Glit shows:
 | Destructive | `⚠⚠` (red) | `!!` | `#ff7b72` | `reset --hard`, `discard local`, branch delete |
 | Irreversible | `⛔` (bold red) | `XX` | `#ff7b72` bold | force-push to shared branch, repo delete |
 
-Detection: if `TERM` is unset, dumb, or `glit --no-unicode`, fall back to ASCII column.
+Detection: if `TERM` is unset, dumb, or `gitrust --no-unicode`, fall back to ASCII column.
 
 ### Colors (semantic)
 
@@ -712,14 +712,14 @@ LLM returns intent I; pipeline runs
   ↓
 after execution, append:
   ↳ ran <op>    [w]rong? · [d]iff instead · [s]tatus instead · ...
-                            ^ Glit's top 2-3 alternative intents
+                            ^ GiTrust's top 2-3 alternative intents
   ↓
 if user presses [w]:
   prompt: "what should I have done?"
   show full op list (P3 accordion of all ~25 ops)
 on selection of new intent:
   - run that intent (NOT auto-undo — user might want to keep both)
-  - write the original query → new intent mapping into .git/glit/aliases.toml
+  - write the original query → new intent mapping into .git/gitrust/aliases.toml
   - notify: "→ '<query>' now mapped to <op>. Next time it'll be instant."
 on [d]/[s]/etc (one of the alternatives):
   - run that intent
@@ -767,7 +767,7 @@ const BUDGET_FILES: u64 = 700;
 const BUDGET_DRAFT_MSG: u64 = 500;
 
 // Recovery
-const SNAPSHOT_PROMISE: &str = "glit undo → restores all of the above for 30 days";
+const SNAPSHOT_PROMISE: &str = "gitrust undo → restores all of the above for 30 days";
 const SNAPSHOT_TAKEN: &str = "Snapshot saved · Working tree was never touched.";
 
 // Conflict
@@ -777,7 +777,7 @@ const CONFLICT_HELP_HINT: &str = "[?] explain conflict markers   [why] why these
 // Plan
 const PLAN_HEADER: &str = "Plan";   // NOT a boxed title
 const PLAN_DONE_FOOTER: &str = "Done · {n_commits} commit(s) on {branch}, ahead of origin by {ahead}";
-const PLAN_NEXT_HINT: &str = r#"Next: glit "status" · undo with glit undo"#;
+const PLAN_NEXT_HINT: &str = r#"Next: gitrust "status" · undo with gitrust undo"#;
 
 // Status (status command output)
 const FETCH_AGE_HINT: &str = "Fetched: {n} {unit} ago  ·  [r] refresh";
@@ -792,8 +792,8 @@ const BRANCH_INVALID_INTRO: &str = "Git won't allow {chars} in branch names.";
 // NOT "Error: invalid branch name"
 
 // First-run / help
-const TRUST_NARRATIVE: &str = "Glit always picks from a known list of ~25 git operations. It will never invent a command.";
-const RUST_REASONING: &str = "Glit's reasoning lines are computed from your actual repo — the AI never writes warnings.";
+const TRUST_NARRATIVE: &str = "GiTrust always picks from a known list of ~25 git operations. It will never invent a command.";
+const RUST_REASONING: &str = "GiTrust's reasoning lines are computed from your actual repo — the AI never writes warnings.";
 
 // Resolution suggestions — these phrases are sniffable into Rust;
 // repo-merge-history heuristic generates "this repo uses {strategy} {x}/{y} times"
@@ -821,15 +821,15 @@ const SUGGEST_FMT: &str = "Suggested · {strategy} — {short_rationale}";
 | File | What it is |
 |------|------------|
 | `README.md` | This document — comprehensive implementation guide |
-| `Glit UX Critique.html` | Full critique doc — visual reference for every pattern, with before/after terminal mockups and rationale per change |
-| `Glit Plan Prototype.html` | Interactive prototype — opens in a browser, three keymap variants for the plan-execution flow with real keyboard input |
+| `GiTrust UX Critique.html` | Full critique doc — visual reference for every pattern, with before/after terminal mockups and rationale per change |
+| `GiTrust Plan Prototype.html` | Interactive prototype — opens in a browser, three keymap variants for the plan-execution flow with real keyboard input |
 | `prototype.jsx` | React source for the prototype — the reducer is the spec for state transitions to implement in Rust |
 
 **How to use them together:**
 
 1. Read this README front-to-back once (you need the context).
-2. Open `Glit UX Critique.html` in a browser — keep it open while implementing. Each "Flow rewrite" section in the critique has full before/after terminal mockups; visual reference is much faster than re-reading copy from this README.
-3. Open `Glit Plan Prototype.html` and walk through each keymap variant with the keyboard. The recommendation is **Variant C** (Hybrid: Enter runs all, ↑↓ focus, e edits, s skips). Variant A and B are there for comparison.
+2. Open `GiTrust UX Critique.html` in a browser — keep it open while implementing. Each "Flow rewrite" section in the critique has full before/after terminal mockups; visual reference is much faster than re-reading copy from this README.
+3. Open `GiTrust Plan Prototype.html` and walk through each keymap variant with the keyboard. The recommendation is **Variant C** (Hybrid: Enter runs all, ↑↓ focus, e edits, s skips). Variant A and B are there for comparison.
 4. Use `prototype.jsx`'s reducer (lines for `step-running`, `step-done`, `step-failed`, etc.) as the spec for the plan-execution state machine in Rust.
 
 ---
@@ -841,5 +841,5 @@ These were left open at handoff time — decide based on codebase context:
 1. **Variant A vs B vs C** for the plan-execution keymap — recommendation is C (Hybrid) but worth a team poll after using all three for a day.
 2. **`Tab`-to-save** on the commit message edit modal — currently `⌘/Ctrl+Enter` saves. If team prefers Tab-out semantics, the change is one line.
 3. **`r` retry on failed-step recovery** — currently only `u` undo / `a` abandon / `q` quit. Retry-with-fresh-attempt could be useful for transient failures (network, hook race conditions).
-4. **The wizard (P4) toggle** — what triggers it? Config setting? First-N-uses auto-on? Explicit `glit help me`?
+4. **The wizard (P4) toggle** — what triggers it? Config setting? First-N-uses auto-on? Explicit `gitrust help me`?
 5. **Severity-by-context implementation tier** — start free (branch-name match), then add `~50ms` author-walk for `has_foreign_commits()`, gate `git ls-remote` behind force-push confirm only. Skip GitHub branch protection rules (host-specific).

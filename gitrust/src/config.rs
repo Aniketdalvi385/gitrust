@@ -2,7 +2,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// GLit configuration loaded from ~/.glit.toml.
+/// GiTrust configuration loaded from ~/.gitrust.toml.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_model")]
@@ -25,7 +25,7 @@ pub struct Config {
     /// Push already shells out unconditionally, so this knob governs commit.
     #[serde(default = "default_hooks")]
     pub hooks: String,
-    /// How many days GLit keeps trash-net backups (~/.glit/trash/<ts>/) before
+    /// How many days GiTrust keeps trash-net backups (~/.gitrust/trash/<ts>/) before
     /// pruning them on startup. The trash-net copies content that would be
     /// deleted by a hard reset / discard-local / clean (Phase 14, S30/S62).
     #[serde(default = "default_trash_retention_days")]
@@ -68,19 +68,19 @@ impl Default for Config {
     }
 }
 
-/// Get the path to the GLit config directory (~/.glit/).
-pub fn glit_dir() -> anyhow::Result<PathBuf> {
+/// Get the path to the GiTrust config directory (~/.gitrust/).
+pub fn gitrust_dir() -> anyhow::Result<PathBuf> {
     let home = dirs::home_dir().context("Cannot determine home directory")?;
-    Ok(home.join(".glit"))
+    Ok(home.join(".gitrust"))
 }
 
-/// Get the path to the config file (~/.glit.toml).
+/// Get the path to the config file (~/.gitrust.toml).
 fn config_path() -> anyhow::Result<PathBuf> {
     let home = dirs::home_dir().context("Cannot determine home directory")?;
-    Ok(home.join(".glit.toml"))
+    Ok(home.join(".gitrust.toml"))
 }
 
-/// Load configuration from ~/.glit.toml, falling back to defaults.
+/// Load configuration from ~/.gitrust.toml, falling back to defaults.
 pub fn load() -> anyhow::Result<Config> {
     let path = config_path()?;
     if !path.exists() {
@@ -93,7 +93,7 @@ pub fn load() -> anyhow::Result<Config> {
     Ok(config)
 }
 
-/// Save configuration to ~/.glit.toml.
+/// Save configuration to ~/.gitrust.toml.
 pub fn save(config: &Config) -> anyhow::Result<()> {
     let path = config_path()?;
     let content = toml::to_string_pretty(config).context("Failed to serialize config")?;

@@ -1,4 +1,4 @@
-# GLit Build Phases v3 — Phases 9–14
+# GiTrust Build Phases v3 — Phases 9–14
 
 Continues the blueprint's Section 14 (phases 1–8, complete). Source of truth for _why_: `docs/scenario_map.md` (S-numbers and P-numbers below refer to it). Same iron rule as v2: **do not start a phase until the previous phase's verification passes.**
 
@@ -23,7 +23,7 @@ Three findings driving Phase 9 were empirically verified against live git/libgit
 3. **One phase = one session.** Start each phase with a fresh context (`/clear`). Long sessions degrade; the ~20k-token cost of a fresh start is cheaper than a confused context.
 4. **Plan before code, every phase.** Enter plan mode (Shift+Tab to cycle into it, or `/plan`), have Claude read the phase section + the referenced scenario-map sections + the files it will touch, and produce a step plan. Review it — edit directly with Ctrl+G if needed — then approve and switch to implementation. If a phase goes sideways twice, stop correcting: `/clear`, restate the phase goal plus what you learned, start again.
 5. **Verify, review, commit, advance.** Run the phase's verification block. Then ask for a fresh-context review of the diff (the bundled `/code-review`, or: "use a subagent to review the phase 9 diff against docs/BUILD_PHASES_V3.md phase 9 and report gaps"). Commit with the phase name. Update `Current phase:` in CLAUDE.md. `/clear`. Next phase.
-6. **Optional but recommended:** a pre-commit hook that runs `cargo test` — CLAUDE.md instructions are advisory; hooks are deterministic. (After Phase 9.3 lands, GLit itself will respect that hook. Enjoy the irony.)
+6. **Optional but recommended:** a pre-commit hook that runs `cargo test` — CLAUDE.md instructions are advisory; hooks are deterministic. (After Phase 9.3 lands, GiTrust itself will respect that hook. Enjoy the irony.)
 
 ---
 
@@ -34,7 +34,7 @@ Three verified bugs. Strictly test-first: each sub-item begins by writing the fa
 **9.1 — Layer 0 reads `repo.state()`; detached-HEAD advice gated on it (S12)**
 
 - Add `state` to `RepoContext` wrapping `git2::RepositoryState` (Clean / Merge / Rebase / RebaseMerge / RebaseInteractive / CherryPick / Revert / Bisect / …).
-- The `DetachedHead` pre-check message "checkout a branch first" fires **only when `state == Clean`**. For any in-progress state, the interim block message names the operation: "A rebase is in progress. GLit can't act safely mid-rebase yet — finish with `git rebase --continue` or back out with `git rebase --abort`." (Real steps arrive in Phase 11; wrong advice stops today.)
+- The `DetachedHead` pre-check message "checkout a branch first" fires **only when `state == Clean`**. For any in-progress state, the interim block message names the operation: "A rebase is in progress. GiTrust can't act safely mid-rebase yet — finish with `git rebase --continue` or back out with `git rebase --abort`." (Real steps arrive in Phase 11; wrong advice stops today.)
 - Include one line in `to_prompt_string()`: `State: rebase in progress (conflicts in 2 files)` — the classifier must see it.
 - Failing test first: tempdir repo, start a conflicting rebase, build context → assert state is Rebase\* and the commit pre-check message does NOT contain "checkout a branch".
 
@@ -42,16 +42,16 @@ Three verified bugs. Strictly test-first: each sub-item begins by writing the fa
 
 - In `git_ops::commit()`: when `repo.state() == Merge`, read `MERGE_HEAD`, commit with parents `[HEAD, MERGE_HEAD]`, seed the message draft from `.git/MERGE_MSG`, call `repo.cleanup_state()` on success.
 - Post-check for Commit gains: if the pipeline began mid-merge, assert the new commit has exactly 2 parents and `MERGE_HEAD` is gone.
-- Failing test first: tempdir repo with a real conflicted merge, resolve, stage, commit via GLit's path → assert `commit.parent_count() == 2` and state returns to Clean. (Today this test produces 1 parent — that's the bug.)
+- Failing test first: tempdir repo with a real conflicted merge, resolve, stage, commit via GiTrust's path → assert `commit.parent_count() == 2` and state returns to Clean. (Today this test produces 1 parent — that's the bug.)
 
 **9.3 — Hook-aware routing (S47)**
 
 - Verified: libgit2 never executes hooks. Detect executable hooks relevant to the op (`pre-commit`, `commit-msg`, `prepare-commit-msg` for Commit; `pre-push` for Push) under `core.hooksPath` or `.git/hooks`.
-- When present, route the operation through the existing shell-out convention (`git commit -m …` / `git push …`) instead of git2, with an info line: "hooks detected — using system git so they run." Config knob `hooks = "auto" | "git2" | "system"` (default auto) in `~/.glit.toml`.
+- When present, route the operation through the existing shell-out convention (`git commit -m …` / `git push …`) instead of git2, with an info line: "hooks detected — using system git so they run." Config knob `hooks = "auto" | "git2" | "system"` (default auto) in `~/.gitrust.toml`.
 - Fix the `HookExists` pre-check copy: it currently claims the hook "will run" — under git2 it will not. The warn text now depends on the routing decision.
-- Failing test first: tempdir repo with an executable `pre-commit` that exits 1 → commit via GLit is blocked and surfaces the hook output as a Recoverable error (this is the blueprint's own test-matrix scenario, which was previously impossible to pass).
+- Failing test first: tempdir repo with an executable `pre-commit` that exits 1 → commit via GiTrust is blocked and surfaces the hook output as a Recoverable error (this is the blueprint's own test-matrix scenario, which was previously impossible to pass).
 
-**Verification (phase gate):** `cargo test` green including the three new integration tests; `cargo clippy` clean. Manual smoke: in a repo mid-rebase, `glit "commit"` names the rebase and never says "checkout a branch".
+**Verification (phase gate):** `cargo test` green including the three new integration tests; `cargo clippy` clean. Manual smoke: in a repo mid-rebase, `gitrust "commit"` names the rebase and never says "checkout a branch".
 
 ---
 
@@ -96,7 +96,7 @@ The scenario that started this whole redesign — "I committed, fetched, and the
     - "Rebase — replay your {ahead} commit(s) on top of theirs; history stays linear. Recommended when nobody else has your commits."
     - "Merge — keep both histories, adds a merge commit. Safer if others may have pulled your commits."
     - "Abort — do nothing."
-    - On success, offer Push as the final step of the same pipeline. On conflict, the calm handoff message: "Paused on conflicts in N files — nothing is lost. Resolve them, then `glit continue`, or `glit abort` to return to where you started."
+    - On success, offer Push as the final step of the same pipeline. On conflict, the calm handoff message: "Paused on conflicts in N files — nothing is lost. Resolve them, then `gitrust continue`, or `gitrust abort` to return to where you started."
 - Wire the `NonFastForward` push-failure recovery to _offer this flow directly_ instead of printing "pull first" (S10).
 - `Sync { strategy }` intent resolves its target branch via `origin/HEAD` (default-branch detection) and reuses the same ChoiceGate (S13).
 - Migrate the Phase 10 `DetachedHead` write-block off its `agent.rs` special-case (`if matches!(…DetachedHead…)` → `handle_detached_head_rescue`) onto `SituationVerdict::Redirect { suggested_intent }`, so the gate—not `agent.rs`—drives the branch-here / switch-back way-out.
@@ -121,8 +121,8 @@ The scenario that started this whole redesign — "I committed, fetched, and the
 
 - `recovery.rs`: `find_lost_commits(repo) -> Vec<LostCommit { oid, age, summary, files_touched }>` — walk the reflogs of HEAD and every local branch (including recently deleted ones' surviving reflogs), collect commits unreachable from any current ref, dedupe, sort by age. Include dangling stash-shaped commits ("WIP on …", 2–3 parents) so dropped stashes surface too (S27).
 - `confirm.rs`: `GateType::RecoveryBrowser` — MultiSelect-style list: "2 hours ago — 'feat: export csv' — 3 files". Restore action is always **`CreateBranchAt { name: rescue/<date>-<short-oid>, oid }`** — never resets the user's current state. New step in `commands.rs` + `git_ops.rs`.
-- Intent: "find my lost work", "I lost a commit", "recover" (when no GLit snapshot is pending) → the forensic flow. Keep `glit --recover` (snapshot path) untouched — this is its outward-facing sibling.
-- **Trash-net (new invariant, sibling to "the LLM never executes"):** `backup_to_trash(paths) -> ~/.glit/trash/<timestamp>/` runs before any step that deletes content not in the object database: `Clean`, `DiscardLocal`, `Reset::Hard` (working-tree delta). Config `trash_retention_days` (default 7) with prune-on-startup. The Reset::Hard success message becomes: "Done. A backup of the discarded changes is in ~/.glit/trash/… for 7 days." (S30 — a sentence git itself cannot say.)
+- Intent: "find my lost work", "I lost a commit", "recover" (when no GiTrust snapshot is pending) → the forensic flow. Keep `gitrust --recover` (snapshot path) untouched — this is its outward-facing sibling.
+- **Trash-net (new invariant, sibling to "the LLM never executes"):** `backup_to_trash(paths) -> ~/.gitrust/trash/<timestamp>/` runs before any step that deletes content not in the object database: `Clean`, `DiscardLocal`, `Reset::Hard` (working-tree delta). Config `trash_retention_days` (default 7) with prune-on-startup. The Reset::Hard success message becomes: "Done. A backup of the discarded changes is in ~/.gitrust/trash/… for 7 days." (S30 — a sentence git itself cannot say.)
 - Destructive-phrase routing (S62): a deterministic table maps "clean up", "start fresh", "get rid of / throw away my changes" → a ChoiceGate that spells out what would be deleted (tracked changes vs untracked files, with counts) before any `Clean`/`DiscardLocal` is even constructed. Untracked deletion is graded **above** hard reset in `danger.rs` — hard reset has reflog; untracked has only the trash-net.
 - Checkout guard (S21): pre-check `WouldStrandCommits { n }` when leaving a detached HEAD that has commits unreachable from any branch → gate offers `CreateBranchAt` first.
 - Housekeeping fix while in this file: persist the repo workdir path inside `PipelineSnapshot` and filter `check_for_interrupted` by it (prevents worktree/multi-repo recovery cross-talk, S56).

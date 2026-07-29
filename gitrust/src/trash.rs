@@ -1,8 +1,8 @@
-//! Trash-net (Phase 14 — S30/S62). A GLit invariant, sibling to "the LLM never
+//! Trash-net (Phase 14 — S30/S62). A GiTrust invariant, sibling to "the LLM never
 //! executes": any operation that would delete content **not in the object
 //! database** — untracked files (via clean), tracked working-tree modifications
 //! (via hard reset / discard-local) — first copies that content to
-//! `~/.glit/trash/<timestamp>/`, so the destruction is undoable. A sentence git
+//! `~/.gitrust/trash/<timestamp>/`, so the destruction is undoable. A sentence git
 //! itself cannot say.
 //!
 //! **Fail-closed:** if the backup cannot be written, the caller (a
@@ -22,10 +22,10 @@ use std::path::{Path, PathBuf};
 /// filesystem including Windows.
 const TS_FMT: &str = "%Y%m%d-%H%M%S";
 
-/// The trash root: `~/.glit/trash/`. Created on access (mirrors
+/// The trash root: `~/.gitrust/trash/`. Created on access (mirrors
 /// `recovery::FileRecoveryManager::snapshots_dir`).
 pub fn trash_dir() -> anyhow::Result<PathBuf> {
-    Ok(crate::config::glit_dir()?.join("trash"))
+    Ok(crate::config::gitrust_dir()?.join("trash"))
 }
 
 /// Back up `paths` (files and/or directories, relative to `repo_workdir`) to a
@@ -127,7 +127,7 @@ pub fn prune_trash_in(trash_root: &Path, retention_days: u64) -> anyhow::Result<
     Ok(())
 }
 
-/// Convenience wrapper resolving the trash root from `~/.glit/trash`.
+/// Convenience wrapper resolving the trash root from `~/.gitrust/trash`.
 pub fn prune_trash(retention_days: u64) -> anyhow::Result<()> {
     let root = trash_dir()?;
     prune_trash_in(&root, retention_days)

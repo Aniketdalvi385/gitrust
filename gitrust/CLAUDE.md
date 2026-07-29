@@ -4,18 +4,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-GLit is an agentic Git CLI: a single Rust binary that turns natural-language queries ("push login changes") into safe, confirmed Git operations. Intent classification runs on a **local** LLM via Ollama (default `qwen2.5:3b`) — no network calls to hosted models. The binary lives in the `glit/` subdirectory of the repo root; the Cargo project root is `glit/`.
+GiTrust is an agentic Git CLI: a single Rust binary that turns natural-language queries ("push login changes") into safe, confirmed Git operations. Intent classification runs on a **local** LLM via Ollama (default `qwen2.5:3b`) — no network calls to hosted models. The binary lives in the `gitrust/` subdirectory of the repo root; the Cargo project root is `gitrust/`.
 
 ## Commands
 
-All commands run from `glit/` (where `Cargo.toml` lives).
+All commands run from `gitrust/` (where `Cargo.toml` lives).
 
 ```bash
 cargo build                 # debug build
 cargo build --release       # optimized (opt-level=z, lto, stripped — see [profile.release])
 cargo test                  # run all 192 unit tests
 cargo test <name>           # single test by name substring, e.g. cargo test test_default_config
-cargo test --package glit intent::   # tests in one module
+cargo test --package gitrust intent::   # tests in one module
 cargo run -- "show status"  # run a one-shot query
 cargo run                   # run the interactive REPL
 cargo run -- setup          # verify Ollama + pull the model
@@ -23,7 +23,7 @@ cargo clippy                # lint
 cargo fmt                   # format
 ```
 
-Runtime prerequisite: Ollama must be installed and running, with the model pulled (`glit setup` handles both). Config lives at `~/.glit.toml`; runtime state (snapshots, logs) at `~/.glit/`.
+Runtime prerequisite: Ollama must be installed and running, with the model pulled (`gitrust setup` handles both). Config lives at `~/.gitrust.toml`; runtime state (snapshots, logs) at `~/.gitrust/`.
 
 ## Architecture
 
@@ -53,11 +53,11 @@ Each layer's behavior sits behind a trait so tests can swap in mocks: `IntentCla
 
 ### Crash recovery
 
-[src/recovery.rs](src/recovery.rs) + [src/log.rs](src/log.rs): before a write pipeline runs, `FileRecoveryManager` snapshots HEAD/index to `~/.glit/snapshots/<id>.json` and logs START/END per step. On next run, `check_for_interrupted` detects a pipeline that never finished; `glit --recover` (or the `recover` subcommand) restores pre-pipeline state. Destructive git operations must capture a snapshot before executing — **except pure-backout pipelines, which deliberately don't** (the revert/backout commit *is* the recovery, so there is nothing to roll back to).
+[src/recovery.rs](src/recovery.rs) + [src/log.rs](src/log.rs): before a write pipeline runs, `FileRecoveryManager` snapshots HEAD/index to `~/.gitrust/snapshots/<id>.json` and logs START/END per step. On next run, `check_for_interrupted` detects a pipeline that never finished; `gitrust --recover` (or the `recover` subcommand) restores pre-pipeline state. Destructive git operations must capture a snapshot before executing — **except pure-backout pipelines, which deliberately don't** (the revert/backout commit *is* the recovery, so there is nothing to roll back to).
 
 - **`recovery_plan` defers to git**: when a snapshot's pipeline left git mid-operation (a rebase/merge conflict), recovery does not fight the sequencer — it surfaces the git state and lets the Phase 11 verbs (`git rebase --abort` etc.) finish it, rather than force-resetting over an in-progress operation.
 - **`repo_workdir` scoping (S56)**: `PipelineSnapshot.repo_workdir` scopes `check_for_interrupted` to the current repo, so a crash in worktree/repo A never prompts recovery in B.
-- **Trash-net invariant** (sibling to "the LLM never executes"): any `GitOperations` method deleting content **not in the object database** backs it up to `~/.glit/trash/<ts>/` *before* the destructive git call, and is **fail-closed** — if the backup fails, the method returns `Err` and nothing is deleted.
+- **Trash-net invariant** (sibling to "the LLM never executes"): any `GitOperations` method deleting content **not in the object database** backs it up to `~/.gitrust/trash/<ts>/` *before* the destructive git call, and is **fail-closed** — if the backup fails, the method returns `Err` and nothing is deleted.
 
 ## Conventions
 
@@ -77,8 +77,8 @@ Each layer's behavior sits behind a trait so tests can swap in mocks: `IntentCla
 
 ## Design reference
 
-[../design_handoff_glit_ux/README.md](../design_handoff_glit_ux/README.md) is the authoritative UX spec (copy strings, keymaps, glyphs, ANSI color tiers, state machines for the clarification/ambiguity/recovery flows). It is high-fidelity for copy/keymaps/glyphs, medium for layout. The `.html`/`.jsx` files there are visual references, not production code.
+[../design_handoff_gitrust_ux/README.md](../design_handoff_gitrust_ux/README.md) is the authoritative UX spec (copy strings, keymaps, glyphs, ANSI color tiers, state machines for the clarification/ambiguity/recovery flows). It is high-fidelity for copy/keymaps/glyphs, medium for layout. The `.html`/`.jsx` files there are visual references, not production code.
 
 ## Status
 
-**v0.2 (phases 9–14) complete** — history and rationale in [../docs/BUILD_PHASES_V3.md](../docs/BUILD_PHASES_V3.md) and [../docs/scenario_map.md](../docs/scenario_map.md). Further work is the Tier-2 backlog in the scenario map (interpretation-echo, RemoteRewritten response flow, SafeSwitch, cross-branch pickaxe, multi-restore RecoveryBrowser).
+**v0.2 (phases 9–14) complete** — history and rationale in [../docs/Build_phases_v3.md](../docs/Build_phases_v3.md) and [../docs/scenario_map.md](../docs/scenario_map.md). Further work is the Tier-2 backlog in the scenario map (interpretation-echo, RemoteRewritten response flow, SafeSwitch, cross-branch pickaxe, multi-restore RecoveryBrowser).

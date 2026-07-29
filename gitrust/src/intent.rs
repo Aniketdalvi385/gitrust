@@ -118,7 +118,7 @@ pub fn try_canonical(query: &str) -> Option<IntentType> {
                 include_staged: true,
             })
         }
-        // Forensic recovery (Phase 14 — S24/26/27). Distinct from `glit --recover`
+        // Forensic recovery (Phase 14 — S24/26/27). Distinct from `gitrust --recover`
         // (the snapshot path): this hunts reflogs + dangling objects for lost
         // commits and restores to a rescue branch.
         "find my lost work"
@@ -353,9 +353,9 @@ pub async fn classify_intent(
 
     let intent = build_intent_type(&ri, query)?;
 
-    // Surface the model's reasoning to stderr when GLIT_DEBUG is set, or
+    // Surface the model's reasoning to stderr when GITRUST_DEBUG is set, or
     // when confidence is mid-range (helps the user understand the disambiguation menu).
-    let debug_on = std::env::var("GLIT_DEBUG").is_ok();
+    let debug_on = std::env::var("GITRUST_DEBUG").is_ok();
     if debug_on && !ri.reasoning.is_empty() {
         eprintln!("  (reasoning: {})", ri.reasoning);
     }
@@ -855,7 +855,7 @@ async fn call_ollama_post(url: &str, body: &serde_json::Value) -> anyhow::Result
         .await
         .with_context(|| {
             format!(
-                "Failed to connect to Ollama at {}.\n  Run `glit setup` to install and configure Ollama, \
+                "Failed to connect to Ollama at {}.\n  Run `gitrust setup` to install and configure Ollama, \
                  or start it manually with `ollama serve`.",
                 url
             )

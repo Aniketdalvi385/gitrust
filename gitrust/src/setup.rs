@@ -3,12 +3,12 @@ use std::time::{Duration, Instant};
 
 use crate::config::Config;
 
-/// Entry point for `glit setup`.
+/// Entry point for `gitrust setup`.
 /// Checks Ollama install → service running → model pulled → smoke test.
 pub async fn run_setup() -> anyhow::Result<()> {
     let config = Config::default();
 
-    println!("GLit setup\n");
+    println!("GiTrust setup\n");
 
     // Step 1: Ollama binary on PATH
     if which::which("ollama").is_err() {
@@ -57,7 +57,7 @@ pub async fn run_setup() -> anyhow::Result<()> {
     smoke_test(&config).await?;
     println!("passed");
 
-    println!("\n✓ Setup complete. Try: glit \"show status\"");
+    println!("\n✓ Setup complete. Try: gitrust \"show status\"");
     Ok(())
 }
 

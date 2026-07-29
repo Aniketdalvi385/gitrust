@@ -447,7 +447,7 @@ impl Validator for DefaultValidator {
                 // through system git under `auto`/`system` (Phase 13 Q3) — so the
                 // hook-routing note applies to all three. Revert shells out and
                 // matches system git's own hook behavior, so it does NOT trigger
-                // this GLit-vs-git2 parity note.
+                // this GiTrust-vs-git2 parity note.
                 crate::git_ops::HookOp::Commit => matches!(
                     s,
                     PipelineStep::Commit { .. }
@@ -469,7 +469,7 @@ impl Validator for DefaultValidator {
             };
             let msg = if routed {
                 format!(
-                    "Hook(s) present ({}) — GLit will run them via system git.",
+                    "Hook(s) present ({}) — GiTrust will run them via system git.",
                     hook_list
                 )
             } else {
@@ -893,7 +893,7 @@ fn post_check_pull(repo: &Repository, pre_state: &PreStepState) -> anyhow::Resul
 // Preview helpers
 // =============================================================================
 
-/// Split each pipeline step into a Glit verb and a detail string for the
+/// Split each pipeline step into a GiTrust verb and a detail string for the
 /// timeline-style plan preview. The verb is the operation the user thinks in
 /// (`stage`, `commit`, `push`), not the underlying git plumbing.
 pub fn format_step_label(step: &PipelineStep) -> (&'static str, String) {
@@ -1219,7 +1219,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_step_label_uses_glit_verbs() {
+    fn test_format_step_label_uses_gitrust_verbs() {
         let cases = [
             (
                 PipelineStep::Add {

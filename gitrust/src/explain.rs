@@ -34,19 +34,19 @@ pub fn explain(op: &ScopedWriteOp) -> &'static Explanation {
         W::Add { .. } => &Explanation {
             what: Msg("Marks file changes as ready to be included in your next commit."),
             risks: Msg("Staged files are not yet committed — they can still be edited or unstaged."),
-            recovery: Some(Msg("Run `glit \"reset\"` (mixed) to unstage; the file contents are not changed.")),
+            recovery: Some(Msg("Run `gitrust \"reset\"` (mixed) to unstage; the file contents are not changed.")),
             safety: None,
         },
         W::Commit { .. } => &Explanation {
             what: Msg("Records your staged changes as a permanent point in the project's history."),
             risks: Msg("Commits with the wrong files or message are easy to make; rewriting after pushing affects others."),
-            recovery: Some(Msg("Run `glit \"undo\"` immediately after to bring the files back to staged.")),
+            recovery: Some(Msg("Run `gitrust \"undo\"` immediately after to bring the files back to staged.")),
             safety: None,
         },
         W::AddAndCommit { .. } => &Explanation {
             what: Msg("Stages all your local changes and records them as a single commit in one step."),
             risks: Msg("Pulls in EVERY modified and untracked file. Easy to commit something you didn't mean to."),
-            recovery: Some(Msg("Run `glit \"undo\"` to unwind the commit (files return to staged).")),
+            recovery: Some(Msg("Run `gitrust \"undo\"` to unwind the commit (files return to staged).")),
             safety: Some(Msg("The plan preview shows the message and file count before execution.")),
         },
         W::Branch { .. } => &Explanation {
@@ -58,13 +58,13 @@ pub fn explain(op: &ScopedWriteOp) -> &'static Explanation {
         W::Checkout { .. } => &Explanation {
             what: Msg("Switches your working tree to a different branch or commit."),
             risks: Msg("If you have uncommitted changes that would be overwritten, git will refuse and ask you to commit or stash first."),
-            recovery: Some(Msg("Run `glit \"checkout <previous-branch>\"` to switch back; your stash / commits are preserved.")),
+            recovery: Some(Msg("Run `gitrust \"checkout <previous-branch>\"` to switch back; your stash / commits are preserved.")),
             safety: None,
         },
         W::Stash => &Explanation {
             what: Msg("Captures your uncommitted changes into a temporary save and reverts the working tree to clean."),
             risks: Msg("If you forget about the stash, it can hide work you wanted. Stashes are local — they aren't pushed anywhere."),
-            recovery: Some(Msg("Run `glit \"stash pop\"` to restore the captured changes. List stashes with `git stash list`.")),
+            recovery: Some(Msg("Run `gitrust \"stash pop\"` to restore the captured changes. List stashes with `git stash list`.")),
             safety: None,
         },
         W::StashPop => &Explanation {
@@ -82,7 +82,7 @@ pub fn explain(op: &ScopedWriteOp) -> &'static Explanation {
         W::Reset { mode: ResetMode::Mixed } => &Explanation {
             what: Msg("Moves HEAD to the parent commit and unstages everything. Files in the working tree are untouched."),
             risks: Msg("You lose the commit metadata AND the staging arrangement. File contents are still safe."),
-            recovery: Some(Msg("Re-stage with `glit \"add\"` and re-commit, or use `git reflog` to find the original commit SHA.")),
+            recovery: Some(Msg("Re-stage with `gitrust \"add\"` and re-commit, or use `git reflog` to find the original commit SHA.")),
             safety: None,
         },
         W::Reset { mode: ResetMode::Hard } => &Explanation {
@@ -94,19 +94,19 @@ pub fn explain(op: &ScopedWriteOp) -> &'static Explanation {
         W::Pull { .. } => &Explanation {
             what: Msg("Fetches changes from the remote and merges them into your current branch."),
             risks: Msg("If you and the remote both changed the same lines, you'll get conflict markers in your files to resolve manually."),
-            recovery: Some(Msg("To undo a merge in progress: `git merge --abort`. To undo a completed merge: `glit \"undo\"`.")),
-            safety: Some(Msg("Run `glit \"safe to pull\"` first to preview conflicts without modifying anything.")),
+            recovery: Some(Msg("To undo a merge in progress: `git merge --abort`. To undo a completed merge: `gitrust \"undo\"`.")),
+            safety: Some(Msg("Run `gitrust \"safe to pull\"` first to preview conflicts without modifying anything.")),
         },
         W::Push { .. } => &Explanation {
             what: Msg("Sends your local commits to the remote so others can see them."),
             risks: Msg("If the remote has commits you don't have, push will be rejected (non-fast-forward)."),
-            recovery: Some(Msg("If rejected, run `glit \"safe to pull\"` to see what's new, then `glit \"pull\"` or rebase, then push again.")),
+            recovery: Some(Msg("If rejected, run `gitrust \"safe to pull\"` to see what's new, then `gitrust \"pull\"` or rebase, then push again.")),
             safety: Some(Msg("Sets upstream tracking automatically on first push so future pushes are simpler.")),
         },
         W::Init => &Explanation {
             what: Msg("Creates a new empty git repository in the current directory."),
             risks: Msg("If you're already inside a git repo, this re-initializes it (mostly harmless but unusual)."),
-            recovery: Some(Msg("Run `glit \"delete repository\"` to remove the .git folder if you didn't mean to init.")),
+            recovery: Some(Msg("Run `gitrust \"delete repository\"` to remove the .git folder if you didn't mean to init.")),
             safety: None,
         },
         W::DeleteRepo => &Explanation {
@@ -118,13 +118,13 @@ pub fn explain(op: &ScopedWriteOp) -> &'static Explanation {
         W::AddRemote { .. } => &Explanation {
             what: Msg("Registers a remote URL under a name (default `origin`) so you can push/pull to/from it."),
             risks: Msg("Adding the wrong URL means push/pull will go to the wrong place. Easy to fix — just remove and re-add."),
-            recovery: Some(Msg("Run `glit \"remove remote <name>\"` and add the correct one.")),
+            recovery: Some(Msg("Run `gitrust \"remove remote <name>\"` and add the correct one.")),
             safety: None,
         },
         W::RemoveRemote { .. } => &Explanation {
             what: Msg("Removes a remote definition from your local repository configuration."),
             risks: Msg("Future push/pull to that remote will fail with 'remote not found'. Doesn't touch the remote server itself."),
-            recovery: Some(Msg("Re-add with `glit \"add remote <name> <url>\"` — the remote server is unaffected.")),
+            recovery: Some(Msg("Re-add with `gitrust \"add remote <name> <url>\"` — the remote server is unaffected.")),
             safety: None,
         },
         W::Undo => &Explanation {
@@ -137,7 +137,7 @@ pub fn explain(op: &ScopedWriteOp) -> &'static Explanation {
             what: Msg("Fetches changes from the remote and replays your local commits on top — produces a linear history."),
             risks: Msg("Each of your commits is replayed individually; conflicts may appear at any step and pause the rebase."),
             recovery: Some(Msg("If a rebase goes wrong: `git rebase --abort` returns to your pre-rebase state.")),
-            safety: Some(Msg("Run `glit \"safe to pull\"` first to predict conflicts.")),
+            safety: Some(Msg("Run `gitrust \"safe to pull\"` first to predict conflicts.")),
         },
         W::ForcePush { .. } => &Explanation {
             what: Msg("Replaces the remote branch with your local version, overwriting whatever is there."),
@@ -161,7 +161,7 @@ pub fn explain(op: &ScopedWriteOp) -> &'static Explanation {
         W::RebaseContinue => &Explanation {
             what: Msg("Resumes the paused rebase, applying the current commit now that conflicts are resolved."),
             risks: Msg("If more commits still conflict, the rebase pauses again on the next one."),
-            recovery: Some(Msg("`git rebase --abort` (or `glit \"abort rebase\"`) returns to your pre-rebase state.")),
+            recovery: Some(Msg("`git rebase --abort` (or `gitrust \"abort rebase\"`) returns to your pre-rebase state.")),
             safety: Some(Msg("Only runs once the index is conflict-free — the gate checks first.")),
         },
         W::RebaseSkip => &Explanation {
@@ -179,7 +179,7 @@ pub fn explain(op: &ScopedWriteOp) -> &'static Explanation {
         W::CherryPickContinue => &Explanation {
             what: Msg("Resumes the paused cherry-pick now that conflicts are resolved and staged."),
             risks: Msg("If further picks conflict, the operation pauses again."),
-            recovery: Some(Msg("`git cherry-pick --abort` (or `glit \"abort cherry-pick\"`) returns to your pre-pick state.")),
+            recovery: Some(Msg("`git cherry-pick --abort` (or `gitrust \"abort cherry-pick\"`) returns to your pre-pick state.")),
             safety: Some(Msg("Only runs once the index is conflict-free — the gate checks first.")),
         },
         W::CherryPickAbort => &Explanation {
@@ -191,7 +191,7 @@ pub fn explain(op: &ScopedWriteOp) -> &'static Explanation {
         W::RevertContinue => &Explanation {
             what: Msg("Resumes the paused revert now that conflicts are resolved and staged."),
             risks: Msg("If further reverts conflict, the operation pauses again."),
-            recovery: Some(Msg("`git revert --abort` (or `glit \"abort revert\"`) returns to your pre-revert state.")),
+            recovery: Some(Msg("`git revert --abort` (or `gitrust \"abort revert\"`) returns to your pre-revert state.")),
             safety: Some(Msg("Only runs once the index is conflict-free — the gate checks first.")),
         },
         W::RevertAbort => &Explanation {
@@ -213,18 +213,18 @@ pub fn explain(op: &ScopedWriteOp) -> &'static Explanation {
             what: Msg("Rewrites your most recent commit — its message and/or the files it contains — in place."),
             risks: Msg("Amending a commit that's already pushed rewrites published history and requires a force push."),
             recovery: Some(Msg("The original commit lives in `git reflog` for ~90 days if you need it back.")),
-            safety: Some(Msg("If the commit is already on the remote, GLit escalates to a type-to-confirm before force-pushing with lease.")),
+            safety: Some(Msg("If the commit is already on the remote, GiTrust escalates to a type-to-confirm before force-pushing with lease.")),
         },
         W::Revert { .. } => &Explanation {
             what: Msg("Creates a NEW commit that undoes the changes of an earlier one — history is preserved."),
             risks: Msg("If the earlier commit's lines have since changed, the revert can conflict and pause."),
-            recovery: Some(Msg("`git revert --abort` (or `glit \"abort revert\"`) backs out cleanly if it conflicts.")),
+            recovery: Some(Msg("`git revert --abort` (or `gitrust \"abort revert\"`) backs out cleanly if it conflicts.")),
             safety: Some(Msg("The team-safe undo: no history rewrite, no force push — safe even after pushing.")),
         },
         W::Unstage { .. } => &Explanation {
             what: Msg("Moves files out of the staging area so they won't be in the next commit. File contents are untouched."),
             risks: Msg("Only affects what's staged — your edits stay exactly as they are on disk."),
-            recovery: Some(Msg("Re-stage with `glit \"add\"` whenever you're ready.")),
+            recovery: Some(Msg("Re-stage with `gitrust \"add\"` whenever you're ready.")),
             safety: Some(Msg("Uses restore-staged semantics scoped to the named files — never a reset.")),
         },
         W::SetUpstream { .. } => &Explanation {
@@ -247,8 +247,8 @@ pub fn explain(op: &ScopedWriteOp) -> &'static Explanation {
         },
         W::CleanupIntent => &Explanation {
             what: Msg("Removes local changes you no longer want — the gate asks exactly what to discard (tracked changes and/or untracked files)."),
-            risks: Msg("Untracked files have no git history; once deleted, only GLit's trash-net backup can bring them back."),
-            recovery: Some(Msg("Everything deleted is copied to ~/.glit/trash/ first and kept for the retention window.")),
+            risks: Msg("Untracked files have no git history; once deleted, only GiTrust's trash-net backup can bring them back."),
+            recovery: Some(Msg("Everything deleted is copied to ~/.gitrust/trash/ first and kept for the retention window.")),
             safety: Some(Msg("The gate spells out counts before anything is removed, and the trash-net backs up first (fail-closed).")),
         },
     }

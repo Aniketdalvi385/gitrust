@@ -87,7 +87,7 @@ pub async fn run_agent(
         return match intent_result.intent {
             IntentType::ScopedWrite(ScopedWriteOp::Init) => init_repo(&*gate),
             _ => Err(anyhow::anyhow!(
-                "Not inside a git repository. Run 'glit \"initialize a repository\"' or 'git init' first."
+                "Not inside a git repository. Run 'gitrust \"initialize a repository\"' or 'git init' first."
             )),
         };
     }
@@ -106,8 +106,8 @@ pub async fn run_agent(
             "⚠  An interrupted pipeline was found (captured at {}).",
             snapshot.captured_at
         );
-        println!("   Run 'glit --recover' to restore the repository to its pre-pipeline state.");
-        println!("   Or delete ~/.glit/snapshots/ to ignore it.\n");
+        println!("   Run 'gitrust --recover' to restore the repository to its pre-pipeline state.");
+        println!("   Or delete ~/.gitrust/snapshots/ to ignore it.\n");
     }
 
     // Prune expired trash-net backups (Phase 14). Best-effort — never fail the
@@ -315,7 +315,7 @@ fn handle_read_only(
             // Show this whenever an upstream exists — counts could be wrong
             // regardless of whether they're currently zero.
             if ctx.upstream.is_some() {
-                println!("\n(Remote state from last fetch — run `glit \"fetch\"` to refresh.)");
+                println!("\n(Remote state from last fetch — run `gitrust \"fetch\"` to refresh.)");
             }
         }
         ReadOnlyOp::Log { count } => {
@@ -344,7 +344,7 @@ fn handle_read_only(
                     println!("Last commit: {}", ctx.last_commit);
                 }
                 println!(
-                    "  → Try: glit \"log\" for history, or glit \"show\" for full commit details."
+                    "  → Try: gitrust \"log\" for history, or gitrust \"show\" for full commit details."
                 );
             } else {
                 println!("{}", snippet);
@@ -354,7 +354,7 @@ fn handle_read_only(
             let remotes = git_ops.list_remotes(repo)?;
             if remotes.is_empty() {
                 println!("No remotes configured.");
-                println!("  → Add one: glit \"add remote origin <url>\"");
+                println!("  → Add one: gitrust \"add remote origin <url>\"");
             } else {
                 println!("Remotes:");
                 for (name, url) in &remotes {
@@ -392,7 +392,7 @@ fn handle_read_only(
             // Honest "am I up to date" — fetch first, then re-read context.
             if !crate::context::remote_exists(repo, &remote) {
                 println!(
-                    "No remote '{}' configured. Try: glit \"add remote origin <url>\"",
+                    "No remote '{}' configured. Try: gitrust \"add remote origin <url>\"",
                     remote
                 );
                 return Ok(());
@@ -421,11 +421,14 @@ fn handle_read_only(
             }
             if fresh.behind > 0 {
                 println!(
-                    "\n→ {} commit(s) on remote you don't have. Run: glit \"pull\"",
+                    "\n→ {} commit(s) on remote you don't have. Run: gitrust \"pull\"",
                     fresh.behind
                 );
             } else if fresh.ahead > 0 {
-                println!("\n→ {} unpushed commit(s). Run: glit \"push\"", fresh.ahead);
+                println!(
+                    "\n→ {} unpushed commit(s). Run: gitrust \"push\"",
+                    fresh.ahead
+                );
             } else if fresh.upstream.is_some() {
                 println!("\n→ Local and remote are in sync.");
             }
@@ -450,7 +453,7 @@ fn print_merge_preview(
                 "✓ Local is {} commit(s) ahead of remote. Pull is a no-op.",
                 local_commits
             );
-            println!("  → To share: glit \"push\"");
+            println!("  → To share: gitrust \"push\"");
         }
         P::FastForward { remote_commits } => {
             println!(
@@ -459,7 +462,7 @@ fn print_merge_preview(
             );
             print_dirty_overlap_block(dirty, /*conflicts_present=*/ false);
             if dirty.overlapping_files.is_empty() {
-                println!("  → Safe to: glit \"pull\"");
+                println!("  → Safe to: gitrust \"pull\"");
             }
         }
         P::CleanMerge {
@@ -472,7 +475,7 @@ fn print_merge_preview(
             );
             print_dirty_overlap_block(dirty, /*conflicts_present=*/ false);
             if dirty.overlapping_files.is_empty() {
-                println!("  → Safe to: glit \"pull\"");
+                println!("  → Safe to: gitrust \"pull\"");
             }
         }
         P::Conflicts {
@@ -495,7 +498,7 @@ fn print_merge_preview(
         }
         P::NoUpstream => {
             println!("No upstream configured for this branch.");
-            println!("  → Set one: glit \"publish\"");
+            println!("  → Set one: gitrust \"publish\"");
         }
         P::NoRemoteTracking => {
             println!("No remote-tracking ref found (have you fetched recently?).");
@@ -520,7 +523,7 @@ fn print_dirty_overlap_block(dirty: &crate::git_ops::DirtyOverlap, conflicts_pre
         println!("  · {}", f);
     }
     println!("  → Pull will block until these are committed or stashed.");
-    println!("    Try: glit \"commit all my files\" — or — glit \"stash\"");
+    println!("    Try: gitrust \"commit all my files\" — or — gitrust \"stash\"");
 }
 
 /// Print a `git show`-style block for a single commit.
@@ -692,7 +695,7 @@ async fn handle_merge_preview(
     if has_dirty {
         labels.push(format!(
             "Merge      {}",
-            dim("glit \"commit all\" → glit \"pull\"  (commit your edits first)")
+            dim("gitrust \"commit all\" → gitrust \"pull\"  (commit your edits first)")
         ));
         actions.push(ScopedWriteOp::AddAndCommit {
             message: crate::commands::CommitMessage::Draft("update".to_string()),
@@ -700,13 +703,13 @@ async fn handle_merge_preview(
         });
         labels.push(format!(
             "Stash      {}",
-            dim("glit \"stash\" → glit \"pull\" → glit \"stash pop\"")
+            dim("gitrust \"stash\" → gitrust \"pull\" → gitrust \"stash pop\"")
         ));
         actions.push(ScopedWriteOp::Stash);
     } else {
         labels.push(format!(
             "Merge      {}",
-            dim("glit \"pull\"          merge commit · resolve markers, then commit")
+            dim("gitrust \"pull\"          merge commit · resolve markers, then commit")
         ));
         actions.push(ScopedWriteOp::Pull {
             remote: remote.to_string(),
@@ -714,7 +717,7 @@ async fn handle_merge_preview(
         labels.push(format!(
             "Rebase     {}",
             dim(&format!(
-                "glit \"rebase\"        replay your {} commit(s) · resolve per commit",
+                "gitrust \"rebase\"        replay your {} commit(s) · resolve per commit",
                 local_commits
             ))
         ));
@@ -723,11 +726,11 @@ async fn handle_merge_preview(
         });
         labels.push(format!(
             "Force-push {}  {}",
-            dim("glit \"force push\""),
+            dim("gitrust \"force push\""),
             format!(
                 "{}  {}",
                 dest_marker,
-                dim("rewrites remote · glit recover restores for 30d")
+                dim("rewrites remote · gitrust recover restores for 30d")
             )
         ));
         actions.push(ScopedWriteOp::ForcePush {
@@ -735,12 +738,12 @@ async fn handle_merge_preview(
         });
         labels.push(format!(
             "Discard    {}  {}",
-            dim("glit \"discard local\""),
+            dim("gitrust \"discard local\""),
             format!(
                 "{}  {}",
                 dest_marker,
                 dim(&format!(
-                    "drops {} commit(s) · glit recover restores for 30d",
+                    "drops {} commit(s) · gitrust recover restores for 30d",
                     local_commits
                 ))
             )
@@ -930,7 +933,7 @@ async fn build_scoped_steps(
         ScopedWriteOp::Checkout { target } => {
             if target.trim().is_empty() {
                 return Err(anyhow::anyhow!(
-                    "No target branch specified. Try: glit \"checkout <branch-name>\""
+                    "No target branch specified. Try: gitrust \"checkout <branch-name>\""
                 ));
             }
             Ok(vec![PipelineStep::Checkout { target }])
@@ -1081,7 +1084,7 @@ async fn build_scoped_steps(
 
         ScopedWriteOp::AddRemote { name, url } => {
             if url.is_empty() {
-                return Err(anyhow::anyhow!("No remote URL provided. Try: glit 'add remote origin https://github.com/user/repo.git'"));
+                return Err(anyhow::anyhow!("No remote URL provided. Try: gitrust 'add remote origin https://github.com/user/repo.git'"));
             }
             let resp = gate.prompt(&GateType::SimpleConfirm {
                 message: format!("Add remote '{}' → {}?", name, url),
@@ -1484,7 +1487,7 @@ async fn reconcile_flow(
         },
     ];
     let question = format!(
-        "Your branch and {} have diverged (ahead {}, behind {}). How should GLit reconcile?",
+        "Your branch and {} have diverged (ahead {}, behind {}). How should GiTrust reconcile?",
         target_ref, ahead, behind
     );
     let choice = match gate.prompt(&GateType::ChoiceGate { question, options })? {
@@ -1980,7 +1983,7 @@ async fn execute_pipeline(
     // set, the executor renders a class-aware picker instead of the generic
     // anyhow chain.
     let mut classified: Option<(crate::git_ops::FailureClass, String, String)> = None; // (class, raw_stderr, step_verb)
-    let glit_debug = std::env::var("GLIT_DEBUG").is_ok();
+    let gitrust_debug = std::env::var("GITRUST_DEBUG").is_ok();
 
     let use_color = crate::danger::use_color();
     let glyph_done = if use_color {
@@ -2134,7 +2137,7 @@ async fn execute_pipeline(
                 if let Some(failure) = e.downcast_ref::<crate::git_ops::ClassifiedFailure>() {
                     // One-line headline. Details live in the picker.
                     println!("  {}  {}", red("│"), failure.class.what());
-                    if glit_debug {
+                    if gitrust_debug {
                         eprintln!(
                             "  {}  {}",
                             dim("│"),
@@ -2181,7 +2184,7 @@ async fn execute_pipeline(
                     action,
                     Some(crate::commands::RecoveryAction::NoLocalChange { .. })
                 ) && i == 0;
-                if glit_debug {
+                if gitrust_debug {
                     eprintln!("  Recovery: {:?}", action);
                 }
                 last_error = Some(e);
@@ -2191,8 +2194,8 @@ async fn execute_pipeline(
     }
 
     // Reconcile pause (Phase 12): the snapshot is intentionally PRESERVED —
-    // git's ORIG_HEAD + `glit "abort <op>"` (Phase 11) own recovery, and
-    // `glit --recover` defers via AdviseGitAbort while the op is in progress.
+    // git's ORIG_HEAD + `gitrust "abort <op>"` (Phase 11) own recovery, and
+    // `gitrust --recover` defers via AdviseGitAbort while the op is in progress.
     // Return the calm handoff as an Err so a paused rebase exits NONZERO (a
     // half-done op is not success — the 10.1 finding #2 applies), with no
     // "snapshot preserved / run --recover" spew. The calm text IS the message.
@@ -2204,7 +2207,7 @@ async fn execute_pipeline(
     }
 
     // Delete snapshot on success, or when the first step failed without changing repo state.
-    // Keep it on real failures (for `glit --recover`).
+    // Keep it on real failures (for `gitrust --recover`).
     if last_error.is_none() {
         if let Some(s) = &snapshot {
             let _ = recovery_mgr.delete_snapshot(s);
@@ -2240,10 +2243,10 @@ async fn execute_pipeline(
         }
     } else if let Some(s) = &snapshot {
         eprintln!(
-            "\n  Snapshot preserved at ~/.glit/snapshots/{}.json",
+            "\n  Snapshot preserved at ~/.gitrust/snapshots/{}.json",
             s.pipeline_id
         );
-        eprintln!("  Run 'glit --recover' to restore to pre-pipeline state.");
+        eprintln!("  Run 'gitrust --recover' to restore to pre-pipeline state.");
     } else {
         // A backout op (no snapshot) failed — git's own state machine holds the
         // recovery point (ORIG_HEAD / the in-progress op is still intact).
@@ -2263,7 +2266,7 @@ async fn execute_pipeline(
     }
 
     // When the failure was a non-fast-forward push, offer the same conflict-
-    // resolution menu the user gets from `glit "safe to pull"`. The local
+    // resolution menu the user gets from `gitrust "safe to pull"`. The local
     // commit is already safe; the user just needs to decide how to reconcile.
     if failed_push.is_some() {
         eprintln!("\nPush was rejected because the remote has commits you don't have.");
@@ -2299,7 +2302,7 @@ async fn execute_pipeline(
 /// "recover" precedence (Phase 14): a pending interrupted-pipeline snapshot for
 /// THIS repo means the snapshot path — finish the interrupted thing first. When
 /// there is none, this is not an error: point the user sideways to the forensic
-/// flow (`glit "find my lost work"`), which recovers lost commits from reflogs
+/// flow (`gitrust "find my lost work"`), which recovers lost commits from reflogs
 /// and dangling objects.
 pub fn execute_recovery() -> anyhow::Result<()> {
     let recovery_mgr = FileRecoveryManager;
@@ -2338,7 +2341,7 @@ pub fn execute_recovery() -> anyhow::Result<()> {
                 recovery_mgr.execute_recovery(&repo, &snapshot)?;
             } else {
                 println!(
-                    "  Left as-is. The snapshot is preserved — `glit recover --clean` to remove it."
+                    "  Left as-is. The snapshot is preserved — `gitrust recover --clean` to remove it."
                 );
             }
             Ok(())
@@ -2589,7 +2592,7 @@ fn build_undo_intent(
         Ok(p) => p,
         Err(_) => {
             return Err(anyhow::anyhow!(
-                "Cannot undo: this is the first commit (no parent to reset to).\n  To discard it entirely, use: glit \"reset --hard\" with care."
+                "Cannot undo: this is the first commit (no parent to reset to).\n  To discard it entirely, use: gitrust \"reset --hard\" with care."
             ));
         }
     };
@@ -3162,7 +3165,7 @@ async fn handle_detached_head_rescue(
                 }
             }
             Err(anyhow::anyhow!(
-                "Could not find 'main' or 'master' to switch back to. Manually: glit \"checkout <branch>\""
+                "Could not find 'main' or 'master' to switch back to. Manually: gitrust \"checkout <branch>\""
             ))
         }
         _ => {

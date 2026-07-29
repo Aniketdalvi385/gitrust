@@ -378,7 +378,7 @@ impl RepoContext {
         self.behind > 0
     }
 
-    /// Human-facing one-line header for `glit status` / `glit branches`.
+    /// Human-facing one-line header for `gitrust status` / `gitrust branches`.
     /// Mirrors `git status -sb` but richer.
     pub fn render_status_header(&self) -> String {
         if self.is_empty_repo {
@@ -415,7 +415,7 @@ impl RepoContext {
     /// Ordering: most-actionable / safety-relevant first.
     pub fn suggestion(&self) -> Option<String> {
         if self.has_stash {
-            return Some("Stashed changes exist. Try: glit \"stash pop\"".to_string());
+            return Some("Stashed changes exist. Try: gitrust \"stash pop\"".to_string());
         }
         if !self.status.modified.is_empty() || !self.status.untracked.is_empty() {
             let n = self.status.modified.len()
@@ -423,36 +423,36 @@ impl RepoContext {
                 + self.status.modified_overflow
                 + self.status.untracked_overflow;
             return Some(format!(
-                "{} file(s) not staged. Try: glit \"commit all my files\"",
+                "{} file(s) not staged. Try: gitrust \"commit all my files\"",
                 n
             ));
         }
         if !self.status.staged.is_empty() {
             return Some(format!(
-                "{} file(s) staged. Try: glit \"commit\"",
+                "{} file(s) staged. Try: gitrust \"commit\"",
                 self.status.staged.len() + self.status.staged_overflow
             ));
         }
         if self.behind > 0 && self.ahead > 0 {
             return Some(format!(
-                "Diverged from upstream ({} ahead, {} behind). Pull first: glit \"pull\"",
+                "Diverged from upstream ({} ahead, {} behind). Pull first: gitrust \"pull\"",
                 self.ahead, self.behind
             ));
         }
         if self.behind > 0 {
             return Some(format!(
-                "{} commit(s) behind upstream. Try: glit \"pull\"",
+                "{} commit(s) behind upstream. Try: gitrust \"pull\"",
                 self.behind
             ));
         }
         if self.upstream.is_some() && self.ahead > 0 {
             return Some(format!(
-                "{} unpushed commit(s). Try: glit \"push\"",
+                "{} unpushed commit(s). Try: gitrust \"push\"",
                 self.ahead
             ));
         }
         if self.upstream.is_none() && !self.is_empty_repo {
-            return Some("No upstream set. Try: glit \"publish\"".to_string());
+            return Some("No upstream set. Try: gitrust \"publish\"".to_string());
         }
         // Fully clean state: surface web URL if origin is known.
         if let Some(ref url) = self.origin_url {

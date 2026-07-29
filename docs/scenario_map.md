@@ -1,8 +1,8 @@
-# GLit Scenario Map v1
+# GiTrust Scenario Map v1
 
 **Coverage audit, verified potholes, and the build path to "the teammate who fixes git"**
 
-This document maps the full space of git situations GLit should address, grades the current design (blueprint v2 + CLAUDE.md) against each, and specifies concrete fixes. Three findings were **empirically verified** in a live test environment (marked ⚗️): they are facts about git/libgit2 behavior, not opinions.
+This document maps the full space of git situations GiTrust should address, grades the current design (blueprint v2 + CLAUDE.md) against each, and specifies concrete fixes. Three findings were **empirically verified** in a live test environment (marked ⚗️): they are facts about git/libgit2 behavior, not opinions.
 
 ---
 
@@ -12,7 +12,7 @@ Each scenario has:
 
 - **Situation** — the actual repo state / event
 - **You'd hear** — how a colleague phrases it at your desk (this is what the classifier must handle)
-- **Today** — verdict + honest trace through GLit's 5 layers as designed
+- **Today** — verdict + honest trace through GiTrust's 5 layers as designed
 - **Fix** — the concrete change: which enum, which layer, which check or gate
 
 **Verdicts:**
@@ -22,10 +22,10 @@ Each scenario has:
 | ✅   | Handled well by current design                                                                                |
 | 🟡   | Partially: detects but can't fix, or fix exists but spec/UX is thin                                           |
 | ❌   | Gap: would fail, refuse unhelpfully, or (worst) misdiagnose and give wrong advice                             |
-| ⛔   | Out of scope **by design** — correct call, but GLit must _diagnose and refer gracefully_, never fail silently |
+| ⛔   | Out of scope **by design** — correct call, but GiTrust must _diagnose and refer gracefully_, never fail silently |
 | ★    | Differentiator opportunity: nothing else on the market does this                                              |
 
-**Scoring lens:** each scenario is tagged `[freq / pain]`. Frequency: daily · weekly · rare. Pain: annoy · blocked · data-loss. `rare/data-loss` outranks `daily/annoy` — GLit's identity is the bad day, not the good one.
+**Scoring lens:** each scenario is tagged `[freq / pain]`. Frequency: daily · weekly · rare. Pain: annoy · blocked · data-loss. `rare/data-loss` outranks `daily/annoy` — GiTrust's identity is the bad day, not the good one.
 
 **Epistemic note:** verdicts are based on the blueprint v2 and CLAUDE.md. Per CLAUDE.md, the implementation already has `PullRebase`, `ForcePush`, and `DiscardLocal` as shell-outs — ahead of the blueprint. Where they differ I grade both. Confirm against source before acting on any single verdict.
 
@@ -42,9 +42,9 @@ Each scenario has:
 | E. Wrong-place mistakes       | 10        | ~1.5 / 10     | The fix-vocabulary gap                     |
 | F. Remotes, auth, policy      | 7         | ~4 / 7        | Solid, needs fork + policy awareness       |
 | G. Environment pathologies    | 10        | ~5 / 10       | Mostly fine, one verified hook bug         |
-| H. GLit meta / LLM layer      | 8         | ~6.5 / 8      | The invariant pays off here                |
+| H. GiTrust meta / LLM layer      | 8         | ~6.5 / 8      | The invariant pays off here                |
 
-The shape of this table **is** the identity finding: GLit is strongest exactly where its competitors also work (A) and weakest exactly where its origin story lives (C, D, E) — the moments people walk to your desk.
+The shape of this table **is** the identity finding: GiTrust is strongest exactly where its competitors also work (A) and weakest exactly where its origin story lives (C, D, E) — the moments people walk to your desk.
 
 ---
 
@@ -64,7 +64,7 @@ The shape of this table **is** the identity finding: GLit is strongest exactly w
 
 ### S3 — Feature pipeline: "push login changes" ✅ ★
 
-**Situation:** fuzzy scope over modified files. **Today:** the TwoPassResolver (filename → single semantic LLM call over all unmatched diffs) with confidence-grouped MultiSelect is the strongest _unique_ thing GLit does. Whitespace-ignored 25-line snippets, token budget, `TooManyFiles` guard at 50 — all right calls.
+**Situation:** fuzzy scope over modified files. **Today:** the TwoPassResolver (filename → single semantic LLM call over all unmatched diffs) with confidence-grouped MultiSelect is the strongest _unique_ thing GiTrust does. Whitespace-ignored 25-line snippets, token budget, `TooManyFiles` guard at 50 — all right calls.
 **Fix (quality, not correctness):**
 
 1. Enable **rename detection** (`diff.find_similar()`) before building manifests — a renamed file otherwise appears as delete+add, doubling noise and breaking filename match.
@@ -73,7 +73,7 @@ The shape of this table **is** the identity finding: GLit is strongest exactly w
 ### S4 — Create / switch branch 🟡
 
 **Situation:** `branch feat/x`, `checkout main`. **Today:** SimpleConfirm; dirty-tree checkout is Blocked with a suggestion (per scenario matrix). Blocking is safe but unhelpful — the user's next question is always "so what do I do?"
-**Fix:** a **SafeSwitch** pipeline: offer `stash (incl. untracked) → checkout → optional pop`. If the pop conflicts, keep the stash entry and say so (git already preserves it on pop-conflict; GLit must _explain_ that the work is safe). Turns a dead-end into a one-keystroke path.
+**Fix:** a **SafeSwitch** pipeline: offer `stash (incl. untracked) → checkout → optional pop`. If the pop conflicts, keep the stash entry and say so (git already preserves it on pop-conflict; GiTrust must _explain_ that the work is safe). Turns a dead-end into a one-keystroke path.
 
 ### S5 — Stash / stash pop 🟡
 
@@ -110,7 +110,7 @@ The shape of this table **is** the identity finding: GLit is strongest exactly w
 2. Intent "push/sync/pull" while Diverged routes to a **ChoiceGate** — a new gate type — with plain-language options: _"Rebase — replay your {ahead} commit(s) on top of theirs; history stays linear (recommended for unshared branches)"_ vs _"Merge — keep both histories and add a merge commit (safer if others already pulled your commits)"_ vs _abort_.
 3. Both paths snapshot first; both are conflict-capable, so they must land in the S17/S18 machinery below.
 4. On success, offer the now-clean push in the same pipeline.
-   This single flow converts the most common desk-visit into GLit's showcase.
+   This single flow converts the most common desk-visit into GiTrust's showcase.
 
 ### S10 — Push rejected: non-fast-forward ✅→🟡
 
@@ -119,12 +119,12 @@ The shape of this table **is** the identity finding: GLit is strongest exactly w
 
 ### S11 — Pull produces merge conflicts 🟡
 
-**Today:** Fatal halt + list files + "resolve manually" (honest, correct for v1). The gap is the _follow-through_: after the user resolves in their editor, they return to GLit and... nothing understands the mid-merge state (see S16/S17).
+**Today:** Fatal halt + list files + "resolve manually" (honest, correct for v1). The gap is the _follow-through_: after the user resolves in their editor, they return to GiTrust and... nothing understands the mid-merge state (see S16/S17).
 
 ### S12 — Rebase stops on conflict midway ❌ ⚗️
 
 **Verified:** mid-rebase, `git symbolic-ref HEAD` fails — **HEAD is detached** while `.git/rebase-merge/` exists.
-**Consequence for GLit as designed:** Layer 0 sets `is_detached = true`; the `DetachedHead` pre-check fires and tells the user **"checkout a branch first"** — which mid-rebase is actively harmful advice (it abandons the rebase and strands the replayed commits). GLit would misdiagnose a stuck rebase as a detached HEAD. _A wrong confident answer is worse than no tool at all_ — this is the single most identity-damaging pothole in the map.
+**Consequence for GiTrust as designed:** Layer 0 sets `is_detached = true`; the `DetachedHead` pre-check fires and tells the user **"checkout a branch first"** — which mid-rebase is actively harmful advice (it abandons the rebase and strands the replayed commits). GiTrust would misdiagnose a stuck rebase as a detached HEAD. _A wrong confident answer is worse than no tool at all_ — this is the single most identity-damaging pothole in the map.
 **Fix:** one line of git2 — `repo.state()` returns `RepositoryState::{Merge, Rebase, RebaseMerge, CherryPick, Revert, Bisect, ...}`. Layer 0 must read it and it must **override** `is_detached` messaging. See P1 in §10.
 
 ### S13 — "Sync my feature branch with main" 🟡
@@ -140,24 +140,24 @@ The shape of this table **is** the identity finding: GLit is strongest exactly w
 
 ### S15 — Pull would overwrite uncommitted local changes 🟡
 
-**Today:** git/git2 aborts with an overwrite error; GLit surfaces it via the generic error path.
+**Today:** git/git2 aborts with an overwrite error; GiTrust surfaces it via the generic error path.
 **Fix:** pre-check `UncommittedWouldBeOverwritten` before Pull → offer stash-first (the SafeSwitch pattern from S4 reused). One pre-check, big daily-friction win.
 
 ---
 
 ## 4. Category C — Stuck / in-progress states (the misdiagnosis danger zone)
 
-**The systemic problem:** `RepoContext` has `is_empty_repo` and `is_detached` but no notion of _operation in progress_. git2 exposes it in one call (`repo.state()`); the blueprint never reads it. Every scenario below is a desk-visit moment, and today GLit is blind to all of them.
+**The systemic problem:** `RepoContext` has `is_empty_repo` and `is_detached` but no notion of _operation in progress_. git2 exposes it in one call (`repo.state()`); the blueprint never reads it. Every scenario below is a desk-visit moment, and today GiTrust is blind to all of them.
 
 ### S16 — Mid-merge, conflicts unresolved 🟡
 
 **Today:** `ConflictsPresent` pre-check blocks all writes and lists files (✅ safe). But there is no forward path: no "abort the merge", no guidance loop.
-**Fix:** situation-gated intents: when `MidMerge{resolved:false}`, the _only_ valid ops are `status/diff`, `MergeAbort`, and per-file guidance ("show me both sides of f.txt" → diff with ours/theirs). GLit doesn't resolve conflicts (right call, keep it) — but it should be the calmest possible guide through them.
+**Fix:** situation-gated intents: when `MidMerge{resolved:false}`, the _only_ valid ops are `status/diff`, `MergeAbort`, and per-file guidance ("show me both sides of f.txt" → diff with ours/theirs). GiTrust doesn't resolve conflicts (right call, keep it) — but it should be the calmest possible guide through them.
 
 ### S17 — Mid-merge, conflicts RESOLVED, needs the merge commit ❌ ⚗️ `[weekly / data-loss]`
 
 **Verified:** while `.git/MERGE_HEAD` exists, a correct merge commit has **2 parents**.
-**Consequence for GLit as designed:** the blueprint's `commit()` builds parents from `repo.head().peel_to_commit()` **only** — one parent. A user who resolves conflicts and then asks GLit to "commit" gets a single-parent commit: the merge relationship is silently destroyed, MERGE_HEAD state lingers, and the branch history is wrong in a way that surfaces much later. This is a **correctness bug**, not a missing feature.
+**Consequence for GiTrust as designed:** the blueprint's `commit()` builds parents from `repo.head().peel_to_commit()` **only** — one parent. A user who resolves conflicts and then asks GiTrust to "commit" gets a single-parent commit: the merge relationship is silently destroyed, MERGE_HEAD state lingers, and the branch history is wrong in a way that surfaces much later. This is a **correctness bug**, not a missing feature.
 **Fix:** `commit()` must check `repo.state()`; if merging, read `MERGE_HEAD`, include it as second parent, use the prepared `MERGE_MSG` as draft, and call `repo.cleanup_state()` after. ~15 lines. Ship before anything else in this document.
 
 ### S18 — Mid-rebase (continue / skip / abort) ❌ ⚗️
@@ -191,19 +191,19 @@ Detect via `repo.state()`, name it, refer to `git bisect` — and _refuse writes
 
 ## 5. Category D — Lost work & forensics (the origin story's home)
 
-### S24 — Accidental `reset --hard` done OUTSIDE GLit ❌→★ `[rare / data-loss]`
+### S24 — Accidental `reset --hard` done OUTSIDE GiTrust ❌→★ `[rare / data-loss]`
 
-**Today:** the blueprint's recovery is **inward-facing** — superb for GLit's own interrupted pipelines, but for user-made disasters it only prints "here's the reflog command." The person who needs reflog explained cannot use a printed reflog command.
+**Today:** the blueprint's recovery is **inward-facing** — superb for GiTrust's own interrupted pipelines, but for user-made disasters it only prints "here's the reflog command." The person who needs reflog explained cannot use a printed reflog command.
 **Fix — the Forensic Recovery flow (deterministic Rust, zero LLM):**
 
 1. Walk `HEAD` reflog + all branch reflogs; collect commits no longer reachable from any ref.
 2. Present a **RecoveryBrowser** gate: candidates with age, message, files touched ("2 hours ago — 'feat: export csv' — 3 files").
 3. Restore action is always non-destructive: **create a branch at the chosen commit** (`rescue/<date>`), never reset the user's current state.
-   This turns GLit's weakest story into its strongest demo: "I lost my work" → 30 seconds → "here it is, on a rescue branch."
+   This turns GiTrust's weakest story into its strongest demo: "I lost my work" → 30 seconds → "here it is, on a rescue branch."
 
-### S25 — GLit's own pipeline crash ✅✅
+### S25 — GiTrust's own pipeline crash ✅✅
 
-Snapshot-before-write, START/END step logging, `glit --recover`, working-tree-never-touched rule. **This is genuinely ahead of git's own UX** and ahead of every agentic tool. Protect it; extend it (see S30).
+Snapshot-before-write, START/END step logging, `gitrust --recover`, working-tree-never-touched rule. **This is genuinely ahead of git's own UX** and ahead of every agentic tool. Protect it; extend it (see S30).
 
 ### S26 — Deleted branch with unmerged commits ❌
 
@@ -218,13 +218,13 @@ Dropped stashes are dangling commits with the distinctive "WIP on ..." message a
 **Situation:** the work exists — on another branch, in a stash, in an uncommitted worktree — the user just can't find it. This is maybe the #1 desk question.
 **Fix:** a `find` intent: search a string/filename across all branch tips, stashes, and the working tree (revwalk + tree diff; a bounded pickaxe). "Your `export_csv` function is in stash@{1} and on branch `spike/reports`." Ambitious but fully deterministic. Tier-2 differentiator.
 
-### S29 — Discarded uncommitted changes (`checkout -- file` outside GLit) ⛔ honest
+### S29 — Discarded uncommitted changes (`checkout -- file` outside GiTrust) ⛔ honest
 
-Never committed, never staged → not in the object database → gone (rare exception: previously staged blobs findable via fsck-style scan — worth attempting, worth being honest about odds). **GLit must say "this is likely unrecoverable" plainly.** A recovery tool that overpromises dies on its first failure.
+Never committed, never staged → not in the object database → gone (rare exception: previously staged blobs findable via fsck-style scan — worth attempting, worth being honest about odds). **GiTrust must say "this is likely unrecoverable" plainly.** A recovery tool that overpromises dies on its first failure.
 
-### S30 — `reset --hard` via GLit itself ✅→★
+### S30 — `reset --hard` via GiTrust itself ✅→★
 
-**Today:** TypeToConfirm + reflog hint. **Fix (safer-than-git):** before executing _GLit's own_ hard reset or `DiscardLocal`, write a lightweight backup of the doomed working-tree changes (a stash-like ref or `~/.glit/trash/<ts>/` copy). Then "GLit's hard reset is undoable" becomes literally true — a sentence git itself cannot say. This generalizes as the **trash-net principle** (§12): any GLit operation that would delete content not in the object database backs it up first.
+**Today:** TypeToConfirm + reflog hint. **Fix (safer-than-git):** before executing _GiTrust's own_ hard reset or `DiscardLocal`, write a lightweight backup of the doomed working-tree changes (a stash-like ref or `~/.gitrust/trash/<ts>/` copy). Then "GiTrust's hard reset is undoable" becomes literally true — a sentence git itself cannot say. This generalizes as the **trash-net principle** (§12): any GiTrust operation that would delete content not in the object database backs it up first.
 
 ---
 
@@ -257,7 +257,7 @@ Never committed, never staged → not in the object database → gone (rare exce
 
 ### S36 — Committed a secret (already pushed) ⛔ honest
 
-Correct response: "rotate the credential first — the secret is public regardless of git history"; then refer to `git filter-repo`/BFG for the rewrite. GLit should not attempt history rewriting in v1. Diagnose + sequence the human's actions.
+Correct response: "rotate the credential first — the secret is public regardless of git history"; then refer to `git filter-repo`/BFG for the rewrite. GiTrust should not attempt history rewriting in v1. Diagnose + sequence the human's actions.
 
 ### S37 — Committed a huge file / node_modules ❌
 
@@ -265,7 +265,7 @@ Correct response: "rotate the credential first — the secret is public regardle
 
 ### S38 — Undo a _pushed_ commit → Revert ❌
 
-**Fix:** `Revert { oid }` step. Should be the **default public undo** GLit steers toward: history-preserving, team-safe, no force. One step + prompt vocabulary.
+**Fix:** `Revert { oid }` step. Should be the **default public undo** GiTrust steers toward: history-preserving, team-safe, no force. One step + prompt vocabulary.
 
 ### S39 — Unstage files 🟡
 
@@ -295,7 +295,7 @@ Credential chain (agent → key file → token prompt) + classified `Auth` error
 ### S44 — Fork workflow: origin + upstream ❌
 
 **Situation:** two remotes; "push" and "sync" become ambiguous. **Today:** config default `remote=origin`; context lists remotes but nothing chooses.
-**Fix:** when remotes > 1 and intent involves a remote, a ChoiceGate (remember per-repo answer in `~/.glit.toml` scoped config). "Sync my fork" = fetch upstream → merge/rebase onto local → push origin: a named pipeline worth first-class support given how common fork contribution is.
+**Fix:** when remotes > 1 and intent involves a remote, a ChoiceGate (remember per-repo answer in `~/.gitrust.toml` scoped config). "Sync my fork" = fetch upstream → merge/rebase onto local → push origin: a named pipeline worth first-class support given how common fork contribution is.
 
 ### S45 — Remote branch deleted / stale tracking refs 🟡
 
@@ -308,8 +308,8 @@ The blueprint's test matrix expects "pre-commit hook rejects → Recoverable, of
 ### S47 — Hooks don't run AT ALL under git2 ❌ ⚗️ `[daily for hook-using teams / policy-violation]`
 
 **Verified empirically:** same repo, same failing pre-commit hook — git CLI blocked the commit (`exit 1`, hook evidence written); **pygit2/libgit2 created the commit anyway and the hook never executed.**
-**Consequence:** the blueprint contradicts reality in two places — the `HookExists` pre-check says the hook "will run" (it will not), and the test-matrix scenario above cannot occur via the git2 commit path. For teams on husky / pre-commit / lint-staged, GLit as designed **silently bypasses their quality gates on every commit** — from the team's perspective, a safety tool that violates policy.
-**Fix:** when executable hooks exist for the op, **shell out to `git commit` / `git push` instead of git2** (the blueprint's own shell-out convention already blesses this), or run hooks manually before the git2 call. At minimum, warn loudly: "hooks present — using system git so they run." This is a ship-blocker for credibility with exactly the professional teams GLit wants.
+**Consequence:** the blueprint contradicts reality in two places — the `HookExists` pre-check says the hook "will run" (it will not), and the test-matrix scenario above cannot occur via the git2 commit path. For teams on husky / pre-commit / lint-staged, GiTrust as designed **silently bypasses their quality gates on every commit** — from the team's perspective, a safety tool that violates policy.
+**Fix:** when executable hooks exist for the op, **shell out to `git commit` / `git push` instead of git2** (the blueprint's own shell-out convention already blesses this), or run hooks manually before the git2 call. At minimum, warn loudly: "hooks present — using system git so they run." This is a ship-blocker for credibility with exactly the professional teams GiTrust wants.
 
 ---
 
@@ -350,7 +350,7 @@ git2 doesn't run LFS filters. Detect `.gitattributes` LFS patterns → warn that
 
 ### S56 — Worktrees ⛔→🟡
 
-Partial git2 support. Two real risks: (a) misdiagnosis if state files differ; (b) **snapshot collision** — `~/.glit/snapshots` keyed only by pipeline id is fine, but `check_for_interrupted` must match snapshots to the _repo/worktree path_, or worktree A's crash prompts recovery inside worktree B. Store repo path in the snapshot; filter on it.
+Partial git2 support. Two real risks: (a) misdiagnosis if state files differ; (b) **snapshot collision** — `~/.gitrust/snapshots` keyed only by pipeline id is fine, but `check_for_interrupted` must match snapshots to the _repo/worktree path_, or worktree A's crash prompts recovery inside worktree B. Store repo path in the snapshot; filter on it.
 
 ### S57 — Concurrent modification (TOCTOU) ❌
 
@@ -359,7 +359,7 @@ Partial git2 support. Two real risks: (a) misdiagnosis if state files differ; (b
 
 ---
 
-## 9. Category H — GLit meta / the LLM layer
+## 9. Category H — GiTrust meta / the LLM layer
 
 ### S58 — Ollama down ✅
 
@@ -375,12 +375,12 @@ Contextualized error with the exact fix. Also in the test matrix.
 
 ### S61 — _Confident misclassification_ 🟡 → contained, make it visible
 
-The threshold can't catch a wrong-but-confident parse. The containment is architectural: every write passes a preview + gate, so a misparse becomes a _visible wrong plan the human rejects_, not a wrong execution. That is the invariant paying rent. The missing piece is S3's interpretation-echo — the preview must restate _what GLit understood_, or a plausible-looking plan for the wrong intent can slip past a skimming user.
+The threshold can't catch a wrong-but-confident parse. The containment is architectural: every write passes a preview + gate, so a misparse becomes a _visible wrong plan the human rejects_, not a wrong execution. That is the invariant paying rent. The missing piece is S3's interpretation-echo — the preview must restate _what GiTrust understood_, or a plausible-looking plan for the wrong intent can slip past a skimming user.
 
 ### S62 — Innocent phrasing, destructive mapping ❌ `[weekly / data-loss]`
 
 "Clean up my repo", "start fresh", "get rid of these changes" — each plausibly maps to discarding uncommitted or **untracked** work. Untracked deletions have **no reflog, no object-db copy: gone.**
-**Fix:** (1) a deterministic destructive-phrase table routes these to a spell-it-out ChoiceGate, never directly to `DiscardLocal`/clean; (2) the **trash-net** (§12): GLit backs up whatever a clean/discard would delete to `~/.glit/trash/<ts>/` before executing. Danger grading by blast radius should rank _untracked deletion above hard reset_ — hard reset at least has reflog.
+**Fix:** (1) a deterministic destructive-phrase table routes these to a spell-it-out ChoiceGate, never directly to `DiscardLocal`/clean; (2) the **trash-net** (§12): GiTrust backs up whatever a clean/discard would delete to `~/.gitrust/trash/<ts>/` before executing. Danger grading by blast radius should rank _untracked deletion above hard reset_ — hard reset at least has reflog.
 
 ### S63 — Non-git requests 🟡
 
@@ -408,7 +408,7 @@ The scenario grades above collapse into seven structural issues. Fixing these fi
 
 **P4 — Hooks are silently bypassed by git2 (⚗️ S47, credibility bug).** Verified: libgit2 never executes hooks; the blueprint's `HookExists` text and its hook-rejection test scenario are both built on a false premise. Shell out when hooks exist.
 
-**P5 — Recovery is inward-facing only (drives Category D).** World-class for GLit's own crashes; a printed reflog hint for the user's own disasters — which are the origin story. Fix: the deterministic Forensic Recovery flow (S24/26/27) + trash-net (S30/S62). All pure Rust, perfectly on-invariant.
+**P5 — Recovery is inward-facing only (drives Category D).** World-class for GiTrust's own crashes; a printed reflog hint for the user's own disasters — which are the origin story. Fix: the deterministic Forensic Recovery flow (S24/26/27) + trash-net (S30/S62). All pure Rust, perfectly on-invariant.
 
 **P6 — "Undo"/"clean" language maps to destruction without deterministic disambiguation (S34, S62).** The one place the small model could route someone into data loss. Fix: undo/clean phrases terminate at ChoiceGates that ask _what to keep_, never at a mode the LLM guessed.
 
@@ -499,10 +499,10 @@ RecoveryBrowser { candidates: Vec<LostCommit { oid, age, summary, files }> }
     // stashes; deleted-branch reflogs are REMOVED by `git branch -D`).
 
 // Trash-net principle (new invariant, sibling to "LLM never executes"):
-// Any GLit operation that would delete content NOT in the object database
+// Any GiTrust operation that would delete content NOT in the object database
 // (untracked files via clean/discard; working-tree changes via hard reset)
-// first copies it to ~/.glit/trash/<timestamp>/ with a pruning policy.
-// Result: "GLit's destructive ops are undoable" — a sentence git cannot say.
+// first copies it to ~/.gitrust/trash/<timestamp>/ with a pruning policy.
+// Result: "GiTrust's destructive ops are undoable" — a sentence git cannot say.
 ```
 
 ---
@@ -543,7 +543,7 @@ This table is small, deterministic, and eliminates the entire "wrong advice from
 **Tier 3 — graceful referral (diagnose, name, hand off)**
 Interactive rebase beyond squash · filter-repo/BFG history rewriting (S36) · bisect (S23) · LFS (S55) · worktree full support (S56, but fix snapshot path-scoping now) · submodules (S50).
 
-**Sequencing logic:** Tier 0 is three small diffs fixing verified wrong behavior. Tier 1 is one coherent release — "GLit v0.2: it doesn't just do git, it gets you _out_ of git" — and every item rides the existing trait seams. Tier 2 items are independent and parallelizable. Tier 3 is about never being silently useless.
+**Sequencing logic:** Tier 0 is three small diffs fixing verified wrong behavior. Tier 1 is one coherent release — "GiTrust v0.2: it doesn't just do git, it gets you _out_ of git" — and every item rides the existing trait seams. Tier 2 items are independent and parallelizable. Tier 3 is about never being silently useless.
 
 ---
 

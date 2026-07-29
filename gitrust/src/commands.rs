@@ -157,7 +157,7 @@ pub enum ScopedWriteOp {
     /// Runs the forensic scan → RecoveryBrowser → restore-to-rescue-branch. It
     /// only CREATES a ref (never touches current HEAD/index/worktree), so it is
     /// allowed in ANY situation — the situation gate treats it as read-only
-    /// against current state. Distinct from `glit --recover` (the snapshot path).
+    /// against current state. Distinct from `gitrust --recover` (the snapshot path).
     ForensicRecover,
     /// Ambiguous destructive-cleanup language (Phase 14, S62 / P6): "clean up",
     /// "start fresh", "throw away my changes". The classifier's ONLY cleanup
@@ -331,7 +331,7 @@ pub enum PipelineStep {
     },
     /// Run `git push --force-with-lease[=<branch>:<oid>] <remote> <branch>` as a
     /// subprocess. When `expect_oid` is `Some`, the lease is pinned to that oid
-    /// (captured at GLit's own fetch) so a background fetch advancing the tracking
+    /// (captured at GiTrust's own fetch) so a background fetch advancing the tracking
     /// ref during a long conflict resolution can't silently satisfy the lease
     /// (TOCTOU hardening). `None` = bare `--force-with-lease` (classifier path).
     ForcePush {
@@ -406,7 +406,7 @@ pub enum PipelineStep {
     },
     /// Delete untracked files (`git clean -fd`) — Phase 14 / S62. `trash_net` is
     /// always `true`: the destroyed untracked content is backed up to
-    /// `~/.glit/trash/` first (it has no reflog — the trash-net is its only
+    /// `~/.gitrust/trash/` first (it has no reflog — the trash-net is its only
     /// safety). Produced ONLY by the destructive-phrase ChoiceGate, never the
     /// classifier. Graded `Irreversible` (above hard reset) in `danger.rs`.
     Clean {
