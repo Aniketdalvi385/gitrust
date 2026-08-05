@@ -510,6 +510,7 @@ impl Validator for DefaultValidator {
         for step in steps {
             if let PipelineStep::Reset {
                 mode: ResetMode::Hard,
+                ..
             } = step
             {
                 results.push(PreCheckResult::Warn(
@@ -933,7 +934,7 @@ pub fn format_step_label(step: &PipelineStep) -> (&'static str, String) {
         PipelineStep::Checkout { target } => ("checkout", target.clone()),
         PipelineStep::Stash => ("stash", String::new()),
         PipelineStep::StashPop => ("stash pop", String::new()),
-        PipelineStep::Reset { mode } => {
+        PipelineStep::Reset { mode, .. } => {
             let detail = match mode {
                 ResetMode::Soft => "soft (keeps staged)".to_string(),
                 ResetMode::Mixed => "mixed (unstages files)".to_string(),
@@ -1171,6 +1172,7 @@ mod tests {
         let v = DefaultValidator;
         let steps = vec![PipelineStep::Reset {
             mode: ResetMode::Hard,
+            to_oid: None,
         }];
         let results = v.run_pre_checks(&repo, &steps, "auto").unwrap();
         assert!(results.iter().any(|r| matches!(r, PreCheckResult::Warn(_))));

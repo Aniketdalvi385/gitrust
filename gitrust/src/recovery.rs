@@ -92,6 +92,22 @@ pub trait RecoveryManager {
     fn list_snapshots(&self) -> anyhow::Result<Vec<PipelineSnapshot>>;
     /// Delete a snapshot by its pipeline_id.
     fn delete_snapshot_by_id(&self, pipeline_id: &str) -> anyhow::Result<()>;
+
+    /// Delete every snapshot captured in `repo_workdir`, returning the count
+    /// removed. Used when an in-progress op (rebase/merge) is RESOLVED to a
+    /// clean state — the snapshot that was intentionally preserved at the pause
+    /// is now stale and must not keep nagging "interrupted pipeline" on later
+    /// commands (M-08 Defect 3). Scoped to the workdir so it never clears
+    /// another repo's live snapshot. Best-effort per entry.
+    fn clear_snapshots_for_workdir(&self, repo_workdir: &str) -> anyhow::Result<usize> {
+        let mut cleared = 0;
+        for snap in self.list_snapshots()?.into_iter() {
+            if snap.repo_workdir == repo_workdir && self.delete_snapshot(&snap).is_ok() {
+                cleared += 1;
+            }
+        }
+        Ok(cleared)
+    }
 }
 
 /// Default file-based recovery manager using ~/.gitrust/snapshots/.
@@ -316,6 +332,7 @@ impl PipelineStep {
             },
             PipelineStep::Reset {
                 mode: ResetMode::Hard,
+                ..
             } => RecoveryAction::ReflogOnly {
                 description: "working tree changes are gone".into(),
                 hint: "git reflog → find hash → git checkout <hash>".into(),
@@ -663,6 +680,43 @@ mod tests {
         mgr.delete_snapshot(&snap).unwrap();
     }
 
+    #[test]
+    fn clear_snapshots_for_workdir_removes_only_matching_repo() {
+        // M-08 Defect 3: resolving an in-progress op clears the stale snapshot
+        // for THIS repo's workdir, and only that repo's.
+        let dir_a = TempDir::new().unwrap();
+        let repo_a = init_repo_with_commit(&dir_a);
+        let dir_b = TempDir::new().unwrap();
+        let repo_b = init_repo_with_commit(&dir_b);
+        let mgr = FileRecoveryManager;
+
+        let snap_a = mgr.capture_snapshot(&repo_a).unwrap();
+        let snap_b = mgr.capture_snapshot(&repo_b).unwrap();
+
+        let cleared = mgr
+            .clear_snapshots_for_workdir(&snap_a.repo_workdir)
+            .unwrap();
+        assert_eq!(cleared, 1, "exactly repo A's snapshot should be cleared");
+
+        // A's snapshot is gone...
+        assert!(
+            mgr.check_for_interrupted(Some(&snap_a.repo_workdir))
+                .unwrap()
+                .is_none(),
+            "repo A's snapshot must be cleared"
+        );
+        // ...but B's survives (never nag another repo).
+        assert_eq!(
+            mgr.check_for_interrupted(Some(&snap_b.repo_workdir))
+                .unwrap()
+                .map(|s| s.pipeline_id),
+            Some(snap_b.pipeline_id.clone()),
+            "repo B's snapshot must be untouched"
+        );
+
+        mgr.delete_snapshot(&snap_b).unwrap();
+    }
+
     // Phase 11 — situation-aware recovery. `recovery_plan` must never fight
     // git's own state machine.
     fn snap(head: &str, branch: &str) -> PipelineSnapshot {
@@ -831,6 +885,7 @@ mod tests {
         };
         let step = PipelineStep::Reset {
             mode: ResetMode::Hard,
+            to_oid: None,
         };
         match step.recovery_action(&snapshot) {
             RecoveryAction::ReflogOnly { hint, .. } => {

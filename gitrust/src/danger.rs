@@ -207,12 +207,15 @@ pub fn step_danger(step: &PipelineStep, ctx: &RepoContext) -> DangerLevel {
         // Reset depends on mode.
         P::Reset {
             mode: ResetMode::Soft,
+            ..
         } => DangerLevel::Caution,
         P::Reset {
             mode: ResetMode::Mixed,
+            ..
         } => DangerLevel::Caution,
         P::Reset {
             mode: ResetMode::Hard,
+            ..
         } => DangerLevel::Destructive,
 
         // Pull-rebase potentially rewrites work in progress.
@@ -432,6 +435,7 @@ mod tests {
         let hard = step_danger(
             &PipelineStep::Reset {
                 mode: ResetMode::Hard,
+                to_oid: None,
             },
             &ctx_clean("main"),
         );

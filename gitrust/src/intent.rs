@@ -227,9 +227,115 @@ pub fn try_canonical(query: &str) -> Option<IntentType> {
         "continue revert" | "revert continue" => {
             IntentType::ScopedWrite(ScopedWriteOp::RevertContinue)
         }
-        _ => return None,
+        // Parameterized fast-path forms: a known verb prefix + a trailing
+        // argument the LLM used to drop (M-05). Deterministic capture keeps
+        // these off the model entirely — no latency, no lost target. The name
+        // is validated as a single safe token; anything richer falls through to
+        // the LLM (returns None).
+        _ => return try_canonical_parameterized(&q),
     };
     Some(intent)
+}
+
+/// Prefix-capture forms of `try_canonical` — a canonical verb followed by a
+/// single-token argument (a branch name). Returns `Some` only when the trailing
+/// argument is exactly one whitespace-delimited, git-legal token; otherwise
+/// `None` so the query falls through to the LLM.
+fn try_canonical_parameterized(q: &str) -> Option<IntentType> {
+    // (prefixes, build) — first matching prefix wins. Longest/most-specific
+    // prefixes first so "switch to" beats a hypothetical "switch".
+    let create_branch: &[&str] = &[
+        "create branch ",
+        "create a branch ",
+        "new branch ",
+        "make branch ",
+        "make a branch ",
+        "branch ", // "branch foo" (bare "branch" is a read-only list, matched above)
+    ];
+    let checkout: &[&str] = &[
+        "checkout ",
+        "check out ",
+        "switch to ",
+        "switch to branch ",
+        "switch ",
+    ];
+
+    if let Some(name) = capture_single_arg(q, create_branch) {
+        return Some(IntentType::ScopedWrite(ScopedWriteOp::Branch { name }));
+    }
+    if let Some(target) = capture_single_arg(q, checkout) {
+        return Some(IntentType::ScopedWrite(ScopedWriteOp::Checkout { target }));
+    }
+    if let Some(n) = capture_squash_count(q) {
+        return Some(IntentType::ScopedWrite(ScopedWriteOp::SquashLastN { n }));
+    }
+    None
+}
+
+/// Deterministically capture `squash [the] last N [commits]` and its common
+/// variants, extracting N (M-19: the small model was unreliable at routing
+/// "squash the last 3" to the squash op with count=3, even though the prompt
+/// asks for it). Requires an explicit count ≥ 2; a squash phrase without a
+/// number falls through to the LLM. Returns `None` for anything not clearly a
+/// squash request.
+fn capture_squash_count(q: &str) -> Option<u32> {
+    // Must start with a squash/combine verb so we don't grab a stray number from
+    // an unrelated phrase.
+    let looks_like_squash = q.starts_with("squash") || q.starts_with("combine");
+    if !looks_like_squash {
+        return None;
+    }
+    // Only fire on squash phrasings that reference "commit(s)" or "last N" — keep
+    // the surface area tight; richer phrasings defer to the LLM.
+    let mentions_target = q.contains("last")
+        || q.contains("commit")
+        || q.contains("into one")
+        || q.contains(" to one");
+    if !mentions_target {
+        return None;
+    }
+    // First integer token in the phrase is the count.
+    let n: u32 = q
+        .split(|c: char| !c.is_ascii_digit())
+        .find(|tok| !tok.is_empty())
+        .and_then(|tok| tok.parse().ok())?;
+    // A 0/1-commit squash is meaningless; require ≥ 2. (n==1 or n==0 → defer,
+    // the LLM/clarifier can ask.)
+    if n >= 2 {
+        Some(n)
+    } else {
+        None
+    }
+}
+
+/// Strip the first matching prefix from `q` and return the remaining argument
+/// iff it is exactly ONE git-legal token (no spaces, no shell/quote noise, not a
+/// flag). Multi-word or quoted arguments return `None` — they need the LLM.
+fn capture_single_arg(q: &str, prefixes: &[&str]) -> Option<String> {
+    for p in prefixes {
+        if let Some(rest) = q.strip_prefix(p) {
+            let arg = rest.trim();
+            if is_single_git_ref_token(arg) {
+                return Some(arg.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// A conservative single-token check: non-empty, no whitespace, and only
+/// characters that are plausible in a branch/ref name. Deliberately strict —
+/// the goal is to catch the common `create branch feature-x` case with zero
+/// false positives, deferring anything ambiguous to the LLM.
+fn is_single_git_ref_token(s: &str) -> bool {
+    if s.is_empty() || s.contains(char::is_whitespace) {
+        return false;
+    }
+    if s.starts_with('-') {
+        return false; // not a flag
+    }
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/' | '.'))
 }
 
 /// Build a short list of plausible alternative intents when classifier confidence
@@ -1194,7 +1300,72 @@ mod tests {
         assert!(try_canonical("status of branch").is_none());
         assert!(try_canonical("push my login work").is_none());
         assert!(try_canonical("show me the status").is_none());
-        assert!(try_canonical("create branch foo").is_none());
+    }
+
+    #[test]
+    fn test_canonical_parameterized_branch_and_checkout() {
+        // M-05 regression: a verb prefix + single-token name is captured
+        // deterministically (no LLM), instead of dropping the name.
+        assert!(matches!(
+            try_canonical("create branch feature-x"),
+            Some(IntentType::ScopedWrite(ScopedWriteOp::Branch { name })) if name == "feature-x"
+        ));
+        assert!(matches!(
+            try_canonical("new branch bugfix/123"),
+            Some(IntentType::ScopedWrite(ScopedWriteOp::Branch { name })) if name == "bugfix/123"
+        ));
+        assert!(matches!(
+            try_canonical("checkout main"),
+            Some(IntentType::ScopedWrite(ScopedWriteOp::Checkout { target })) if target == "main"
+        ));
+        assert!(matches!(
+            try_canonical("switch to develop"),
+            Some(IntentType::ScopedWrite(ScopedWriteOp::Checkout { target })) if target == "develop"
+        ));
+    }
+
+    #[test]
+    fn test_canonical_parameterized_squash_count() {
+        // M-19 regression: squash phrasings with an explicit count route
+        // deterministically to SquashLastN, off the flaky model.
+        for (q, want) in &[
+            ("squash the last 3 commits", 3u32),
+            ("squash last 3", 3),
+            ("squash my last 2 commits", 2),
+            ("combine my last 4 commits", 4),
+            ("squash the last 5 commits into one", 5),
+        ] {
+            assert!(
+                matches!(
+                    try_canonical(q),
+                    Some(IntentType::ScopedWrite(ScopedWriteOp::SquashLastN { n })) if n == *want
+                ),
+                "squash count capture failed for {:?} (wanted {})",
+                q,
+                want
+            );
+        }
+        // Squash without a count, or a 1-commit squash, defers to the LLM.
+        assert!(try_canonical("squash my commits").is_none());
+        assert!(try_canonical("squash the last commit").is_none());
+        assert!(try_canonical("squash last 1").is_none());
+        // A number in a non-squash phrase is not grabbed.
+        assert!(try_canonical("show me the last 3 commits").is_none());
+    }
+
+    #[test]
+    fn test_canonical_parameterized_defers_ambiguous_to_llm() {
+        // Bare read-only verbs stay read-only (the parameterized arm never fires
+        // without a trailing token).
+        assert!(matches!(
+            try_canonical("branch"),
+            Some(IntentType::ReadOnly(ReadOnlyOp::Branches))
+        ));
+        // Multi-word / quoted / flag-shaped arguments fall through to the LLM.
+        assert!(try_canonical("create branch for the login feature").is_none());
+        assert!(try_canonical("checkout the main branch please").is_none());
+        assert!(try_canonical("branch protection rules").is_none());
+        assert!(try_canonical("checkout -b foo").is_none());
     }
 
     #[test]

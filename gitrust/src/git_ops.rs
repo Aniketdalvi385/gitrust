@@ -83,7 +83,16 @@ pub trait GitOperations {
     fn checkout(&self, repo: &Repository, target: &str) -> anyhow::Result<()>;
     fn stash(&self, repo: &mut Repository) -> anyhow::Result<git2::Oid>;
     fn stash_pop(&self, repo: &mut Repository) -> anyhow::Result<()>;
-    fn reset(&self, repo: &Repository, mode: ResetMode) -> anyhow::Result<()>;
+    /// Reset HEAD to `to_oid` (parent `HEAD~1` to drop a commit) or to HEAD
+    /// itself when `None` (discard a dirty working tree, keep the commit).
+    /// Returns the trash dir when a backup was written. See
+    /// `reset_with_trash_root` — the target is load-bearing (M-16/M-19).
+    fn reset(
+        &self,
+        repo: &Repository,
+        mode: ResetMode,
+        to_oid: Option<&str>,
+    ) -> anyhow::Result<Option<std::path::PathBuf>>;
     fn log(&self, repo: &Repository, count: u8) -> anyhow::Result<Vec<String>>;
     fn get_status_summary(&self, repo: &Repository) -> anyhow::Result<StatusSummary>;
     fn get_diff_snippet(
@@ -719,28 +728,52 @@ impl Git2Operations {
     /// modifications to `trash_root` BEFORE resetting; a backup error aborts the
     /// reset (nothing discarded). Soft/Mixed don't touch the working tree, so
     /// they skip the backup.
+    /// Reset HEAD to `to_oid` (or to HEAD itself when `None`), backing up the
+    /// tracked destroy-set to `trash_root` first for Hard mode (fail-closed).
+    ///
+    /// **`to_oid` is load-bearing** (M-16/M-19 regression): dropping a commit is
+    /// `reset` to the *parent* (`HEAD~1`), not to HEAD. Passing `None` resets to
+    /// HEAD, which discards an uncommitted working-tree delta while KEEPING the
+    /// commit (the cleanup→tracked path). A target-less reset that always peeled
+    /// HEAD made undo→discard a silent no-op — the commit never moved.
+    ///
+    /// Returns the trash dir when a backup was actually written (`None` when the
+    /// destroy-set was empty), so callers report the backup from a real result.
     pub fn reset_with_trash_root(
         &self,
         repo: &Repository,
         mode: ResetMode,
+        to_oid: Option<&str>,
         trash_root: &std::path::Path,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Option<std::path::PathBuf>> {
+        let mut backup = None;
         if matches!(mode, ResetMode::Hard) {
             let paths = tracked_modified_paths(repo);
-            backup_before_destroy(repo, trash_root, &paths)?; // fail-closed
+            backup = backup_before_destroy(repo, trash_root, &paths)?; // fail-closed
         }
-        let head = repo.head().context("No HEAD to reset to")?;
-        let commit = head
-            .peel_to_commit()
-            .context("HEAD does not point to a commit")?;
+        // Resolve the reset target: an explicit oid, or current HEAD when None.
+        let target = match to_oid {
+            Some(oid_str) => {
+                let oid = git2::Oid::from_str(oid_str)
+                    .with_context(|| format!("Invalid reset target oid: {}", oid_str))?;
+                repo.find_object(oid, None)
+                    .with_context(|| format!("Reset target not found: {}", oid_str))?
+            }
+            None => {
+                let head = repo.head().context("No HEAD to reset to")?;
+                head.peel_to_commit()
+                    .context("HEAD does not point to a commit")?
+                    .into_object()
+            }
+        };
         let reset_type = match mode {
             ResetMode::Soft => git2::ResetType::Soft,
             ResetMode::Mixed => git2::ResetType::Mixed,
             ResetMode::Hard => git2::ResetType::Hard,
         };
-        repo.reset(commit.as_object(), reset_type, None)
+        repo.reset(&target, reset_type, None)
             .with_context(|| format!("Reset ({:?}) failed", mode))?;
-        Ok(())
+        Ok(backup)
     }
 
     /// `clean` with an explicit trash root. Backs up the untracked set to
@@ -1019,9 +1052,14 @@ impl GitOperations for Git2Operations {
         Ok(())
     }
 
-    fn reset(&self, repo: &Repository, mode: ResetMode) -> anyhow::Result<()> {
+    fn reset(
+        &self,
+        repo: &Repository,
+        mode: ResetMode,
+        to_oid: Option<&str>,
+    ) -> anyhow::Result<Option<std::path::PathBuf>> {
         let trash_root = crate::trash::trash_dir()?;
-        self.reset_with_trash_root(repo, mode, &trash_root)
+        self.reset_with_trash_root(repo, mode, to_oid, &trash_root)
     }
 
     fn log(&self, repo: &Repository, count: u8) -> anyhow::Result<Vec<String>> {
@@ -1747,7 +1785,9 @@ pub fn execute_step(
         PipelineStep::Checkout { target } => ops.checkout(repo, target),
         PipelineStep::Stash => ops.stash(repo).map(|_| ()),
         PipelineStep::StashPop => ops.stash_pop(repo),
-        PipelineStep::Reset { mode } => ops.reset(repo, *mode),
+        PipelineStep::Reset { mode, to_oid } => {
+            ops.reset(repo, *mode, to_oid.as_deref()).map(|_| ())
+        }
         PipelineStep::Log { count } => {
             let entries = ops.log(repo, *count)?;
             for entry in &entries {
@@ -2627,7 +2667,7 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
         std::fs::write(dir.path().join("untracked.txt"), b"safe").unwrap();
 
         Git2Operations
-            .reset_with_trash_root(&repo, ResetMode::Hard, trash.path())
+            .reset_with_trash_root(&repo, ResetMode::Hard, None, trash.path())
             .unwrap();
 
         // The tracked modification was backed up byte-identical...
@@ -2661,13 +2701,122 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
         let bad_root = file_path.join("trash");
 
         std::fs::write(dir.path().join("test.txt"), b"precious edit").unwrap();
-        let res = Git2Operations.reset_with_trash_root(&repo, ResetMode::Hard, &bad_root);
+        let res = Git2Operations.reset_with_trash_root(&repo, ResetMode::Hard, None, &bad_root);
         assert!(res.is_err(), "reset must fail-closed on backup failure");
         // Nothing was destroyed: the working-tree edit survives intact.
         assert_eq!(
             std::fs::read(dir.path().join("test.txt")).unwrap(),
             b"precious edit",
             "fail-closed: the tracked modification must survive"
+        );
+    }
+
+    /// Second commit on top of `init_repo_with_commit`'s "initial commit", so
+    /// tests can reset back to the parent (HEAD~1). Returns (parent_oid, tip_oid).
+    fn add_second_commit(repo: &Repository, dir: &TempDir) -> (git2::Oid, git2::Oid) {
+        let parent = repo.head().unwrap().target().unwrap();
+        std::fs::write(dir.path().join("test.txt"), "hello v2").unwrap();
+        let mut index = repo.index().unwrap();
+        index.add_path(std::path::Path::new("test.txt")).unwrap();
+        index.write().unwrap();
+        let tree_oid = index.write_tree().unwrap();
+        let tree = repo.find_tree(tree_oid).unwrap();
+        let sig = git2::Signature::now("Test", "test@test.com").unwrap();
+        let parent_commit = repo.find_commit(parent).unwrap();
+        let tip = repo
+            .commit(
+                Some("HEAD"),
+                &sig,
+                &sig,
+                "the mistake",
+                &tree,
+                &[&parent_commit],
+            )
+            .unwrap();
+        (parent, tip)
+    }
+
+    #[test]
+    fn reset_hard_to_parent_drops_the_commit() {
+        // M-16 regression: undo→discard must DROP the last commit, not no-op.
+        let dir = TempDir::new().unwrap();
+        let repo = init_repo_with_commit(&dir);
+        let (parent, tip) = add_second_commit(&repo, &dir);
+        assert_eq!(repo.head().unwrap().target().unwrap(), tip);
+        let trash = TempDir::new().unwrap();
+
+        Git2Operations
+            .reset_with_trash_root(
+                &repo,
+                ResetMode::Hard,
+                Some(&parent.to_string()),
+                trash.path(),
+            )
+            .unwrap();
+
+        // HEAD actually moved back to the parent — the commit is gone.
+        assert_eq!(
+            repo.head().unwrap().target().unwrap(),
+            parent,
+            "reset --hard to parent must move HEAD to the parent (M-16 was a no-op here)"
+        );
+        // Working tree reflects the parent's content.
+        assert_eq!(
+            std::fs::read(dir.path().join("test.txt")).unwrap(),
+            b"hello"
+        );
+    }
+
+    #[test]
+    fn reset_mixed_to_parent_uncommits_but_keeps_files() {
+        // undo→"keep in files": HEAD moves to parent, changes remain in the tree.
+        let dir = TempDir::new().unwrap();
+        let repo = init_repo_with_commit(&dir);
+        let (parent, tip) = add_second_commit(&repo, &dir);
+        assert_eq!(repo.head().unwrap().target().unwrap(), tip);
+        let trash = TempDir::new().unwrap();
+
+        Git2Operations
+            .reset_with_trash_root(
+                &repo,
+                ResetMode::Mixed,
+                Some(&parent.to_string()),
+                trash.path(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            repo.head().unwrap().target().unwrap(),
+            parent,
+            "reset --mixed to parent must move HEAD to the parent"
+        );
+        // The v2 content stays in the working tree (mixed keeps files).
+        assert_eq!(
+            std::fs::read(dir.path().join("test.txt")).unwrap(),
+            b"hello v2",
+            "mixed reset must leave the working-tree changes in place"
+        );
+    }
+
+    #[test]
+    fn reset_hard_to_head_still_discards_dirty_tree() {
+        // M-26 must not regress: cleanup→tracked passes None (reset to HEAD),
+        // discarding uncommitted modifications while KEEPING the commit.
+        let dir = TempDir::new().unwrap();
+        let repo = init_repo_with_commit(&dir);
+        let head_before = repo.head().unwrap().target().unwrap();
+        let trash = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("test.txt"), b"dirty edit").unwrap();
+
+        Git2Operations
+            .reset_with_trash_root(&repo, ResetMode::Hard, None, trash.path())
+            .unwrap();
+
+        // HEAD unchanged (None target = reset to HEAD), dirty edit discarded.
+        assert_eq!(repo.head().unwrap().target().unwrap(), head_before);
+        assert_eq!(
+            std::fs::read(dir.path().join("test.txt")).unwrap(),
+            b"hello"
         );
     }
 

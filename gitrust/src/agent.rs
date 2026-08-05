@@ -50,6 +50,33 @@ fn print_engine_marker(engine: crate::commands::Engine, llm_elapsed: Option<std:
     }
 }
 
+/// Snapshot the set of trash-net backup-dir names that exist right now. Used to
+/// detect the dir a destructive step writes, so the success note reflects a real
+/// backup instead of an unconditional claim (M-16 Defect 1). Best-effort: an
+/// unreadable/absent trash root yields an empty set.
+fn trash_dir_snapshot() -> std::collections::HashSet<std::path::PathBuf> {
+    let root = match crate::trash::trash_dir() {
+        Ok(r) => r,
+        Err(_) => return std::collections::HashSet::new(),
+    };
+    match std::fs::read_dir(&root) {
+        Ok(entries) => entries.flatten().map(|e| e.path()).collect(),
+        Err(_) => std::collections::HashSet::new(),
+    }
+}
+
+/// Return the display path of the single new trash dir created since `before`,
+/// or `None` if the destructive step backed nothing up (empty destroy-set).
+fn new_trash_dir_since(before: &std::collections::HashSet<std::path::PathBuf>) -> Option<String> {
+    let root = crate::trash::trash_dir().ok()?;
+    let entries = std::fs::read_dir(&root).ok()?;
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| !before.contains(p))
+        .map(|p| p.display().to_string())
+}
+
 /// Run the full agent pipeline for one query.
 /// Layers: 0 (context) → 1 (intent) → 2 (resolve) → 3 (validate/gate) → 4 (execute)
 pub async fn run_agent(
@@ -161,12 +188,23 @@ pub async fn run_agent(
         // old detached-HEAD special-case that used to live in the Blocked arm).
         crate::validation::SituationVerdict::Redirect(redirect) => {
             use crate::validation::Redirect;
-            return match redirect {
+            match redirect {
                 Redirect::DetachedHeadRescue => {
-                    handle_detached_head_rescue(&mut repo, &*gate).await
+                    // After a branch-here rescue the repo is on a real branch and
+                    // the situation is now Normal, so the ORIGINAL intent must be
+                    // resumed — a user who typed "commit this" should end up with
+                    // the commit made, not silently dropped on the new branch
+                    // (M-13). Any other rescue outcome (switched away / cancelled)
+                    // ends the run here.
+                    match handle_detached_head_rescue(&mut repo, &*gate).await? {
+                        RescueOutcome::Resume => {
+                            // fall through to normal intent dispatch below
+                        }
+                        RescueOutcome::Done => return Ok(()),
+                    }
                 }
                 Redirect::ReconcileDiverged { ahead, behind } => {
-                    reconcile_flow(
+                    return reconcile_flow(
                         &mut repo,
                         ReconcileMode::SameBranch,
                         ahead,
@@ -174,9 +212,9 @@ pub async fn run_agent(
                         config,
                         &*gate,
                     )
-                    .await
+                    .await;
                 }
-            };
+            }
         }
     }
 
@@ -1189,7 +1227,10 @@ async fn build_scoped_steps(
                     return Ok(vec![]);
                 }
             }
-            Ok(vec![PipelineStep::Reset { mode }])
+            // A plain "reset" intent discards the working-tree delta and keeps
+            // the commit → reset to HEAD (None). Commit-dropping goes through the
+            // undo gate, which passes an explicit parent oid.
+            Ok(vec![PipelineStep::Reset { mode, to_oid: None }])
         }
     }
 }
@@ -2024,6 +2065,10 @@ async fn execute_pipeline(
 
     for (i, step) in steps.iter().enumerate() {
         let pre_state = capture_pre_step_state(repo);
+        // Snapshot the trash-net BEFORE a destructive step so we can report the
+        // backup from what was ACTUALLY written — not print a canned "backed up"
+        // line when the destroy-set was empty and no backup exists (M-16 Defect 1).
+        let trash_before = trash_dir_snapshot();
         let (verb, detail) = crate::validation::format_step_label(step);
         let level = crate::danger::step_danger(step, &ctx_for_preview);
         let marker = crate::danger::colored_marker(level);
@@ -2074,22 +2119,24 @@ async fn execute_pipeline(
                     // so it reads as supporting text, not another action.
                     println!("  {}  {}", dim("│"), dim(&line));
                 }
-                // S30: after a destructive step that the trash-net backed up,
-                // tell the user where the backup lives and for how long — the
-                // sentence git itself cannot say.
+                // S30: after a destructive step, tell the user where the backup
+                // lives — but ONLY if the trash-net actually wrote one this step.
+                // Detect the new dir by diffing the trash snapshot taken before
+                // execution. An empty destroy-set writes nothing, so no note is
+                // printed (M-16 Defect 1: the note used to print unconditionally,
+                // claiming a backup that did not exist).
                 if matches!(
                     step,
                     PipelineStep::Clean { .. }
                         | PipelineStep::Reset {
-                            mode: ResetMode::Hard
+                            mode: ResetMode::Hard,
+                            ..
                         }
                         | PipelineStep::DiscardLocal { .. }
                 ) {
-                    if let Ok(dir) = crate::trash::trash_dir() {
-                        let note = crate::copy::trash_backup_note(
-                            &dir.display().to_string(),
-                            config.trash_retention_days,
-                        );
+                    if let Some(new_dir) = new_trash_dir_since(&trash_before) {
+                        let note =
+                            crate::copy::trash_backup_note(&new_dir, config.trash_retention_days);
                         println!("  {}  {}", dim("│"), dim(&note));
                     }
                 }
@@ -2120,10 +2167,17 @@ async fn execute_pipeline(
                         PipelineStep::Merge { .. } => "merge",
                         _ => "operation",
                     };
+                    // The conflict was written by the `git` SUBPROCESS, so the
+                    // parent's in-memory index handle is stale — force a fresh
+                    // read from disk before counting, or we report "0 file(s)"
+                    // for a real conflict (M-08 Defect 1).
                     let n = repo
                         .index()
                         .ok()
-                        .and_then(|idx| idx.conflicts().ok().map(|c| c.count()))
+                        .and_then(|mut idx| {
+                            let _ = idx.read(true); // reload from disk
+                            idx.conflicts().ok().map(|c| c.count())
+                        })
                         .unwrap_or(0);
                     reconcile_paused = Some((op, n));
                     last_error = Some(e);
@@ -2211,6 +2265,30 @@ async fn execute_pipeline(
     if last_error.is_none() {
         if let Some(s) = &snapshot {
             let _ = recovery_mgr.delete_snapshot(s);
+        }
+        // M-08 Defect 3: if this pipeline RESOLVED an in-progress op (a
+        // continue/skip/abort) and the repo is now clean, clear any snapshot the
+        // earlier PAUSE intentionally preserved — otherwise it keeps nagging
+        // "interrupted pipeline / run --recover" on every later command, even a
+        // read-only status, pointing at a --recover that could undo the finished
+        // work. Best-effort; scoped to this repo's workdir.
+        let resolved_in_progress = steps.iter().any(|s| {
+            matches!(
+                s,
+                PipelineStep::RebaseContinue
+                    | PipelineStep::RebaseSkip
+                    | PipelineStep::RebaseAbort
+                    | PipelineStep::MergeAbort
+                    | PipelineStep::CherryPickContinue
+                    | PipelineStep::CherryPickAbort
+                    | PipelineStep::RevertContinue
+                    | PipelineStep::RevertAbort
+            )
+        });
+        if resolved_in_progress && repo.state() == git2::RepositoryState::Clean {
+            if let Some(wd) = repo.workdir().map(|p| p.to_string_lossy().into_owned()) {
+                let _ = recovery_mgr.clear_snapshots_for_workdir(&wd);
+            }
         }
         println!();
 
@@ -2681,6 +2759,9 @@ fn build_undo_intent(
         }]),
         UndoChoice::KeepInFiles => Ok(vec![PipelineStep::Reset {
             mode: ResetMode::Mixed,
+            // Drop the commit but keep its changes in the working tree: reset to
+            // the PARENT, not HEAD (a HEAD-target mixed reset would no-op).
+            to_oid: Some(parent.id().to_string()),
         }]),
         UndoChoice::Revert => Ok(vec![PipelineStep::Revert {
             oid: head_oid.to_string(),
@@ -2709,6 +2790,10 @@ fn build_undo_intent(
             }
             Ok(vec![PipelineStep::Reset {
                 mode: ResetMode::Hard,
+                // DISCARD the commit and its changes: reset --hard to the PARENT.
+                // A HEAD-target reset here was the M-16 phantom no-op (the commit
+                // survived while the tool reported "Done").
+                to_oid: Some(parent.id().to_string()),
             }])
         }
     }
@@ -2789,11 +2874,15 @@ fn build_cleanup_intent(
     let steps = match semantics[choice] {
         CleanupChoice::Tracked => vec![PipelineStep::Reset {
             mode: ResetMode::Hard,
+            // Cleanup discards the DIRTY WORKING TREE but keeps the commit:
+            // reset --hard to HEAD (None), not to a parent. (M-26 path.)
+            to_oid: None,
         }],
         CleanupChoice::Untracked => vec![PipelineStep::Clean { trash_net: true }],
         CleanupChoice::Both => vec![
             PipelineStep::Reset {
                 mode: ResetMode::Hard,
+                to_oid: None,
             },
             PipelineStep::Clean { trash_net: true },
         ],
@@ -3078,10 +3167,19 @@ fn escalate_pushed_rewrite(
 
 /// When the pre-check found we're in detached HEAD and the user's intent
 /// required writes, offer a path forward instead of just erroring.
+/// Outcome of the detached-HEAD rescue, telling `run_agent` whether to resume
+/// the user's original intent. `Resume` = now on a real branch, safe to continue
+/// (so "commit this" actually commits — M-13). `Done` = switched away or
+/// cancelled; nothing left to do.
+enum RescueOutcome {
+    Resume,
+    Done,
+}
+
 async fn handle_detached_head_rescue(
     repo: &mut git2::Repository,
     gate: &dyn ConfirmationGate,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<RescueOutcome> {
     let current_sha = repo
         .head()
         .ok()
@@ -3123,10 +3221,21 @@ async fn handle_detached_head_rescue(
 
     match resp {
         GateResponse::Chose(0) => {
-            let name = Text::new("New branch name:")
-                .with_help_message("This will save your current commit on a real branch")
-                .prompt()
-                .map_err(|e| anyhow::anyhow!("Aborted: {}", e))?;
+            // Route the name prompt through the gate (not a raw Text::new) so the
+            // rescue is driveable by ScriptedGate/AutoConfirmGate and the M-13
+            // resume path is unit-testable.
+            let name = match gate.prompt(&GateType::EditableText {
+                // A sensible default the user can accept or overwrite — also lets
+                // scripted/non-interactive runs proceed with a valid name.
+                initial: "rescue-work".to_string(),
+                label: "New branch name:".to_string(),
+            })? {
+                GateResponse::TextProvided(n) => n,
+                _ => {
+                    println!("  Aborted.");
+                    return Ok(RescueOutcome::Done);
+                }
+            };
             let name = name.trim().to_string();
             if let Err(r) = validate_branch_name(&name) {
                 let suggestion = sanitize_branch_name(&name);
@@ -3144,7 +3253,9 @@ async fn handle_detached_head_rescue(
                 git_ops.checkout(repo, &name)?;
                 println!("  ✓ Created and switched to branch '{}'", name);
             }
-            Ok(())
+            // Now on a real branch — resume the user's original intent so a
+            // "commit this" actually commits here (M-13).
+            Ok(RescueOutcome::Resume)
         }
         GateResponse::Chose(1) => {
             // S21 guard: refuse to switch away while commits would be stranded —
@@ -3161,7 +3272,9 @@ async fn handle_detached_head_rescue(
                 let git_ops = Git2Operations;
                 if git_ops.checkout(repo, fallback).is_ok() {
                     println!("  ✓ Switched to '{}'", fallback);
-                    return Ok(());
+                    // User chose to move AWAY from the detached commit — the
+                    // original intent (e.g. "commit this") no longer applies here.
+                    return Ok(RescueOutcome::Done);
                 }
             }
             Err(anyhow::anyhow!(
@@ -3170,7 +3283,7 @@ async fn handle_detached_head_rescue(
         }
         _ => {
             println!("  Aborted.");
-            Ok(())
+            Ok(RescueOutcome::Done)
         }
     }
 }
@@ -3486,7 +3599,7 @@ fn summarize_step(
             }
         }
         P::StashPop => Some("→ Restored stashed changes (stash entry removed)".to_string()),
-        P::Reset { mode } => Some(format!("→ Reset ({:?})", mode).to_lowercase()),
+        P::Reset { mode, .. } => Some(format!("→ Reset ({:?})", mode).to_lowercase()),
         P::Undo {
             undone_summary,
             undone_sha,
@@ -3638,6 +3751,18 @@ fn resolve_commit_message(
     }
 }
 
+/// Drop git comment lines (those starting with `#`, after optional leading
+/// whitespace) and trim the result — mirrors git's default `core.commentChar`
+/// cleanup so a MERGE_MSG's "# Conflicts:" block never reaches the commit (M-12).
+fn strip_comment_lines(s: &str) -> String {
+    s.lines()
+        .filter(|line| !line.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
 /// Async variant: when message is a Draft, generate a real conventional-commit
 /// message from the actual diff (via the LLM) instead of using the query-derived
 /// heuristic. Provided messages are passed through as-is to the edit gate.
@@ -3656,7 +3781,12 @@ async fn resolve_or_generate_commit_message(
             let merge_msg = if repo.state() == git2::RepositoryState::Merge {
                 std::fs::read_to_string(repo.path().join("MERGE_MSG"))
                     .ok()
-                    .map(|s| s.trim().to_string())
+                    // Strip git's comment lines (e.g. the "# Conflicts:" block a
+                    // conflicted merge appends). git drops these at commit time via
+                    // core.commentChar; since we read MERGE_MSG and commit it
+                    // ourselves, we must strip them or they leak into the message
+                    // (M-12).
+                    .map(|s| strip_comment_lines(&s))
                     .filter(|s| !s.is_empty())
             } else {
                 None
@@ -3750,6 +3880,21 @@ mod tests {
         assert!(validate_branch_name("hotfix").is_ok());
         assert!(validate_branch_name("v1.2.3-rc").is_ok());
         assert!(validate_branch_name("user/feature.flag").is_ok());
+    }
+
+    #[test]
+    fn test_strip_comment_lines_drops_conflicts_block() {
+        // M-12: a conflicted MERGE_MSG carries a "# Conflicts:" comment block
+        // that must not leak into the commit message.
+        let merge_msg = "Merge branch 'feature'\n\n# Conflicts:\n#\tapp.txt\n";
+        assert_eq!(strip_comment_lines(merge_msg), "Merge branch 'feature'");
+        // A normal message is untouched (aside from trimming).
+        assert_eq!(strip_comment_lines("feat: add auth\n"), "feat: add auth");
+        // Indented comment lines are also dropped (git trims leading ws first).
+        assert_eq!(
+            strip_comment_lines("subject\n  # note\nbody"),
+            "subject\nbody"
+        );
     }
 
     #[test]
@@ -4039,6 +4184,13 @@ mod phase12_reconcile_tests {
             msg.contains("Paused on conflicts") && msg.contains("abort rebase"),
             "expected the calm handoff, got: {msg}"
         );
+        // M-08 Defect 1: the conflict count must be REAL, not "0 file(s)". The
+        // conflict is written by the git subprocess, so the count is only right
+        // if the index is reloaded from disk before counting.
+        assert!(
+            msg.contains("in 1 file(s)"),
+            "expected the real conflicted-file count (1), got: {msg}"
+        );
 
         // In-progress rebase.
         assert!(
@@ -4307,14 +4459,27 @@ mod phase13_repair_tests {
             gate.type_to_confirm_shown.get(),
             "Discard must require a TypeToConfirm before Reset::Hard is built"
         );
+        // Discard resolves to a hard reset TO THE PARENT — not a target-less
+        // reset-to-HEAD, which was the M-16 phantom no-op (commit survived).
+        let parent = repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .parent(0)
+            .unwrap()
+            .id()
+            .to_string();
         assert!(
             matches!(
                 steps.as_slice(),
                 [PipelineStep::Reset {
-                    mode: ResetMode::Hard
-                }]
+                    mode: ResetMode::Hard,
+                    to_oid: Some(oid),
+                }] if *oid == parent
             ),
-            "Discard resolves to a hard reset, got {:?}",
+            "Discard must hard-reset to the parent oid {}, got {:?}",
+            parent,
             steps
         );
     }
@@ -4332,7 +4497,8 @@ mod phase13_repair_tests {
                 !steps.iter().any(|s| matches!(
                     s,
                     PipelineStep::Reset {
-                        mode: ResetMode::Hard
+                        mode: ResetMode::Hard,
+                        ..
                     }
                 )),
                 "choice {} ({}) must not hard-reset: {:?}",
@@ -4342,10 +4508,13 @@ mod phase13_repair_tests {
             );
             match (idx, steps.as_slice()) {
                 (0, [PipelineStep::Undo { .. }]) => {}
+                // keep-in-files: mixed reset TO THE PARENT (Some oid), so the
+                // commit is actually undone rather than reset-to-HEAD no-op'd.
                 (
                     1,
                     [PipelineStep::Reset {
                         mode: ResetMode::Mixed,
+                        to_oid: Some(_),
                     }],
                 ) => {}
                 (2, [PipelineStep::Revert { .. }]) => {}
@@ -4385,11 +4554,17 @@ mod phase13_repair_tests {
         let err = build_undo_intent(&repo, "undo", &gate)
             .expect_err("--yes must refuse the undo ChoiceGate");
         let msg = err.to_string();
+        // Must point the user at interactive mode...
         assert!(
-            msg.contains("strategy")
-                || msg.contains("reconciliation")
-                || msg.contains("interactively"),
-            "refusal should name the reason, got: {}",
+            msg.contains("interactively"),
+            "refusal should point at interactive mode, got: {}",
+            msg
+        );
+        // ...and must NOT misdescribe an undo as a rebase-vs-merge reconcile
+        // (M-17 Defect 2). The refusal now echoes the actual gate question.
+        assert!(
+            !msg.contains("rebase vs merge") && !msg.contains("reconciliation strategy"),
+            "undo refusal must not cite a reconciliation strategy, got: {}",
             msg
         );
     }
@@ -4792,6 +4967,80 @@ mod phase13_repair_tests {
             std::fs::read(dir.path().join("f.txt")).unwrap(),
             f_before,
             "working tree must be byte-for-byte untouched"
+        );
+    }
+
+    // -- M-13: branch-here rescue lands on a real branch and signals Resume, so
+    // the caller re-dispatches the original intent (e.g. "commit this") instead
+    // of dropping it. Before the fix the rescue returned unconditionally and the
+    // user's commit was silently never made.
+    #[tokio::test]
+    async fn detached_rescue_branch_here_signals_resume_on_real_branch() {
+        let (_repo, dir) = repo_with_commits(2);
+        // Detach HEAD at the current tip.
+        let head = Repository::open(dir.path())
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap()
+            .to_string();
+        git(dir.path(), &["checkout", &head]);
+        let mut repo = Repository::open(dir.path()).unwrap();
+        assert!(
+            repo.head_detached().unwrap(),
+            "setup: HEAD must be detached"
+        );
+
+        // Choice 0 = "Create a branch HERE"; ScriptedGate answers EditableText
+        // with the default "rescue-work".
+        let gate = ScriptedGate::new(0);
+        let outcome = handle_detached_head_rescue(&mut repo, &gate)
+            .await
+            .expect("rescue should succeed");
+
+        // It must tell the caller to RESUME the original intent...
+        assert!(
+            matches!(outcome, RescueOutcome::Resume),
+            "branch-here must signal Resume so the original commit is not dropped (M-13)"
+        );
+        // ...and we must now be on a real branch, not detached.
+        let repo_after = Repository::open(dir.path()).unwrap();
+        assert!(
+            !repo_after.head_detached().unwrap(),
+            "after branch-here the repo must be on a real branch"
+        );
+        assert_eq!(
+            repo_after.head().unwrap().shorthand(),
+            Some("rescue-work"),
+            "HEAD should be on the newly created rescue branch"
+        );
+    }
+
+    // Companion: switching AWAY (choice 1) from a clean detached HEAD ends the
+    // run (Done) — there is no original intent to resume at the old location.
+    #[tokio::test]
+    async fn detached_rescue_switch_away_signals_done() {
+        let (_repo, dir) = repo_with_commits(1);
+        let head = Repository::open(dir.path())
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap()
+            .to_string();
+        git(dir.path(), &["checkout", &head]);
+        let mut repo = Repository::open(dir.path()).unwrap();
+
+        // Choice 1 = "Switch back". No stranded commits (HEAD == a branch tip),
+        // so the S21 guard allows it.
+        let gate = ScriptedGate::new(1);
+        let outcome = handle_detached_head_rescue(&mut repo, &gate)
+            .await
+            .expect("switch-away should succeed");
+        assert!(
+            matches!(outcome, RescueOutcome::Done),
+            "switching away must signal Done (nothing to resume)"
         );
     }
 }

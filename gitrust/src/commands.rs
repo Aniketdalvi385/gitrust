@@ -299,8 +299,14 @@ pub enum PipelineStep {
     },
     Stash,
     StashPop,
+    /// Reset HEAD to `to_oid` — the *parent* (`HEAD~1`) to DROP a commit
+    /// (undo→discard / undo→keep-in-files), or `None` to reset to HEAD itself,
+    /// which discards an uncommitted working-tree delta while keeping the commit
+    /// (cleanup→tracked). The target is load-bearing: a target-less reset always
+    /// peeled HEAD and so silently no-op'd every commit-drop (M-16/M-19).
     Reset {
         mode: ResetMode,
+        to_oid: Option<String>,
     },
     Log {
         count: u8,

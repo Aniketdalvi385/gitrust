@@ -89,7 +89,11 @@ pub fn explain(op: &ScopedWriteOp) -> &'static Explanation {
             what: Msg("Moves HEAD to the parent commit AND throws away every change in the working tree and index."),
             risks: Msg("Any uncommitted work — staged or unstaged — is gone. The commit itself is also dropped from the branch."),
             recovery: Some(Msg("`git reflog` keeps a record of the old HEAD for ~90 days; you can recover the commit if you remember the SHA.")),
-            safety: Some(Msg("This op requires you to type the branch name to confirm.")),
+            // Token-neutral: the gate's own "Type 'X' to confirm" line names the
+            // exact value to type (a commit oid for undo→discard, the branch name
+            // for a plain reset). The old copy hardcoded "branch name" and was
+            // wrong when the gate asked for the commit oid (M-16 Defect 3).
+            safety: Some(Msg("This op requires you to type the highlighted value exactly to confirm.")),
         },
         W::Pull { .. } => &Explanation {
             what: Msg("Fetches changes from the remote and merges them into your current branch."),

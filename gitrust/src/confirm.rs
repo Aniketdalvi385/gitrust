@@ -365,13 +365,17 @@ impl ConfirmationGate for AutoConfirmGate {
                     Ok(GateResponse::Chose(0))
                 }
             }
-            GateType::ChoiceGate { .. } => {
-                // --yes must NEVER silently pick a reconciliation strategy — an
-                // auto-chosen rebase-vs-merge could rewrite history the user
-                // meant to preserve. Refuse, mirroring TypeToConfirm.
+            GateType::ChoiceGate { question, .. } => {
+                // --yes must NEVER silently pick from a ChoiceGate — an auto-
+                // chosen undo mode, cleanup scope, or reconcile strategy could
+                // discard or rewrite work the user meant to keep. Refuse,
+                // mirroring TypeToConfirm. Echo the actual question so the
+                // message fits whichever decision raised the gate (M-17: the old
+                // copy hardcoded "rebase vs merge" even for an undo).
                 Err(anyhow::anyhow!(
-                    "--yes flag cannot choose a reconciliation strategy (rebase vs merge). \
-                     Run interactively and pick a strategy manually."
+                    "--yes flag cannot answer this choice for you: \"{}\" \
+                     Run interactively and pick an option manually.",
+                    question
                 ))
             }
             GateType::RecoveryBrowser { .. } => {
@@ -575,9 +579,12 @@ mod tests {
         });
         assert!(result.is_err(), "--yes must refuse a ChoiceGate");
         let msg = result.unwrap_err().to_string();
+        // The refusal echoes the actual question and points at interactive mode,
+        // so it reads correctly for ANY ChoiceGate (reconcile, undo, cleanup) —
+        // not just the reconcile case (M-17 Defect 2).
         assert!(
-            msg.contains("strategy") || msg.contains("reconciliation"),
-            "refusal should name the reason, got: {msg}"
+            msg.contains("Rebase or merge?") && msg.contains("interactively"),
+            "refusal should echo the question and point at interactive mode, got: {msg}"
         );
     }
 
