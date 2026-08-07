@@ -1703,6 +1703,18 @@ async fn handle_nothing_to_push(
     fut.await
 }
 
+/// Whether the recovery picker actually resolved the failed step.
+///
+/// Informational rows (Show/Verify/Wait) and Cancel do NOT resolve it — the
+/// original failure still stands, so the caller must propagate the error and
+/// exit nonzero (M-21). Only a recovery *pipeline* that runs to completion
+/// resolves the failure into a success.
+#[derive(Debug, PartialEq, Eq)]
+enum RecoveryResult {
+    Resolved,
+    NotResolved,
+}
+
 /// Render a class-aware recovery picker after a failed step. Each option is
 /// one keystroke. Each option *does* the thing — no chained command recipes.
 async fn handle_classified_recovery(
@@ -1711,7 +1723,7 @@ async fn handle_classified_recovery(
     failed_verb: &str,
     config: &Config,
     gate: &dyn ConfirmationGate,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<RecoveryResult> {
     use crate::git_ops::FailureClass as FC;
 
     let dim = |s: &str| -> String {
@@ -1837,7 +1849,7 @@ async fn handle_classified_recovery(
                 info: None,
             },
         ],
-        FC::NonFastForward => return Ok(()), // Handled by merge-preview path
+        FC::NonFastForward => return Ok(RecoveryResult::NotResolved), // Handled by merge-preview path
         FC::Unknown(_) => vec![RecoveryOption {
             label: "Cancel".to_string(),
             pipeline: None,
@@ -1853,10 +1865,15 @@ async fn handle_classified_recovery(
 
     let chosen_idx = match resp {
         crate::commands::GateResponse::Chose(i) => i,
-        _ => return Ok(()),
+        // Cancelled / non-choice response — the failure stands.
+        _ => return Ok(RecoveryResult::NotResolved),
     };
     if chosen_idx >= options.len() {
-        return Ok(());
+        return Ok(RecoveryResult::NotResolved);
+    }
+    // The trailing "Cancel" row on every picker: chosen but resolves nothing.
+    if options[chosen_idx].label == "Cancel" {
+        return Ok(RecoveryResult::NotResolved);
     }
 
     // Informational handler (no pipeline).
@@ -1893,18 +1910,23 @@ async fn handle_classified_recovery(
             }
             _ => {}
         }
-        return Ok(());
+        // Informational rows print context but do NOT fix the failed step, so
+        // the original error must still propagate (M-21: "Show" the hook output
+        // must not turn a blocked commit into exit 0).
+        return Ok(RecoveryResult::NotResolved);
     }
 
-    // Run the chained pipeline end-to-end.
+    // Run the chained pipeline end-to-end. Only a pipeline that runs to
+    // completion resolves the failure into a success.
     if let Some(steps) = options[chosen_idx].pipeline.clone() {
         // Box::pin to break async recursion (this fn → execute_pipeline →
         // handle_classified_recovery).
         let fut = Box::pin(execute_pipeline(repo, steps, config, gate));
         fut.await?;
+        return Ok(RecoveryResult::Resolved);
     }
 
-    Ok(())
+    Ok(RecoveryResult::NotResolved)
 }
 
 // =============================================================================
@@ -2336,10 +2358,18 @@ async fn execute_pipeline(
     if let Some((class, _raw, verb)) = classified.clone() {
         // NonFastForward keeps using the merge-preview hand-off below.
         if !matches!(class, crate::git_ops::FailureClass::NonFastForward) {
-            if let Err(e) = handle_classified_recovery(repo, &class, &verb, config, gate).await {
-                eprintln!("  {}", e);
+            match handle_classified_recovery(repo, &class, &verb, config, gate).await {
+                // A recovery pipeline ran to completion — the failure is truly
+                // resolved, so a clean exit is honest.
+                Ok(RecoveryResult::Resolved) => return Ok(()),
+                // Show/Cancel/Wait/Verify only informed the user; the original
+                // step is still failed, so fall through to `last_error` and exit
+                // nonzero (M-21).
+                Ok(RecoveryResult::NotResolved) => {}
+                // The recovery attempt itself errored — surface it, then still
+                // fall through to propagate the original failure below.
+                Err(e) => eprintln!("  {}", e),
             }
-            return Ok(());
         }
     }
 
@@ -2894,6 +2924,19 @@ fn build_cleanup_intent(
     Ok(steps)
 }
 
+/// Any uncommitted work in the tree — staged, worktree-modified, or untracked.
+/// Used by the branch-here rescue to decide whether to stage before resuming
+/// the original intent (M-13).
+fn working_tree_has_changes(repo: &git2::Repository) -> bool {
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_ignored(false);
+    repo.statuses(Some(&mut opts))
+        .map(|st| !st.is_empty())
+        .unwrap_or(false)
+}
+
 /// (tracked-modified count, untracked count) for the cleanup gate.
 fn cleanup_counts(repo: &git2::Repository) -> (usize, usize) {
     let mut opts = git2::StatusOptions::new();
@@ -3237,22 +3280,31 @@ async fn handle_detached_head_rescue(
                 }
             };
             let name = name.trim().to_string();
-            if let Err(r) = validate_branch_name(&name) {
+            // Resolve to a valid branch name (sanitize if the user's is invalid).
+            let final_name = if let Err(r) = validate_branch_name(&name) {
                 let suggestion = sanitize_branch_name(&name);
                 println!(
                     "  '{}' isn't a valid branch name ({}). Using '{}'.",
                     name, r, suggestion
                 );
-                let git_ops = Git2Operations;
-                git_ops.create_branch(repo, &suggestion)?;
-                git_ops.checkout(repo, &suggestion)?;
-                println!("  ✓ Created and switched to branch '{}'", suggestion);
+                suggestion
             } else {
-                let git_ops = Git2Operations;
-                git_ops.create_branch(repo, &name)?;
-                git_ops.checkout(repo, &name)?;
-                println!("  ✓ Created and switched to branch '{}'", name);
+                name
+            };
+            let git_ops = Git2Operations;
+            git_ops.create_branch(repo, &final_name)?;
+            git_ops.checkout(repo, &final_name)?;
+            println!("  ✓ Created and switched to branch '{}'", final_name);
+
+            // "Create a branch HERE to save work" means save the UNCOMMITTED work
+            // too. Stage the current changes now so the resumed intent (typically
+            // "commit this") actually lands the edit instead of blocking on
+            // "Nothing staged to commit" (M-13). No-op on a clean tree.
+            if working_tree_has_changes(repo) {
+                git_ops.add_all(repo)?;
+                println!("  ✓ Staged your current changes on '{}'", final_name);
             }
+
             // Now on a real branch — resume the user's original intent so a
             // "commit this" actually commits here (M-13).
             Ok(RescueOutcome::Resume)
@@ -4733,6 +4785,73 @@ mod phase13_repair_tests {
         );
     }
 
+    // -- M-21: a hook-rejected commit whose recovery picker only *informs*
+    // ("Show the hook output") must still exit NONZERO. The picker printing the
+    // failure is not the same as fixing it — before the fix the informational
+    // row swallowed the failure into Ok(()) and a scripting caller lost the
+    // blocked-commit's nonzero status.
+    #[tokio::test]
+    async fn hook_rejected_commit_show_recovery_still_errors() {
+        use std::os::unix::fs::PermissionsExt;
+        let (_r, dir) = repo_with_commits(1);
+        let hooks = dir.path().join(".git/hooks");
+        std::fs::create_dir_all(&hooks).unwrap();
+        let hook = hooks.join("pre-commit");
+        std::fs::write(&hook, "#!/bin/sh\necho LINT FAILED >&2\nexit 1\n").unwrap();
+        std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Stage a real change so the commit is non-empty and reaches the hook.
+        std::fs::write(dir.path().join("f0.txt"), "changed\n").unwrap();
+        git(dir.path(), &["add", "."]);
+
+        let mut repo = Repository::open(dir.path()).unwrap();
+        let head_before = repo.head().unwrap().target().unwrap();
+
+        // choice 0 = "Show" (the informational recovery row), like the M-21 run.
+        let gate = ScriptedGate::new(0);
+        let cfg = Config::default(); // hooks = "auto" → commit shells out, hook runs
+        let steps = vec![PipelineStep::Commit {
+            message: "will be blocked".to_string(),
+        }];
+        let result = execute_pipeline(&mut repo, steps, &cfg, &gate).await;
+
+        assert!(
+            result.is_err(),
+            "a hook-blocked commit must return Err even after the 'Show' recovery row — \
+             informing the user is not resolving the failure (M-21)"
+        );
+        assert_eq!(
+            repo.head().unwrap().target().unwrap(),
+            head_before,
+            "the blocked commit must not have moved HEAD"
+        );
+    }
+
+    // -- M-21 companion: "Cancel" on the recovery picker also reports
+    // NotResolved (so the failure still propagates) — the fix is not specific to
+    // the "Show" row.
+    #[tokio::test]
+    async fn hook_rejected_commit_cancel_recovery_reports_not_resolved() {
+        let gate = ScriptedGate::new(1); // index 1 = "Cancel" on the HookRejected picker
+        let outcome = handle_classified_recovery(
+            &mut repo_with_commits(1).0,
+            &crate::git_ops::FailureClass::HookRejected {
+                hook: Some("pre-commit".to_string()),
+                output: "LINT FAILED".to_string(),
+            },
+            "commit",
+            &Config::default(),
+            &gate,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            outcome,
+            RecoveryResult::NotResolved,
+            "Cancel must not mark the failure resolved"
+        );
+    }
+
     // -- #5: amend on a PUSHED commit escalates (TypeToConfirm) and appends a
     // force-push pinned to the fetched tracking oid (--force-with-lease=<b>:<oid>).
     #[tokio::test]
@@ -5014,6 +5133,66 @@ mod phase13_repair_tests {
             repo_after.head().unwrap().shorthand(),
             Some("rescue-work"),
             "HEAD should be on the newly created rescue branch"
+        );
+    }
+
+    // -- M-13 (the actual defect): branch-here rescue on a DIRTY detached HEAD
+    // must STAGE the uncommitted edit, so the resumed "commit this" has something
+    // to commit. Before the fix the rescue branched + switched but left the edit
+    // unstaged, and the resumed commit blocked on "Nothing staged to commit" —
+    // the user's work never landed.
+    #[tokio::test]
+    async fn detached_rescue_branch_here_stages_dirty_edit_for_resume() {
+        let (_repo, dir) = repo_with_commits(2);
+        // Detach at the tip, then make an uncommitted edit to a tracked file.
+        let head = Repository::open(dir.path())
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap()
+            .to_string();
+        git(dir.path(), &["checkout", &head]);
+        std::fs::write(dir.path().join("f0.txt"), "dirty edit\n").unwrap();
+
+        let mut repo = Repository::open(dir.path()).unwrap();
+        assert!(
+            repo.head_detached().unwrap(),
+            "setup: HEAD must be detached"
+        );
+
+        let gate = ScriptedGate::new(0); // "Create a branch HERE", accept default name
+        let outcome = handle_detached_head_rescue(&mut repo, &gate)
+            .await
+            .expect("rescue should succeed");
+        assert!(
+            matches!(outcome, RescueOutcome::Resume),
+            "branch-here must signal Resume"
+        );
+
+        // The edit must now be STAGED (index differs from HEAD), and there must be
+        // no remaining unstaged worktree modification — so a resumed plain commit
+        // (staged-only) actually captures it.
+        let repo_after = Repository::open(dir.path()).unwrap();
+        let mut opts = git2::StatusOptions::new();
+        opts.include_untracked(true);
+        let statuses = repo_after.statuses(Some(&mut opts)).unwrap();
+        let f0 = statuses
+            .iter()
+            .find(|e| e.path() == Some("f0.txt"))
+            .expect("f0.txt must appear in status");
+        assert!(
+            f0.status().intersects(
+                git2::Status::INDEX_MODIFIED
+                    | git2::Status::INDEX_NEW
+                    | git2::Status::INDEX_TYPECHANGE
+            ),
+            "the dirty edit must be STAGED after branch-here (M-13), got {:?}",
+            f0.status()
+        );
+        assert!(
+            !f0.status().intersects(git2::Status::WT_MODIFIED),
+            "nothing should be left unstaged after the rescue stages the work"
         );
     }
 
