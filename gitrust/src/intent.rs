@@ -79,6 +79,11 @@ struct RawIntent {
 /// Returns `Some` only on EXACT equality after trim + lowercase — never substring.
 /// "status of branch" will NOT match "status".
 pub fn try_canonical(query: &str) -> Option<IntentType> {
+    // Amend-with-new-message needs the RAW query (message case matters), so it is
+    // captured before the lowercase whitelist match (M-20).
+    if let Some(intent) = capture_amend_message(query) {
+        return Some(intent);
+    }
     let q = query.trim().to_lowercase();
     let intent = match q.as_str() {
         "status" | "st" => IntentType::ReadOnly(ReadOnlyOp::Status),
@@ -269,7 +274,145 @@ fn try_canonical_parameterized(q: &str) -> Option<IntentType> {
     if let Some(n) = capture_squash_count(q) {
         return Some(IntentType::ScopedWrite(ScopedWriteOp::SquashLastN { n }));
     }
+    if let Some(intent) = capture_sync(q) {
+        return Some(intent);
+    }
+    if let Some(hint) = capture_scoped_push(q) {
+        return Some(IntentType::FeaturePipeline(
+            FeaturePipelineOp::AddCommitPush { feature_hint: hint },
+        ));
+    }
+    // Note: amend-with-new-message uses the RAW (case-preserving) query, so it is
+    // handled in try_canonical against `query`, not here (q is lowercased).
     None
+}
+
+/// Capture "fix/change/update the [last] commit message to '<new message>'" and
+/// its variants, extracting the quoted (or trailing) new message (M-20). Operates
+/// on the RAW query so the message keeps its original case. Routes to a
+/// message-only Amend; GiTrust's amend flow then handles the pushed-commit /
+/// force-with-lease escalation. Returns None when no new message is present
+/// (bare "amend" is already a canonical phrase).
+fn capture_amend_message(raw: &str) -> Option<IntentType> {
+    let lower = raw.trim().to_lowercase();
+    // Must be a "change the commit message" phrasing.
+    let is_msg_change = (lower.starts_with("fix ")
+        || lower.starts_with("change ")
+        || lower.starts_with("update ")
+        || lower.starts_with("reword ")
+        || lower.starts_with("rename ")
+        || lower.starts_with("edit "))
+        && lower.contains("commit message")
+        && (lower.contains(" to ") || lower.contains(":"));
+    if !is_msg_change {
+        return None;
+    }
+    // Prefer a quoted message; fall back to text after " to " / " to:" / ":".
+    let msg = extract_quoted(raw).or_else(|| {
+        // Find the delimiter that introduces the new message, case-preserving.
+        for delim in [" to: ", " to ", ": ", ":"] {
+            if let Some(i) = raw.to_lowercase().rfind(delim) {
+                let after = raw[i + delim.len()..]
+                    .trim()
+                    .trim_matches(|c| c == '\'' || c == '"')
+                    .to_string();
+                if !after.is_empty() {
+                    return Some(after);
+                }
+            }
+        }
+        None
+    })?;
+    if msg.is_empty() {
+        return None;
+    }
+    Some(IntentType::ScopedWrite(ScopedWriteOp::Amend {
+        message: Some(msg),
+        include_staged: false,
+    }))
+}
+
+/// Extract the first single- or double-quoted substring from `s`, if any.
+fn extract_quoted(s: &str) -> Option<String> {
+    for quote in ['\'', '"'] {
+        if let Some(start) = s.find(quote) {
+            if let Some(rel_end) = s[start + 1..].find(quote) {
+                let inner = &s[start + 1..start + 1 + rel_end];
+                if !inner.is_empty() {
+                    return Some(inner.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Deterministically capture "push [the] <TOPIC> changes/files/…" and route to
+/// the scoped feature pipeline with <TOPIC> as the resolver hint (M-04). The 3B
+/// model reliably collapses this to a plain push regardless of prompt wording, so
+/// the topic scope has to be extracted here. Only fires on the "<TOPIC> <noun>"
+/// shape where <noun> marks a filter (changes/files/work/fixes/edits/stuff);
+/// possessive "my …" and bare "push" fall through to the LLM/plain push.
+fn capture_scoped_push(q: &str) -> Option<String> {
+    let rest = q.strip_prefix("push ")?;
+    // A possessive ("push my …") is the user's own work, not a topic filter.
+    if rest.starts_with("my ") {
+        return None;
+    }
+    let rest = rest.strip_prefix("the ").unwrap_or(rest);
+    // Split into words; need "<topic> <filter-noun>" (exactly the scoping shape).
+    let words: Vec<&str> = rest.split_whitespace().collect();
+    if words.len() != 2 {
+        return None;
+    }
+    let topic = words[0];
+    let noun = words[1];
+    let filter_nouns = [
+        "changes", "change", "files", "file", "work", "fixes", "fix", "edits", "edit", "stuff",
+        "feature", "updates", "code",
+    ];
+    // The topic must itself be a plain word (not a filter noun like "my"/"all").
+    let topic_is_word = topic
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && !filter_nouns.contains(&topic)
+        && !matches!(
+            topic,
+            "all" | "everything" | "some" | "these" | "those" | "any"
+        );
+    if filter_nouns.contains(&noun) && topic_is_word {
+        Some(topic.to_string())
+    } else {
+        None
+    }
+}
+
+/// Deterministically route "sync with <branch>" / "sync my branch with main" and
+/// close variants to the Sync feature-pipeline (M-10). The small model kept
+/// reading these as a read-only *status* — a dangerous misclassification for what
+/// is actually a rebase/merge write. The Sync flow itself presents a rebase-vs-
+/// merge ChoiceGate; the strategy here is just the default the gate opens with
+/// (explicit "rebase" in the phrase preselects Rebase).
+fn capture_sync(q: &str) -> Option<IntentType> {
+    // Require an explicit target ("... with/onto/against <branch>"). A bare
+    // "sync" is ambiguous — leave it to the LLM/clarify. "sync check" / "check
+    // sync" are fetch-status canonicals already matched before we get here.
+    let is_sync = q.starts_with("sync ")
+        && (q.contains(" with ") || q.contains(" onto ") || q.contains(" against "));
+    // Also accept "update my branch with main" / "bring in main".
+    let is_update_with = (q.starts_with("update ") || q.starts_with("bring in "))
+        && (q.contains(" with ") || q.contains(" from "));
+    if !(is_sync || is_update_with) {
+        return None;
+    }
+    let strategy = if q.contains("rebase") {
+        SyncStrategy::Rebase
+    } else {
+        SyncStrategy::Merge
+    };
+    Some(IntentType::FeaturePipeline(FeaturePipelineOp::Sync {
+        strategy,
+    }))
 }
 
 /// Deterministically capture `squash [the] last N [commits]` and its common
@@ -1351,6 +1494,117 @@ mod tests {
         assert!(try_canonical("squash last 1").is_none());
         // A number in a non-squash phrase is not grabbed.
         assert!(try_canonical("show me the last 3 commits").is_none());
+    }
+
+    #[test]
+    fn test_canonical_parameterized_sync() {
+        use crate::commands::{FeaturePipelineOp, SyncStrategy};
+        // M-10 regression: "sync with <branch>" routes to the Sync pipeline
+        // (a write that offers rebase/merge), NOT a read-only status.
+        for q in &[
+            "sync with main",
+            "sync my branch with main",
+            "sync with origin/main",
+            "update my branch with main",
+        ] {
+            assert!(
+                matches!(
+                    try_canonical(q),
+                    Some(IntentType::FeaturePipeline(FeaturePipelineOp::Sync { .. }))
+                ),
+                "sync capture failed for {:?}",
+                q
+            );
+        }
+        // Explicit "rebase" preselects the Rebase strategy.
+        assert!(matches!(
+            try_canonical("sync with main using rebase"),
+            Some(IntentType::FeaturePipeline(FeaturePipelineOp::Sync {
+                strategy: SyncStrategy::Rebase
+            }))
+        ));
+        // Fetch-status canonicals must NOT be captured as sync.
+        assert!(matches!(
+            try_canonical("sync check"),
+            Some(IntentType::ReadOnly(ReadOnlyOp::FetchStatus { .. }))
+        ));
+        // A bare "sync" (no target) defers to the LLM.
+        assert!(try_canonical("sync").is_none());
+    }
+
+    #[test]
+    fn test_canonical_parameterized_scoped_push() {
+        use crate::commands::FeaturePipelineOp;
+        // M-04 regression: "push the <topic> changes" scopes to the topic via the
+        // feature pipeline (the 3B model collapses this to a plain push).
+        for (q, want) in &[
+            ("push the login changes", "login"),
+            ("push login changes", "login"),
+            ("push the auth fixes", "auth"),
+            ("push the export work", "export"),
+        ] {
+            match try_canonical(q) {
+                Some(IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush {
+                    feature_hint,
+                })) => assert_eq!(&feature_hint, want, "wrong topic for {:?}", q),
+                other => panic!("expected scoped push for {:?}, got {:?}", q, other),
+            }
+        }
+        // Possessive / bare / all-files forms must NOT be captured (plain push).
+        assert!(try_canonical("push my work").is_none());
+        assert!(try_canonical("push my login work").is_none());
+        assert!(try_canonical("push everything").is_none());
+        assert!(try_canonical("push all changes").is_none());
+        assert!(try_canonical("push the code").is_none()); // 1 word after 'the'
+    }
+
+    #[test]
+    fn test_canonical_amend_message_capture() {
+        // M-20 regression: "fix the last commit message to 'X'" routes to a
+        // message-only Amend with X extracted (case preserved).
+        let cases = [
+            (
+                "fix the last commit message to 'typo message fixed'",
+                "typo message fixed",
+            ),
+            (
+                "change the commit message to \"feat: add auth\"",
+                "feat: add auth",
+            ),
+            ("reword the last commit message to 'WIP'", "WIP"),
+            (
+                "update the commit message to: refactor login",
+                "refactor login",
+            ),
+        ];
+        for (q, want) in &cases {
+            match try_canonical(q) {
+                Some(IntentType::ScopedWrite(ScopedWriteOp::Amend {
+                    message: Some(m),
+                    include_staged,
+                })) => {
+                    assert_eq!(&m, want, "wrong amend message for {:?}", q);
+                    assert!(
+                        !include_staged,
+                        "message-only amend must not fold staged changes"
+                    );
+                }
+                other => panic!("expected amend for {:?}, got {:?}", q, other),
+            }
+        }
+        // Bare "amend" (no new message) stays the canonical amend (message=None).
+        assert!(matches!(
+            try_canonical("amend"),
+            Some(IntentType::ScopedWrite(ScopedWriteOp::Amend {
+                message: None,
+                ..
+            }))
+        ));
+        // A non-message "fix" phrase is not hijacked.
+        assert!(!matches!(
+            try_canonical("fix the login bug"),
+            Some(IntentType::ScopedWrite(ScopedWriteOp::Amend { .. }))
+        ));
     }
 
     #[test]
