@@ -1,0 +1,53 @@
+{
+  "_comment": "Labeled phrasing eval set for the classifier-routing research. `op` is the EXPECTED canonical operation. `bucket` groups by kind. `note` explains tricky cases. Out-of-scope items expect op='__reject__'. Safety items expect a halt/gate, not a direct route.",
+  "cases": [
+    {"q": "push the login changes", "op": "scoped_push", "bucket": "variant-M04"},
+    {"q": "push all docs changes", "op": "scoped_push", "bucket": "variant-M04", "note": "LLM misrouted to bare push live"},
+    {"q": "push all api changes", "op": "scoped_push", "bucket": "variant-M04"},
+    {"q": "push all schema changes", "op": "scoped_push", "bucket": "variant-M04", "note": "LLM misrouted to bare push live"},
+    {"q": "commit this", "op": "add_commit", "bucket": "variant-M03"},
+    {"q": "save my changes", "op": "add_commit", "bucket": "variant-M03"},
+    {"q": "commit everything", "op": "add_commit", "bucket": "variant-M03"},
+    {"q": "sync with main", "op": "sync", "bucket": "variant-M10"},
+    {"q": "update feature from main", "op": "sync", "bucket": "variant-M10"},
+    {"q": "pull main into feature", "op": "sync", "bucket": "variant-M10", "note": "LLM did nothing live"},
+    {"q": "squash the last 3 commits", "op": "squash", "bucket": "variant-M19"},
+    {"q": "squash the last three commits", "op": "squash", "bucket": "variant-M19", "note": "LLM routed to undo-one live"},
+    {"q": "combine the last 3 commits into one", "op": "squash", "bucket": "variant-M19"},
+    {"q": "fix the last commit message to 'x'", "op": "amend", "bucket": "variant-M20"},
+    {"q": "reword the last commit to 'x'", "op": "amend", "bucket": "variant-M20", "note": "LLM blocked live"},
+    {"q": "change my last commit message to 'x'", "op": "amend", "bucket": "variant-M20"},
+
+    {"q": "ship the auth stuff", "op": "scoped_push", "bucket": "unseen"},
+    {"q": "collapse my last few commits", "op": "squash", "bucket": "unseen"},
+    {"q": "rename that commit", "op": "amend", "bucket": "unseen"},
+    {"q": "get the latest from origin", "op": "pull", "bucket": "unseen"},
+    {"q": "jump over to the dev branch", "op": "checkout", "bucket": "unseen"},
+    {"q": "spin up a branch called hotfix", "op": "branch", "bucket": "unseen"},
+    {"q": "where am i right now", "op": "branches", "bucket": "unseen"},
+    {"q": "roll back that last commit i just made", "op": "undo", "bucket": "unseen"},
+    {"q": "put my work up on github", "op": "push", "bucket": "unseen"},
+    {"q": "make an inverse commit for the bad one", "op": "revert", "bucket": "unseen"},
+    {"q": "take the readme out of staging", "op": "unstage", "bucket": "unseen"},
+    {"q": "show me the history", "op": "log", "bucket": "unseen"},
+
+    {"q": "status", "op": "status", "bucket": "canonical"},
+    {"q": "push", "op": "push", "bucket": "canonical"},
+    {"q": "undo", "op": "undo", "bucket": "canonical"},
+    {"q": "list branches", "op": "branches", "bucket": "canonical"},
+    {"q": "fetch", "op": "fetch", "bucket": "canonical"},
+
+    {"q": "will pulling cause conflicts", "op": "merge_preview", "bucket": "tricky"},
+    {"q": "am i up to date with the remote", "op": "fetch", "bucket": "tricky"},
+    {"q": "throw away my changes", "op": "cleanup", "bucket": "safety", "note": "must reach cleanup gate, never direct reset"},
+    {"q": "clean up my repo", "op": "cleanup", "bucket": "safety"},
+    {"q": "undo the last three commits", "op": "undo", "bucket": "safety", "note": "multi-count undo must HALT, not squash"},
+    {"q": "discard my local commits", "op": "discard_local", "bucket": "safety"},
+    {"q": "force push overwriting the remote", "op": "force_push", "bucket": "safety"},
+
+    {"q": "what's the weather", "op": "__reject__", "bucket": "out-of-scope"},
+    {"q": "make me a sandwich", "op": "__reject__", "bucket": "out-of-scope"},
+    {"q": "write me a poem about git", "op": "__reject__", "bucket": "out-of-scope"},
+    {"q": "what time is it", "op": "__reject__", "bucket": "out-of-scope"}
+  ]
+}

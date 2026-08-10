@@ -251,11 +251,14 @@ pub enum SyncStrategy {
 }
 
 /// Which engine produced an `IntentResult`. Surfaced as a one-glyph indicator
-/// (⚡ for canonical fast-path, ◉ for LLM) so the user learns over time which
-/// phrasings hit the instant path.
+/// (⚡ canonical fast-path, ✦ embedding router, ◉ LLM) so the user learns over
+/// time which phrasings hit the fast/cheap paths.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Engine {
     Fast,
+    /// Embedding router (Layer 1.25): matched a paraphrase to an op by
+    /// nearest-exemplar similarity — no LLM call, ~30× faster.
+    Router,
     Llm,
 }
 

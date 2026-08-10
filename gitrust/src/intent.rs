@@ -287,6 +287,26 @@ fn try_canonical_parameterized(q: &str) -> Option<IntentType> {
     None
 }
 
+/// For the embedding router: given an op name the router picked by similarity
+/// and the RAW query, try to build the argument-bearing `IntentType` using the
+/// SAME deterministic captures the fast-path uses. Returns `None` when the
+/// argument can't be extracted — the router then abstains to the LLM rather than
+/// emit an op with a missing/guessed argument (M-04/M-19/M-20 safety). This is
+/// the seam that lets embeddings fix ROUTING while the captures own ARGUMENTS.
+pub fn build_arg_op(op: &str, raw_query: &str) -> Option<IntentType> {
+    let q = raw_query.trim().to_lowercase();
+    match op {
+        "scoped_push" => capture_scoped_push(&q).map(|hint| {
+            IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush { feature_hint: hint })
+        }),
+        "squash" => capture_squash_count(&q)
+            .map(|n| IntentType::ScopedWrite(ScopedWriteOp::SquashLastN { n })),
+        // Amend message capture runs against the RAW query (case-preserving).
+        "amend" => capture_amend_message(raw_query),
+        _ => None,
+    }
+}
+
 /// Capture "fix/change/update the [last] commit message to '<new message>'" and
 /// its variants, extracting the quoted (or trailing) new message (M-20). Operates
 /// on the RAW query so the message keeps its original case. Routes to a
@@ -359,26 +379,36 @@ fn capture_scoped_push(q: &str) -> Option<String> {
     if rest.starts_with("my ") {
         return None;
     }
-    let rest = rest.strip_prefix("the ").unwrap_or(rest);
-    // Split into words; need "<topic> <filter-noun>" (exactly the scoping shape).
+    // Strip a leading determiner so both "push the login changes" and "push all
+    // docs changes" reduce to "<topic> <filter-noun>". "all"/"the" here are
+    // determiners, NOT the topic (the topic-is-word check below still rejects a
+    // bare determiner as the topic).
+    let rest = rest
+        .strip_prefix("the ")
+        .or_else(|| rest.strip_prefix("all the "))
+        .or_else(|| rest.strip_prefix("all "))
+        .unwrap_or(rest);
+    // Need "<topic> <filter-noun>" — the topic is the word immediately BEFORE a
+    // trailing filter noun. Extra leading words (adjectives) are ignored; we key
+    // off the last two tokens so "push all the new login changes" → topic=login.
     let words: Vec<&str> = rest.split_whitespace().collect();
-    if words.len() != 2 {
+    if words.len() < 2 {
         return None;
     }
-    let topic = words[0];
-    let noun = words[1];
+    let topic = words[words.len() - 2];
+    let noun = words[words.len() - 1];
     let filter_nouns = [
         "changes", "change", "files", "file", "work", "fixes", "fix", "edits", "edit", "stuff",
         "feature", "updates", "code",
     ];
-    // The topic must itself be a plain word (not a filter noun like "my"/"all").
+    // The topic must itself be a plain word (not a filter noun or a determiner).
     let topic_is_word = topic
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
         && !filter_nouns.contains(&topic)
         && !matches!(
             topic,
-            "all" | "everything" | "some" | "these" | "those" | "any"
+            "all" | "everything" | "some" | "these" | "those" | "any" | "the" | "my"
         );
     if filter_nouns.contains(&noun) && topic_is_word {
         Some(topic.to_string())
@@ -437,11 +467,14 @@ fn capture_squash_count(q: &str) -> Option<u32> {
     if !mentions_target {
         return None;
     }
-    // First integer token in the phrase is the count.
+    // The count may be a digit ("last 3") or a spelled-out word ("last three").
+    // Try a digit token first, then a number word — the M-19b variant
+    // ("squash the last three commits") failed live because only digits parsed.
     let n: u32 = q
         .split(|c: char| !c.is_ascii_digit())
         .find(|tok| !tok.is_empty())
-        .and_then(|tok| tok.parse().ok())?;
+        .and_then(|tok| tok.parse().ok())
+        .or_else(|| word_to_number(q))?;
     // A 0/1-commit squash is meaningless; require ≥ 2. (n==1 or n==0 → defer,
     // the LLM/clarifier can ask.)
     if n >= 2 {
@@ -449,6 +482,27 @@ fn capture_squash_count(q: &str) -> Option<u32> {
     } else {
         None
     }
+}
+
+/// Map a spelled-out small number word appearing in `q` to its value (2–10).
+/// Deliberately tiny — squashing more than ~10 commits at once is rare and can
+/// defer to the LLM. Returns the FIRST such word found.
+fn word_to_number(q: &str) -> Option<u32> {
+    const WORDS: &[(&str, u32)] = &[
+        ("two", 2),
+        ("three", 3),
+        ("four", 4),
+        ("five", 5),
+        ("six", 6),
+        ("seven", 7),
+        ("eight", 8),
+        ("nine", 9),
+        ("ten", 10),
+    ];
+    // Word-boundary match so "seventeen" doesn't match "seven" — check tokens.
+    q.split(|c: char| !c.is_ascii_alphabetic())
+        .filter(|t| !t.is_empty())
+        .find_map(|tok| WORDS.iter().find(|(w, _)| *w == tok).map(|(_, n)| *n))
 }
 
 /// Strip the first matching prefix from `q` and return the remaining argument
@@ -1189,6 +1243,55 @@ pub async fn call_ollama_text(
     call_ollama_post(&url, &body).await
 }
 
+/// Embed one or more strings via Ollama's `/api/embed` using the SAME model as
+/// classification (`config.model`) — no second model, no extra RAM (verified on
+/// the 8 GB target). Returns one vector per input, in order. Used by the
+/// embedding router (`router.rs`).
+pub async fn embed_texts(inputs: &[String], config: &Config) -> anyhow::Result<Vec<Vec<f32>>> {
+    if inputs.is_empty() {
+        return Ok(vec![]);
+    }
+    let url = format!("{}/api/embed", config.ollama_url.trim_end_matches('/'));
+    let body = serde_json::json!({
+        "model": config.model,
+        "input": inputs,
+    });
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .context("Failed to build HTTP client")?;
+    let resp = client
+        .post(&url)
+        .json(&body)
+        .send()
+        .await
+        .with_context(|| format!("Failed to reach Ollama /api/embed at {}", url))?;
+    if !resp.status().is_success() {
+        return Err(anyhow::anyhow!(
+            "Ollama /api/embed returned HTTP {}",
+            resp.status()
+        ));
+    }
+    let json: serde_json::Value = resp
+        .json()
+        .await
+        .context("Ollama /api/embed response was not valid JSON")?;
+    let arr = json["embeddings"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Ollama /api/embed response missing 'embeddings'"))?;
+    let mut out = Vec::with_capacity(arr.len());
+    for row in arr {
+        let v: Vec<f32> = row
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("embedding row was not an array"))?
+            .iter()
+            .filter_map(|x| x.as_f64().map(|f| f as f32))
+            .collect();
+        out.push(v);
+    }
+    Ok(out)
+}
+
 // =============================================================================
 // JSON repair
 // =============================================================================
@@ -1477,6 +1580,10 @@ mod tests {
             ("squash my last 2 commits", 2),
             ("combine my last 4 commits", 4),
             ("squash the last 5 commits into one", 5),
+            // Spelled-out counts (M-19b variant — "three" failed live).
+            ("squash the last three commits", 3),
+            ("squash last two", 2),
+            ("combine the last four commits into one", 4),
         ] {
             assert!(
                 matches!(
@@ -1542,6 +1649,12 @@ mod tests {
             ("push login changes", "login"),
             ("push the auth fixes", "auth"),
             ("push the export work", "export"),
+            // "all <topic> <noun>" — the v0.3.0 variant forms (M-04b/d) that used
+            // to fall through to the LLM as a bare push.
+            ("push all docs changes", "docs"),
+            ("push all api changes", "api"),
+            ("push all schema changes", "schema"),
+            ("push all the login changes", "login"),
         ] {
             match try_canonical(q) {
                 Some(IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush {
@@ -1550,11 +1663,12 @@ mod tests {
                 other => panic!("expected scoped push for {:?}, got {:?}", q, other),
             }
         }
-        // Possessive / bare / all-files forms must NOT be captured (plain push).
+        // Possessive / bare / determiner-only forms must NOT be captured (plain push).
         assert!(try_canonical("push my work").is_none());
         assert!(try_canonical("push my login work").is_none());
         assert!(try_canonical("push everything").is_none());
-        assert!(try_canonical("push all changes").is_none());
+        assert!(try_canonical("push all changes").is_none()); // determiner + noun only, no topic
+        assert!(try_canonical("push the changes").is_none());
         assert!(try_canonical("push the code").is_none()); // 1 word after 'the'
     }
 

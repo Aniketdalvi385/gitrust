@@ -30,6 +30,14 @@ fn print_engine_marker(engine: crate::commands::Engine, llm_elapsed: Option<std:
             };
             (g, "(instant)".to_string(), "\x1b[2;36m") // dim cyan
         }
+        crate::commands::Engine::Router => {
+            let g = if use_color {
+                crate::copy::ENGINE_ROUTER_GLYPH
+            } else {
+                crate::copy::ENGINE_ROUTER_ASCII
+            };
+            (g, "(router)".to_string(), "\x1b[2;34m") // dim blue
+        }
         crate::commands::Engine::Llm => {
             let g = if use_color {
                 crate::copy::ENGINE_LLM_GLYPH
@@ -269,6 +277,32 @@ async fn clarification_loop(
             raw_query: query,
             engine: crate::commands::Engine::Fast,
         });
+    }
+
+    // Layer 1.25 — embedding router. Between the exact fast-path and the LLM:
+    // route confident, non-destructive paraphrases by nearest-exemplar over the
+    // loaded model's /api/embed (~30× faster than the LLM). It only ACTS on a
+    // high-margin, safe match; otherwise it abstains and we fall through to the
+    // LLM path unchanged. Any embedding error is a silent abstain — never a
+    // hard failure. Gated by config so it can be turned off.
+    if config.router_enabled {
+        match crate::router::embed_exemplars(config).await {
+            Ok(exemplars) => {
+                match crate::router::try_route(&query, &exemplars, config).await {
+                    Ok(Some(intent)) => {
+                        return Ok(crate::commands::IntentResult {
+                            intent,
+                            confidence: 0.9,
+                            raw_query: query,
+                            engine: crate::commands::Engine::Router,
+                        });
+                    }
+                    Ok(None) => { /* abstained — fall through to the LLM */ }
+                    Err(_e) => { /* embed failed — degrade to the LLM path */ }
+                }
+            }
+            Err(_e) => { /* exemplar embedding failed — degrade to the LLM path */ }
+        }
     }
 
     for iter in 0..max_iters {

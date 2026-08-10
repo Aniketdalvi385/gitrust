@@ -1,0 +1,33 @@
+{
+  "_comment": "Exemplar phrasings per operation for the embedding router. Kept deliberately SMALL and mostly disjoint from eval_set queries (esp. the 'unseen' bucket) so the harness isn't testing on its own training data. op='__reject__' has no exemplars — it's detected by low margin / no good neighbor.",
+  "ops": {
+    "status":        ["show status", "what is the repo status", "is my tree clean"],
+    "log":           ["show commit history", "git log", "list recent commits"],
+    "diff":          ["show the diff", "what changed in the files"],
+    "branches":      ["list branches", "what branch am i on", "show all branches"],
+    "config":        ["what is my git user and email", "show git config"],
+    "show":          ["show the last commit details", "details of commit HEAD"],
+    "fetch":         ["fetch from origin", "check the remote for new commits", "am i behind origin"],
+    "merge_preview": ["will a pull cause conflicts", "preview merge conflicts", "is it safe to pull"],
+    "add_commit":    ["commit all my files", "stage everything and commit", "commit all changes"],
+    "commit":        ["commit the staged files", "commit what is staged"],
+    "push":          ["push", "publish my current branch", "push my commits to origin"],
+    "scoped_push":   ["push the login changes", "push all api changes", "push the export feature"],
+    "branch":        ["create a branch called feature-x", "make a new branch named hotfix"],
+    "checkout":      ["switch to branch main", "checkout the dev branch", "go to master"],
+    "pull":          ["pull the latest changes", "pull from origin"],
+    "sync":          ["sync with main", "update my branch from main", "merge main into my branch"],
+    "undo":          ["undo", "undo the last commit", "take back my last commit"],
+    "amend":         ["fix the last commit message", "change my last commit message", "amend the last commit"],
+    "squash":        ["squash the last 3 commits", "combine my last commits into one"],
+    "revert":        ["revert that commit", "revert the last commit"],
+    "unstage":       ["unstage a file", "remove a file from staging"],
+    "stash":         ["stash my changes", "shelve my work"],
+    "cleanup":       ["clean up my repo", "get rid of all my changes", "start fresh"],
+    "discard_local": ["discard my local commits", "reset hard to origin"],
+    "force_push":    ["force push with lease", "overwrite the remote with my version"],
+    "init":          ["initialize a repository", "git init here"],
+    "add_remote":    ["add a remote named origin", "set the remote url"],
+    "find_lost_work":["find my lost work", "recover a deleted commit", "i lost a commit"]
+  }
+}

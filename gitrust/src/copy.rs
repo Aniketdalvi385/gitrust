@@ -8,8 +8,10 @@
 
 pub const ENGINE_FAST_GLYPH: &str = "⚡";
 pub const ENGINE_LLM_GLYPH: &str = "◉";
+pub const ENGINE_ROUTER_GLYPH: &str = "✦";
 pub const ENGINE_FAST_ASCII: &str = "*";
 pub const ENGINE_LLM_ASCII: &str = "@";
+pub const ENGINE_ROUTER_ASCII: &str = "+";
 
 // =============================================================================
 // Plan-execution box (Item 4 — design handoff §Flow 06½)

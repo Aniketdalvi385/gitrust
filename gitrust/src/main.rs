@@ -16,6 +16,7 @@ mod manifest;
 mod prompts;
 mod recovery;
 mod resolver;
+mod router;
 mod setup;
 mod trash;
 mod validation;
