@@ -102,6 +102,32 @@ pub fn try_canonical(query: &str) -> Option<IntentType> {
         }),
         "stash" => IntentType::ScopedWrite(ScopedWriteOp::Stash),
         "stash pop" | "pop" => IntentType::ScopedWrite(ScopedWriteOp::StashPop),
+        // Commit-ALL language (stage every change, then commit) — deterministic
+        // so it can never misroute to a stage-only add (M-03b: the 3B model read
+        // "save my changes" as a bare add and never committed). Message is a
+        // Draft → generated from the diff at build time (the seed is ignored).
+        // "commit" ALONE (staged-only) is intentionally NOT here — it stays with
+        // the LLM/build path so bare-commit semantics are preserved.
+        "commit this"
+        | "commit everything"
+        | "commit all"
+        | "commit all my files"
+        | "commit all my changes"
+        | "commit all changes"
+        | "commit my changes"
+        | "commit my work"
+        | "save my changes"
+        | "save my work"
+        | "save all my changes"
+        | "save changes"
+        | "save everything"
+        | "stage and commit"
+        | "stage all and commit"
+        | "add and commit"
+        | "add all and commit" => IntentType::ScopedWrite(ScopedWriteOp::AddAndCommit {
+            message: CommitMessage::Draft(String::new()),
+            files: FileSelection::All,
+        }),
         "show" | "show head" | "last commit" | "commit details" | "last commit details" => {
             IntentType::ReadOnly(ReadOnlyOp::Show { target: None })
         }
@@ -315,15 +341,23 @@ pub fn build_arg_op(op: &str, raw_query: &str) -> Option<IntentType> {
 /// (bare "amend" is already a canonical phrase).
 fn capture_amend_message(raw: &str) -> Option<IntentType> {
     let lower = raw.trim().to_lowercase();
-    // Must be a "change the commit message" phrasing.
-    let is_msg_change = (lower.starts_with("fix ")
+    let starts_with_edit_verb = lower.starts_with("fix ")
         || lower.starts_with("change ")
         || lower.starts_with("update ")
         || lower.starts_with("reword ")
         || lower.starts_with("rename ")
-        || lower.starts_with("edit "))
-        && lower.contains("commit message")
-        && (lower.contains(" to ") || lower.contains(":"));
+        || lower.starts_with("edit ");
+    let has_target = lower.contains(" to ") || lower.contains(":");
+    // Two accepted shapes, both requiring an edit verb + a "to <new text>":
+    //   1. explicit  — mentions "commit message" ("fix the commit message to X")
+    //   2. reword-shape — "reword"/"rename" + "commit" WITHOUT the literal word
+    //      "message" ("reword the last commit to X"). reword/rename a commit
+    //      unambiguously means its message, so this is safe (M-20b: the 3B model
+    //      read "reword the last commit to X" as a NEW commit and blocked).
+    let explicit = lower.contains("commit message");
+    let reword_shape =
+        (lower.starts_with("reword ") || lower.starts_with("rename ")) && lower.contains("commit");
+    let is_msg_change = starts_with_edit_verb && has_target && (explicit || reword_shape);
     if !is_msg_change {
         return None;
     }
@@ -432,7 +466,14 @@ fn capture_sync(q: &str) -> Option<IntentType> {
     // Also accept "update my branch with main" / "bring in main".
     let is_update_with = (q.starts_with("update ") || q.starts_with("bring in "))
         && (q.contains(" with ") || q.contains(" from "));
-    if !(is_sync || is_update_with) {
+    // Direction form: "pull/merge/bring <src> into <dst>" — bringing another
+    // branch's commits into the current one IS a sync (M-10c: the model read
+    // "pull main into feature" as a plain pull of the current branch and did
+    // nothing). The " into " keyword is what disambiguates this from a bare
+    // "pull" (already a canonical) — a plain pull has no "into <branch>".
+    let is_into = (q.starts_with("pull ") || q.starts_with("merge ") || q.starts_with("bring "))
+        && q.contains(" into ");
+    if !(is_sync || is_update_with || is_into) {
         return None;
     }
     let strategy = if q.contains("rebase") {
@@ -1613,6 +1654,10 @@ mod tests {
             "sync my branch with main",
             "sync with origin/main",
             "update my branch with main",
+            // Direction form — "<verb> <src> into <dst>" (M-10c).
+            "pull main into feature",
+            "merge main into my branch",
+            "bring develop into feature",
         ] {
             assert!(
                 matches!(
@@ -1623,6 +1668,11 @@ mod tests {
                 q
             );
         }
+        // A plain pull (no "into <branch>") must NOT be captured as sync.
+        assert!(!matches!(
+            try_canonical("pull"),
+            Some(IntentType::FeaturePipeline(FeaturePipelineOp::Sync { .. }))
+        ));
         // Explicit "rebase" preselects the Rebase strategy.
         assert!(matches!(
             try_canonical("sync with main using rebase"),
@@ -1690,6 +1740,13 @@ mod tests {
                 "update the commit message to: refactor login",
                 "refactor login",
             ),
+            // reword/rename WITHOUT the literal word "message" (M-20b variant —
+            // "reword the last commit to X" was misread as a new commit).
+            (
+                "reword the last commit to 'cleaner subject line'",
+                "cleaner subject line",
+            ),
+            ("rename the last commit to 'feat: x'", "feat: x"),
         ];
         for (q, want) in &cases {
             match try_canonical(q) {
@@ -1719,6 +1776,40 @@ mod tests {
             try_canonical("fix the login bug"),
             Some(IntentType::ScopedWrite(ScopedWriteOp::Amend { .. }))
         ));
+    }
+
+    #[test]
+    fn test_canonical_commit_all() {
+        use crate::commands::{CommitMessage, FileSelection};
+        // M-03b regression: commit-ALL language must deterministically STAGE +
+        // COMMIT (AddAndCommit), never a stage-only add. "save my changes" used
+        // to route (via the LLM) to a bare add that never committed.
+        for q in &[
+            "commit this",
+            "commit everything",
+            "commit all my files",
+            "commit all my changes",
+            "commit my changes",
+            "save my changes",
+            "save my work",
+            "stage and commit",
+            "add all and commit",
+        ] {
+            match try_canonical(q) {
+                Some(IntentType::ScopedWrite(ScopedWriteOp::AddAndCommit {
+                    files: FileSelection::All,
+                    message: CommitMessage::Draft(_),
+                })) => {}
+                other => panic!(
+                    "expected commit-all AddAndCommit for {:?}, got {:?}",
+                    q, other
+                ),
+            }
+        }
+        // Bare "commit" (staged-only) must NOT be hijacked — it stays out of the
+        // canonical set so bare-commit semantics are preserved (LLM/build path).
+        assert!(try_canonical("commit").is_none());
+        assert!(try_canonical("commit staged files").is_none());
     }
 
     #[test]
