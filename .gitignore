@@ -1,0 +1,15 @@
+# Rust build output
+/gitrust/target/
+**/target/
+
+# macOS
+.DS_Store
+
+# Python (eval harness scratch)
+__pycache__/
+*.py[cod]
+
+# Editor / local tooling
+.claude/settings.local.json
+*.swp
+*~
