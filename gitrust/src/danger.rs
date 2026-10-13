@@ -302,7 +302,6 @@ mod tests {
                 untracked: vec![],
                 untracked_overflow: 0,
             },
-            remotes: vec!["origin".to_string()],
             origin_url: None,
             last_commit: "abc1234 \"x\" (1m ago)".to_string(),
             is_empty_repo: false,

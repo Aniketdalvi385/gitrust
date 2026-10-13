@@ -5,16 +5,12 @@ use std::path::PathBuf;
 /// GiTrust configuration loaded from ~/.gitrust.toml.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
-    #[serde(default = "default_model")]
-    pub model: String,
     #[serde(default = "default_remote")]
     pub remote: String,
     #[serde(default = "default_max_iters")]
     pub max_iters: u8,
     #[serde(default = "default_log_enabled")]
     pub log_enabled: bool,
-    #[serde(default = "default_ollama_url")]
-    pub ollama_url: String,
     /// Hook execution routing: "auto" | "git2" | "system".
     ///
     /// - "auto" (default): use system `git` for commit when executable hooks
@@ -30,24 +26,35 @@ pub struct Config {
     /// deleted by a hard reset / discard-local / clean (Phase 14, S30/S62).
     #[serde(default = "default_trash_retention_days")]
     pub trash_retention_days: u64,
-    /// Enable the embedding router (Layer 1.25): between the exact fast-path and
-    /// the LLM, route paraphrases by nearest-exemplar over the loaded model's
-    /// `/api/embed`. Robust to unseen phrasings and ~30× faster than the LLM,
-    /// but only ACTS on a confident, non-destructive match — otherwise it
-    /// abstains and the LLM path runs unchanged. Set false to disable.
-    #[serde(default = "default_router_enabled")]
-    pub router_enabled: bool,
-    /// Minimum top1−top2 cosine margin for the embedding router to trust a match.
-    /// Below this the router abstains → LLM. Calibrated in the eval harness
-    /// (docs/classifier_eval); correct routes cluster well above incorrect ones,
-    /// but the buckets overlap, so this trades coverage for precision.
-    #[serde(default = "default_router_min_margin")]
-    pub router_min_margin: f32,
+    /// Base URL of the local Kev decision-model server (`python -m kev.serve`).
+    /// Binds 127.0.0.1 by default — nothing leaves the machine.
+    #[serde(default = "default_kev_url")]
+    pub kev_url: String,
+    /// Kev checkpoint to serve when GiTrust starts the server itself: a Hub id
+    /// (`jaredpalmer/kev-0.8b@v1.0`) or a local run directory (a fine-tune).
+    #[serde(default = "default_kev_run")]
+    pub kev_run: String,
+    /// Path to a Kev checkout (github.com/jaredpalmer/kev, `uv sync --extra serve`
+    /// done). Needed only for `kev_autostart`.
+    #[serde(default)]
+    pub kev_dir: Option<String>,
+    /// Start the Kev server in the background on the first query that needs it
+    /// (~25 s cold start on the 8 GB M2; it then stays resident, ~2.9 GB).
+    #[serde(default = "default_kev_autostart")]
+    pub kev_autostart: bool,
+    /// Minimum Kev probability to route a NON-destructive op without asking.
+    /// Below it, the user picks from Kev's top candidates. Calibrated on the
+    /// 44-case eval: at 0.5 stock Kev-0.8B routed 9/44, 8 correct, none
+    /// order-unstable (docs/classifier_eval/run_kev_eval.py).
+    #[serde(default = "default_kev_min_confidence")]
+    pub kev_min_confidence: f32,
+    /// Higher bar for ops that can rewrite or discard work (undo, cleanup,
+    /// discard_local, force_push, squash, amend, revert). Even when cleared,
+    /// those ops still hit their ChoiceGate / type-to-confirm downstream.
+    #[serde(default = "default_kev_destructive_min_confidence")]
+    pub kev_destructive_min_confidence: f32,
 }
 
-fn default_model() -> String {
-    "qwen2.5:3b".to_string()
-}
 fn default_remote() -> String {
     "origin".to_string()
 }
@@ -57,42 +64,42 @@ fn default_max_iters() -> u8 {
 fn default_log_enabled() -> bool {
     true
 }
-fn default_ollama_url() -> String {
-    "http://localhost:11434".to_string()
-}
 fn default_hooks() -> String {
     "auto".to_string()
 }
 fn default_trash_retention_days() -> u64 {
     7
 }
-fn default_router_enabled() -> bool {
+fn default_kev_url() -> String {
+    "http://127.0.0.1:8009".to_string()
+}
+fn default_kev_run() -> String {
+    "jaredpalmer/kev-0.8b@v1.0".to_string()
+}
+fn default_kev_autostart() -> bool {
     true
 }
-fn default_router_min_margin() -> f32 {
-    // Calibrated against the REAL binary's embeddings (qwen2.5:3b, non-centered)
-    // over the router.rs exemplar set — see docs/classifier_eval and the
-    // margin-probe notes. The v0.3.0 target wins land at margin ≥ ~0.016
-    // (scoped_push 0.027–0.040, squash 0.016–0.026, pull/branches far higher),
-    // while the noise abstains (a status↔fetch confusion at 0.006, "what's the
-    // weather" at 0.012, a reword↔squash tie at 0.001). 0.015 sits in that gap.
-    // Deliberately conservative: a wrong direct route is worse than a
-    // slow-but-correct LLM route, so when in doubt we abstain.
-    0.015
+fn default_kev_min_confidence() -> f32 {
+    0.5
+}
+fn default_kev_destructive_min_confidence() -> f32 {
+    0.6
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            model: default_model(),
             remote: default_remote(),
             max_iters: default_max_iters(),
             log_enabled: default_log_enabled(),
-            ollama_url: default_ollama_url(),
             hooks: default_hooks(),
             trash_retention_days: default_trash_retention_days(),
-            router_enabled: default_router_enabled(),
-            router_min_margin: default_router_min_margin(),
+            kev_url: default_kev_url(),
+            kev_run: default_kev_run(),
+            kev_dir: None,
+            kev_autostart: default_kev_autostart(),
+            kev_min_confidence: default_kev_min_confidence(),
+            kev_destructive_min_confidence: default_kev_destructive_min_confidence(),
         }
     }
 }
@@ -138,24 +145,42 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.model, "qwen2.5:3b");
         assert_eq!(config.remote, "origin");
         assert_eq!(config.max_iters, 5);
         assert!(config.log_enabled);
-        assert_eq!(config.ollama_url, "http://localhost:11434");
         assert_eq!(config.hooks, "auto");
         assert_eq!(config.trash_retention_days, 7);
-        assert!(config.router_enabled);
-        assert_eq!(config.router_min_margin, 0.015);
+        assert_eq!(config.kev_url, "http://127.0.0.1:8009");
+        assert_eq!(config.kev_run, "jaredpalmer/kev-0.8b@v1.0");
+        assert!(config.kev_dir.is_none());
+        assert!(config.kev_autostart);
+        assert_eq!(config.kev_min_confidence, 0.5);
+        assert_eq!(config.kev_destructive_min_confidence, 0.6);
     }
 
     #[test]
     fn test_config_deserialize_partial() {
-        let toml_str = r#"model = "custom-model""#;
+        let toml_str = r#"kev_url = "http://127.0.0.1:9000""#;
         let config: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(config.model, "custom-model");
+        assert_eq!(config.kev_url, "http://127.0.0.1:9000");
         assert_eq!(config.remote, "origin"); // default
         assert_eq!(config.max_iters, 5); // default
+    }
+
+    #[test]
+    fn test_legacy_ollama_config_still_loads() {
+        // A pre-Kev ~/.gitrust.toml must not break the binary: the retired
+        // keys are ignored and everything else keeps its value.
+        let toml_str = r#"
+model = "qwen2.5:3b"
+ollama_url = "http://localhost:11434"
+router_enabled = true
+router_min_margin = 0.015
+remote = "upstream"
+"#;
+        let config: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.remote, "upstream");
+        assert_eq!(config.kev_url, "http://127.0.0.1:8009");
     }
 
     #[test]
@@ -163,7 +188,7 @@ mod tests {
         let config = Config::default();
         let serialized = toml::to_string_pretty(&config).unwrap();
         let deserialized: Config = toml::from_str(&serialized).unwrap();
-        assert_eq!(config.model, deserialized.model);
+        assert_eq!(config.kev_url, deserialized.kev_url);
         assert_eq!(config.remote, deserialized.remote);
     }
 }

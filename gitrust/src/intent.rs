@@ -1,74 +1,148 @@
-use anyhow::Context;
-use serde::Deserialize;
-
 use crate::commands::{
-    CommitMessage, FeaturePipelineOp, FileSelection, IntentResult, IntentType, ReadOnlyOp,
-    ResetMode, ScopedWriteOp, SyncStrategy,
+    CommitMessage, FeaturePipelineOp, FileSelection, IntentType, ReadOnlyOp, ScopedWriteOp,
+    SyncStrategy,
 };
 use crate::config::Config;
 use crate::context::RepoContext;
-use crate::prompts::{CLASSIFIER_PROMPT, COMMIT_MESSAGE_PROMPT, SYSTEM_PROMPT};
 
-/// Trait for intent classification — enables swapping LLM backends.
+/// Layer-1 model seam: rank a closed list of options for a state, best first.
+/// The model only RANKS options we wrote; deciding whether to act, ask or
+/// refuse is `kev::decide`, and building the intent (arguments included) is
+/// `build_from_op` — both deterministic. Tests swap in a fixed distribution.
 pub trait IntentClassifier {
-    fn classify(
+    fn rank(
         &self,
-        context: &RepoContext,
-        query: &str,
+        state: serde_json::Value,
+        instructions: &str,
+        options: &[(String, String)],
         config: &Config,
-    ) -> impl std::future::Future<Output = anyhow::Result<IntentResult>> + Send;
+    ) -> impl std::future::Future<Output = anyhow::Result<Vec<(String, f32)>>> + Send;
 }
 
-/// Default Ollama-backed classifier.
-pub struct OllamaClassifier;
+/// The local Kev decision model (see `kev.rs`).
+pub struct KevClassifier;
 
-impl IntentClassifier for OllamaClassifier {
-    async fn classify(
+impl IntentClassifier for KevClassifier {
+    async fn rank(
         &self,
-        context: &RepoContext,
-        query: &str,
+        state: serde_json::Value,
+        instructions: &str,
+        options: &[(String, String)],
         config: &Config,
-    ) -> anyhow::Result<IntentResult> {
-        classify_intent(context, query, config).await
+    ) -> anyhow::Result<Vec<(String, f32)>> {
+        crate::kev::ask_choice(config, state, instructions, options).await
     }
 }
 
-// =============================================================================
-// JSON wire format (what Ollama returns)
-// =============================================================================
+/// Which in-progress control family applies, if the repo is mid-operation.
+pub fn in_progress_family(ctx: &RepoContext) -> Option<&'static str> {
+    use crate::commands::RepoSituation as S;
+    match ctx.situation {
+        S::MidRebase { .. } => Some("rebase"),
+        S::MidMerge { .. } => Some("merge"),
+        S::MidCherryPick { .. } => Some("cherry_pick"),
+        S::MidRevert { .. } => Some("revert"),
+        _ => None,
+    }
+}
 
-#[derive(Debug, Deserialize, Default)]
-struct RawIntent {
-    /// Model's brief justification for its choice. Consumed only for logging /
-    /// debugging — never affects routing. Required by schema to force CoT.
-    #[serde(default)]
-    reasoning: String,
-    #[serde(default)]
-    intent: String,
-    #[serde(default)]
-    op: String,
-    #[serde(default)]
-    files: Vec<String>,
-    #[serde(default)]
-    feature_hint: String,
-    #[serde(default)]
-    message: String,
-    #[serde(default)]
-    confidence: f32,
-    #[serde(default)]
-    question: String,
-    /// Some models use "reset_mode" for soft/mixed/hard
-    #[serde(default)]
-    reset_mode: String,
-    /// Log count
-    #[serde(default)]
-    count: Option<u8>,
-    /// Remote name for add_remote op
-    #[serde(default)]
-    remote_name: String,
-    /// Remote URL for add_remote op
-    #[serde(default)]
-    remote_url: String,
+/// The intent for an in-progress control op (from the in-progress question).
+pub fn build_in_progress(op: &str) -> Option<IntentType> {
+    let w = match op {
+        "rebase_continue" => ScopedWriteOp::RebaseContinue,
+        "rebase_skip" => ScopedWriteOp::RebaseSkip,
+        "rebase_abort" => ScopedWriteOp::RebaseAbort,
+        "merge_abort" => ScopedWriteOp::MergeAbort,
+        "cherry_pick_continue" => ScopedWriteOp::CherryPickContinue,
+        "cherry_pick_abort" => ScopedWriteOp::CherryPickAbort,
+        "revert_continue" => ScopedWriteOp::RevertContinue,
+        "revert_abort" => ScopedWriteOp::RevertAbort,
+        _ => return None,
+    };
+    Some(IntentType::ScopedWrite(w))
+}
+
+/// The state Kev reads: the request plus a one-line repo summary, in the same
+/// shape it was fine-tuned on (docs/classifier_eval/make_kev_train.py).
+pub fn kev_state(context: &RepoContext, query: &str) -> serde_json::Value {
+    serde_json::json!({ "user_request": query, "repo_state": repo_state_line(context) })
+}
+
+fn plural(n: usize, one: &str, many: &str) -> String {
+    if n == 1 {
+        format!("1 {}", one)
+    } else {
+        format!("{} {}", n, many)
+    }
+}
+
+/// e.g. "clean repo, on branch main" / "on branch feature-x, 2 files modified,
+/// 1 commit ahead of origin". Deliberately short — Kev-0.8B is trained on short states.
+pub fn repo_state_line(ctx: &RepoContext) -> String {
+    if ctx.is_empty_repo {
+        return "empty repository, no commits yet".to_string();
+    }
+    let at = if ctx.is_detached {
+        "detached HEAD".to_string()
+    } else {
+        format!("on branch {}", ctx.branch)
+    };
+    // `upstream` is the full ref ("refs/remotes/origin/main") → remote "origin".
+    let remote = ctx
+        .upstream
+        .as_deref()
+        .map(|u| u.strip_prefix("refs/remotes/").unwrap_or(u))
+        .and_then(|u| u.split('/').next())
+        .unwrap_or("origin");
+    let s = &ctx.status;
+    let mut parts = vec![at.clone()];
+    let modified = s.modified.len() + s.modified_overflow;
+    let staged = s.staged.len() + s.staged_overflow;
+    let untracked = s.untracked.len() + s.untracked_overflow;
+    if modified > 0 {
+        parts.push(format!("{} modified", plural(modified, "file", "files")));
+    }
+    if staged > 0 {
+        parts.push(plural(staged, "staged file", "staged files"));
+    }
+    if untracked > 0 {
+        parts.push(plural(untracked, "untracked file", "untracked files"));
+    }
+    if ctx.ahead > 0 {
+        parts.push(format!(
+            "{} ahead of {}",
+            plural(ctx.ahead, "commit", "commits"),
+            remote
+        ));
+    }
+    if ctx.behind > 0 {
+        parts.push(format!(
+            "behind {} by {}",
+            remote,
+            plural(ctx.behind, "commit", "commits")
+        ));
+    }
+    // In-progress operations are spelled out so the in-progress question can
+    // route "continue"/"abort". Other situations are already covered above
+    // (detached → `at`, diverged → ahead/behind) or gated in Layer 1.5.
+    use crate::commands::RepoSituation as S;
+    if matches!(
+        ctx.situation,
+        S::MidMerge { .. }
+            | S::MidRebase { .. }
+            | S::MidCherryPick { .. }
+            | S::MidRevert { .. }
+            | S::MidBisect
+    ) {
+        if let Some(desc) = crate::context::describe_situation(&ctx.situation) {
+            parts.push(desc);
+        }
+    }
+    if parts.len() == 1 {
+        format!("clean repo, {}", at)
+    } else {
+        parts.join(", ")
+    }
 }
 
 // =============================================================================
@@ -311,26 +385,6 @@ fn try_canonical_parameterized(q: &str) -> Option<IntentType> {
     // Note: amend-with-new-message uses the RAW (case-preserving) query, so it is
     // handled in try_canonical against `query`, not here (q is lowercased).
     None
-}
-
-/// For the embedding router: given an op name the router picked by similarity
-/// and the RAW query, try to build the argument-bearing `IntentType` using the
-/// SAME deterministic captures the fast-path uses. Returns `None` when the
-/// argument can't be extracted — the router then abstains to the LLM rather than
-/// emit an op with a missing/guessed argument (M-04/M-19/M-20 safety). This is
-/// the seam that lets embeddings fix ROUTING while the captures own ARGUMENTS.
-pub fn build_arg_op(op: &str, raw_query: &str) -> Option<IntentType> {
-    let q = raw_query.trim().to_lowercase();
-    match op {
-        "scoped_push" => capture_scoped_push(&q).map(|hint| {
-            IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush { feature_hint: hint })
-        }),
-        "squash" => capture_squash_count(&q)
-            .map(|n| IntentType::ScopedWrite(ScopedWriteOp::SquashLastN { n })),
-        // Amend message capture runs against the RAW query (case-preserving).
-        "amend" => capture_amend_message(raw_query),
-        _ => None,
-    }
 }
 
 /// Capture "fix/change/update the [last] commit message to '<new message>'" and
@@ -576,962 +630,471 @@ fn is_single_git_ref_token(s: &str) -> bool {
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/' | '.'))
 }
 
-/// Build a short list of plausible alternative intents when classifier confidence
-/// is mid-range. Hand-rolled rules — NOT an LLM call.
-/// Returns at most 2 alternates distinct from `top`.
-pub fn alternates_for(top: &IntentType, ctx: &RepoContext) -> Vec<IntentType> {
-    let mut alts: Vec<IntentType> = Vec::new();
-    let has_unstaged = !ctx.status.modified.is_empty() || !ctx.status.untracked.is_empty();
-    let has_staged = !ctx.status.staged.is_empty();
-
-    match top {
-        // Top is push — user might have meant commit-then-push or feature pipeline.
-        IntentType::ScopedWrite(ScopedWriteOp::Push { .. }) => {
-            if has_unstaged {
-                alts.push(IntentType::ScopedWrite(ScopedWriteOp::AddAndCommit {
-                    message: CommitMessage::Draft("update".to_string()),
-                    files: FileSelection::All,
-                }));
-            }
-            if has_staged {
-                alts.push(IntentType::FeaturePipeline(FeaturePipelineOp::CommitPush {
-                    message: CommitMessage::Draft("update".to_string()),
-                }));
-            }
-        }
-        // Top is commit-only — user might want to also stage first.
-        IntentType::ScopedWrite(ScopedWriteOp::Commit { .. }) => {
-            if has_unstaged {
-                alts.push(IntentType::ScopedWrite(ScopedWriteOp::AddAndCommit {
-                    message: CommitMessage::Draft("update".to_string()),
-                    files: FileSelection::All,
-                }));
-            }
-        }
-        // Top is status — user might want branches or log instead.
-        IntentType::ReadOnly(ReadOnlyOp::Status) => {
-            alts.push(IntentType::ReadOnly(ReadOnlyOp::Branches));
-            alts.push(IntentType::ReadOnly(ReadOnlyOp::Log { count: 10 }));
-        }
-        // Top is branches — user might want status.
-        IntentType::ReadOnly(ReadOnlyOp::Branches) => {
-            alts.push(IntentType::ReadOnly(ReadOnlyOp::Status));
-        }
-        _ => {}
-    }
-
-    alts.truncate(2);
-    alts
-}
-
-/// One-line human-readable label for a candidate intent (used in menus).
-pub fn intent_label(intent: &IntentType) -> String {
-    match intent {
-        IntentType::ReadOnly(op) => format!("Show {:?}", op).to_lowercase(),
-        IntentType::ScopedWrite(ScopedWriteOp::Push { remote }) => {
-            format!("Push current branch to {}", remote)
-        }
-        IntentType::ScopedWrite(ScopedWriteOp::Commit { .. }) => {
-            "Commit already-staged files".to_string()
-        }
-        IntentType::ScopedWrite(ScopedWriteOp::AddAndCommit { .. }) => {
-            "Stage all changes and commit".to_string()
-        }
-        IntentType::ScopedWrite(ScopedWriteOp::Pull { remote }) => {
-            format!("Pull from {}", remote)
-        }
-        IntentType::ScopedWrite(ScopedWriteOp::Init) => "Initialize repository".to_string(),
-        IntentType::FeaturePipeline(FeaturePipelineOp::CommitPush { .. }) => {
-            "Commit staged files and push".to_string()
-        }
-        IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush { feature_hint }) => {
-            format!("Push '{}' changes (file selection)", feature_hint)
-        }
-        IntentType::FeaturePipeline(FeaturePipelineOp::Sync { .. }) => {
-            "Sync with upstream".to_string()
-        }
-        IntentType::NeedsClarification(q) => format!("Rephrase: {}", q),
-        other => format!("{:?}", other),
-    }
-}
-
 // =============================================================================
-// Public API
+// Kev-routed op → concrete IntentType (arguments are captured, never generated)
 // =============================================================================
 
-/// Classify user intent by calling Ollama. Returns `NeedsClarification`
-/// when confidence < threshold or when intent = "clarify".
-pub async fn classify_intent(
-    context: &RepoContext,
-    query: &str,
-    config: &Config,
-) -> anyhow::Result<IntentResult> {
-    let context_block = context.to_prompt_string();
-    let prompt = format!(
-        "{}\n\nCurrent repo state:\n{}\n\nUser query: {}",
-        *CLASSIFIER_PROMPT, context_block, query
-    );
-
-    let raw =
-        call_ollama_with_schema(&prompt, &SYSTEM_PROMPT, config, 0.0, classifier_schema()).await?;
-    let cleaned = json_repair(&raw);
-
-    let ri: RawIntent = serde_json::from_str(&cleaned)
-        .with_context(|| format!("LLM returned unparseable JSON: {}", cleaned))?;
-
-    const CONFIDENCE_THRESHOLD: f32 = 0.6;
-
-    if ri.intent == "clarify" || ri.confidence < CONFIDENCE_THRESHOLD {
-        let question = if ri.question.is_empty() {
-            "I'm not sure what you want to do — could you rephrase?".to_string()
-        } else {
-            ri.question.clone()
-        };
-        return Ok(IntentResult {
-            intent: IntentType::NeedsClarification(question),
-            confidence: ri.confidence,
-            raw_query: query.to_string(),
-            engine: crate::commands::Engine::Llm,
-        });
-    }
-
-    let intent = build_intent_type(&ri, query)?;
-
-    // Surface the model's reasoning to stderr when GITRUST_DEBUG is set, or
-    // when confidence is mid-range (helps the user understand the disambiguation menu).
-    let debug_on = std::env::var("GITRUST_DEBUG").is_ok();
-    if debug_on && !ri.reasoning.is_empty() {
-        eprintln!("  (reasoning: {})", ri.reasoning);
-    }
-
-    Ok(IntentResult {
-        intent,
-        confidence: ri.confidence,
-        raw_query: query.to_string(),
-        engine: crate::commands::Engine::Llm,
-    })
+/// An argument a routed op needs that the query didn't contain. The agent asks
+/// the user for it; `--yes` refuses rather than invent one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgKind {
+    BranchName,
+    CheckoutTarget,
+    Topic,
+    SquashCount,
+    RemoteUrl,
 }
 
-/// Build an `IntentType` from the parsed Ollama JSON.
-fn build_intent_type(ri: &RawIntent, query: &str) -> anyhow::Result<IntentType> {
-    match ri.intent.as_str() {
-        "read_only" => {
-            let op = match ri.op.as_str() {
-                "log" => ReadOnlyOp::Log {
-                    count: ri.count.unwrap_or(10),
-                },
-                "diff" => ReadOnlyOp::Diff {
-                    path: if ri.files.is_empty() {
-                        None
-                    } else {
-                        Some(ri.files[0].clone())
-                    },
-                },
-                "remotes" => ReadOnlyOp::Remotes,
-                "branches" => ReadOnlyOp::Branches,
-                "config" => ReadOnlyOp::Config,
-                "show" => ReadOnlyOp::Show {
-                    target: if ri.feature_hint.is_empty() {
-                        None
-                    } else {
-                        Some(ri.feature_hint.clone())
-                    },
-                },
-                "fetch" | "fetch_status" => ReadOnlyOp::FetchStatus {
-                    remote: if ri.remote_name.is_empty() {
-                        "origin".to_string()
-                    } else {
-                        ri.remote_name.clone()
-                    },
-                },
-                "merge_preview" | "predict_merge" | "preview_merge" => ReadOnlyOp::MergePreview {
-                    remote: if ri.remote_name.is_empty() {
-                        "origin".to_string()
-                    } else {
-                        ri.remote_name.clone()
-                    },
-                },
-                _ => ReadOnlyOp::Status,
-            };
-            Ok(IntentType::ReadOnly(op))
+impl ArgKind {
+    /// The prompt label shown to the user.
+    pub fn prompt(&self) -> &'static str {
+        match self {
+            ArgKind::BranchName => "Name for the new branch:",
+            ArgKind::CheckoutTarget => "Branch to switch to:",
+            ArgKind::Topic => "Which feature/topic should the push include (e.g. login)?",
+            ArgKind::SquashCount => "How many recent commits to squash into one?",
+            ArgKind::RemoteUrl => "Remote URL:",
         }
-
-        "scoped_write" => {
-            let op = match ri.op.as_str() {
-                "add" => ScopedWriteOp::Add {
-                    files: if ri.files.is_empty() {
-                        FileSelection::All
-                    } else {
-                        FileSelection::Explicit(ri.files.clone())
-                    },
-                },
-                "commit" => ScopedWriteOp::Commit {
-                    message: if ri.message.is_empty() {
-                        CommitMessage::Draft(derive_draft_message(query))
-                    } else {
-                        CommitMessage::Provided(ri.message.clone())
-                    },
-                },
-                "branch" => ScopedWriteOp::Branch {
-                    name: ri.feature_hint.clone(),
-                },
-                "checkout" => ScopedWriteOp::Checkout {
-                    target: ri.feature_hint.clone(),
-                },
-                "stash" => ScopedWriteOp::Stash,
-                "stash_pop" => ScopedWriteOp::StashPop,
-                "reset" => ScopedWriteOp::Reset {
-                    mode: parse_reset_mode(&ri.reset_mode),
-                },
-                "pull" => ScopedWriteOp::Pull {
-                    remote: "origin".to_string(),
-                },
-                "init" => ScopedWriteOp::Init,
-                "delete_repo" => ScopedWriteOp::DeleteRepo,
-                // P6: undo-language is ambiguous → UndoIntent, never a concrete
-                // undo semantic. The ChoiceGate decides.
-                "undo" => ScopedWriteOp::UndoIntent,
-                // Phase 14: forensic recovery (find/restore lost commits) and the
-                // ambiguous destructive-cleanup intent (S62 — the ChoiceGate, not
-                // the LLM, picks what to delete). Neither emits a concrete
-                // destructive step here.
-                "find_lost_work" | "forensic_recover" | "recover_lost" => {
-                    ScopedWriteOp::ForensicRecover
-                }
-                "cleanup" | "clean_up" | "start_fresh" | "discard_changes" => {
-                    ScopedWriteOp::CleanupIntent
-                }
-                "amend" => ScopedWriteOp::Amend {
-                    message: if ri.message.is_empty() {
-                        None
-                    } else {
-                        Some(ri.message.clone())
-                    },
-                    include_staged: true,
-                },
-                "revert" => ScopedWriteOp::Revert {
-                    // Empty = HEAD (resolved at build time). A specific target in
-                    // feature_hint resolves there too.
-                    oid: ri.feature_hint.clone(),
-                },
-                "unstage" => ScopedWriteOp::Unstage {
-                    paths: ri.files.clone(),
-                },
-                "set_upstream" => ScopedWriteOp::SetUpstream {
-                    remote: if ri.remote_name.is_empty() {
-                        "origin".to_string()
-                    } else {
-                        ri.remote_name.clone()
-                    },
-                    // Empty = current branch (resolved at build time).
-                    branch: ri.feature_hint.clone(),
-                },
-                "squash" => ScopedWriteOp::SquashLastN {
-                    n: ri.count.unwrap_or(2) as u32,
-                },
-                "pull_rebase" | "rebase" => ScopedWriteOp::PullRebase {
-                    remote: if ri.remote_name.is_empty() {
-                        "origin".to_string()
-                    } else {
-                        ri.remote_name.clone()
-                    },
-                },
-                "force_push" | "force_push_with_lease" => ScopedWriteOp::ForcePush {
-                    remote: if ri.remote_name.is_empty() {
-                        "origin".to_string()
-                    } else {
-                        ri.remote_name.clone()
-                    },
-                },
-                "discard_local" | "reset_to_remote" => ScopedWriteOp::DiscardLocal {
-                    remote: if ri.remote_name.is_empty() {
-                        "origin".to_string()
-                    } else {
-                        ri.remote_name.clone()
-                    },
-                },
-                "add_commit" => ScopedWriteOp::AddAndCommit {
-                    message: if ri.message.is_empty() {
-                        CommitMessage::Draft(derive_draft_message(query))
-                    } else {
-                        CommitMessage::Provided(ri.message.clone())
-                    },
-                    files: if ri.files.is_empty() {
-                        FileSelection::All
-                    } else {
-                        FileSelection::Explicit(ri.files.clone())
-                    },
-                },
-                "remove_remote" => ScopedWriteOp::RemoveRemote {
-                    name: if ri.remote_name.is_empty() {
-                        "origin".to_string()
-                    } else {
-                        ri.remote_name.clone()
-                    },
-                },
-                "push" => ScopedWriteOp::Push {
-                    remote: if ri.remote_name.is_empty() {
-                        "origin".to_string()
-                    } else {
-                        ri.remote_name.clone()
-                    },
-                },
-                "add_remote" => ScopedWriteOp::AddRemote {
-                    name: if ri.remote_name.is_empty() {
-                        "origin".to_string()
-                    } else {
-                        ri.remote_name.clone()
-                    },
-                    url: ri.remote_url.clone(),
-                },
-                // In-progress operation continue/skip/abort (Phase 11).
-                "rebase_continue" => ScopedWriteOp::RebaseContinue,
-                "rebase_skip" => ScopedWriteOp::RebaseSkip,
-                "rebase_abort" => ScopedWriteOp::RebaseAbort,
-                "merge_abort" => ScopedWriteOp::MergeAbort,
-                "cherry_pick_continue" | "cherrypick_continue" => ScopedWriteOp::CherryPickContinue,
-                "cherry_pick_abort" | "cherrypick_abort" => ScopedWriteOp::CherryPickAbort,
-                "revert_continue" => ScopedWriteOp::RevertContinue,
-                "revert_abort" => ScopedWriteOp::RevertAbort,
-                _ => ScopedWriteOp::Add {
-                    files: FileSelection::All,
-                },
-            };
-            Ok(IntentType::ScopedWrite(op))
+    }
+    /// Short noun for error messages ("the branch name").
+    pub fn noun(&self) -> &'static str {
+        match self {
+            ArgKind::BranchName => "the new branch name",
+            ArgKind::CheckoutTarget => "the branch to switch to",
+            ArgKind::Topic => "the feature/topic to push",
+            ArgKind::SquashCount => "how many commits to squash",
+            ArgKind::RemoteUrl => "the remote URL",
         }
-
-        "feature_pipeline" => {
-            let op = match ri.op.as_str() {
-                "push" => FeaturePipelineOp::AddCommitPush {
-                    feature_hint: ri.feature_hint.clone(),
-                },
-                "sync" => FeaturePipelineOp::Sync {
-                    strategy: if query.to_lowercase().contains("rebase") {
-                        SyncStrategy::Rebase
-                    } else {
-                        SyncStrategy::Merge
-                    },
-                },
-                _ => {
-                    // "commit" op in a feature_pipeline → CommitPush
-                    let msg = if ri.message.is_empty() {
-                        CommitMessage::Draft(derive_draft_message(query))
-                    } else {
-                        CommitMessage::Provided(ri.message.clone())
-                    };
-                    FeaturePipelineOp::CommitPush { message: msg }
-                }
-            };
-            Ok(IntentType::FeaturePipeline(op))
-        }
-
-        "clarify" => Ok(IntentType::NeedsClarification(ri.question.clone())),
-
-        // Some models return "init" as a top-level intent instead of scoped_write+op
-        "init" => Ok(IntentType::ScopedWrite(ScopedWriteOp::Init)),
-
-        other => Err(anyhow::anyhow!("Unknown intent type from LLM: '{}'", other)),
     }
 }
 
-fn parse_reset_mode(s: &str) -> ResetMode {
-    match s.to_lowercase().as_str() {
-        "hard" => ResetMode::Hard,
-        "mixed" => ResetMode::Mixed,
-        _ => ResetMode::Soft,
-    }
-}
-
-/// Derive a rough draft commit message from the raw user query.
-fn derive_draft_message(query: &str) -> String {
-    // Remove common verbs at the start
-    let cleaned = query
-        .trim()
-        .trim_start_matches(|c: char| c.is_whitespace())
-        .to_string();
-
-    let prefixes = ["commit ", "push ", "save ", "add "];
-    let mut msg = cleaned.as_str();
-    for p in &prefixes {
-        msg = msg.strip_prefix(p).unwrap_or(msg);
-    }
-
-    // Capitalize first letter
-    let mut chars = msg.chars();
-    match chars.next() {
-        None => "update files".to_string(),
-        Some(first) => {
-            let capitalized = first.to_uppercase().to_string() + chars.as_str();
-            // "…" is 3 UTF-8 bytes; keep total byte length ≤ 73
-            if capitalized.len() > 72 {
-                format!("{}…", &capitalized[..70])
+/// Build the concrete `IntentType` for an op Kev routed to (or the user picked
+/// from Kev's candidates). Every argument comes from a deterministic capture over
+/// the raw query and the repo context; when one is missing, `ask` is called —
+/// the model never supplies an argument. Multi-commit undo, cleanup scope and
+/// similar semantics are still decided downstream by their gates.
+pub fn build_from_op(
+    op: &str,
+    raw: &str,
+    ctx: &RepoContext,
+    ask: &mut dyn FnMut(ArgKind) -> anyhow::Result<String>,
+) -> anyhow::Result<IntentType> {
+    let q = raw.trim().to_lowercase();
+    let origin = || "origin".to_string();
+    let named = named_files(raw, ctx);
+    let message = || match capture_commit_message(raw) {
+        Some(m) => CommitMessage::Provided(m),
+        None => CommitMessage::Draft(String::new()),
+    };
+    let it = match op {
+        "status" => IntentType::ReadOnly(ReadOnlyOp::Status),
+        "log" => IntentType::ReadOnly(ReadOnlyOp::Log {
+            count: first_number(&q)
+                .filter(|n| (1..=100).contains(n))
+                .map(|n| n as u8)
+                .unwrap_or(10),
+        }),
+        "diff" => IntentType::ReadOnly(ReadOnlyOp::Diff {
+            path: named.first().cloned(),
+        }),
+        "branches" => IntentType::ReadOnly(ReadOnlyOp::Branches),
+        "config" => IntentType::ReadOnly(ReadOnlyOp::Config),
+        "show" => IntentType::ReadOnly(ReadOnlyOp::Show {
+            target: capture_commit_ref(raw),
+        }),
+        "fetch" => IntentType::ReadOnly(ReadOnlyOp::FetchStatus { remote: origin() }),
+        "merge_preview" => IntentType::ReadOnly(ReadOnlyOp::MergePreview { remote: origin() }),
+        "add_commit" => IntentType::ScopedWrite(ScopedWriteOp::AddAndCommit {
+            message: message(),
+            files: if named.is_empty() {
+                FileSelection::All
             } else {
-                capitalized
+                FileSelection::Explicit(named)
+            },
+        }),
+        "commit" => IntentType::ScopedWrite(ScopedWriteOp::Commit { message: message() }),
+        "push" => IntentType::ScopedWrite(ScopedWriteOp::Push { remote: origin() }),
+        "scoped_push" => {
+            let topic = match capture_topic(&q) {
+                Some(t) => t,
+                None => required(ask, ArgKind::Topic)?,
+            };
+            IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush {
+                feature_hint: topic,
+            })
+        }
+        "branch" => {
+            let name = match capture_new_branch_name(&q) {
+                Some(n) => n,
+                None => ref_token(required(ask, ArgKind::BranchName)?)?,
+            };
+            IntentType::ScopedWrite(ScopedWriteOp::Branch { name })
+        }
+        "checkout" => {
+            let target = match capture_checkout_target(&q) {
+                Some(t) => t,
+                None => ref_token(required(ask, ArgKind::CheckoutTarget)?)?,
+            };
+            IntentType::ScopedWrite(ScopedWriteOp::Checkout { target })
+        }
+        "pull" => IntentType::ScopedWrite(ScopedWriteOp::Pull { remote: origin() }),
+        "sync" => {
+            capture_sync(&q).unwrap_or(IntentType::FeaturePipeline(FeaturePipelineOp::Sync {
+                strategy: if q.contains("rebase") {
+                    SyncStrategy::Rebase
+                } else {
+                    SyncStrategy::Merge
+                },
+            }))
+        }
+        // The undo ChoiceGate decides the semantic; a multi-commit count in the
+        // raw query makes the builder HALT downstream (never trust a count here).
+        "undo" => IntentType::ScopedWrite(ScopedWriteOp::UndoIntent),
+        // A new message comes from the existing capture or any quoted text;
+        // without one, amend folds in staged changes and keeps the message.
+        "amend" => capture_amend_message(raw)
+            .or_else(|| {
+                extract_quoted(raw).map(|m| {
+                    IntentType::ScopedWrite(ScopedWriteOp::Amend {
+                        message: Some(m),
+                        include_staged: false,
+                    })
+                })
+            })
+            .unwrap_or(IntentType::ScopedWrite(ScopedWriteOp::Amend {
+                message: None,
+                include_staged: true,
+            })),
+        "squash" => {
+            let n = match capture_squash_count(&q).or_else(|| count_in(&q)) {
+                Some(n) => n,
+                None => {
+                    let a = required(ask, ArgKind::SquashCount)?;
+                    a.trim()
+                        .parse::<u32>()
+                        .ok()
+                        .or_else(|| word_to_number(&a.to_lowercase()))
+                        .ok_or_else(|| anyhow::anyhow!("'{}' is not a number of commits.", a))?
+                }
+            };
+            if n < 2 {
+                anyhow::bail!("Squashing needs at least 2 commits (got {}).", n);
+            }
+            IntentType::ScopedWrite(ScopedWriteOp::SquashLastN { n })
+        }
+        "revert" => IntentType::ScopedWrite(ScopedWriteOp::Revert {
+            oid: capture_commit_ref(raw).unwrap_or_default(),
+        }),
+        "unstage" => IntentType::ScopedWrite(ScopedWriteOp::Unstage { paths: named }),
+        "stash" => IntentType::ScopedWrite(ScopedWriteOp::Stash),
+        "cleanup" => IntentType::ScopedWrite(ScopedWriteOp::CleanupIntent),
+        "discard_local" => {
+            IntentType::ScopedWrite(ScopedWriteOp::DiscardLocal { remote: origin() })
+        }
+        "force_push" => IntentType::ScopedWrite(ScopedWriteOp::ForcePush { remote: origin() }),
+        "init" => IntentType::ScopedWrite(ScopedWriteOp::Init),
+        "add_remote" => {
+            let url = match capture_url(raw) {
+                Some(u) => u,
+                None => required(ask, ArgKind::RemoteUrl)?,
+            };
+            IntentType::ScopedWrite(ScopedWriteOp::AddRemote {
+                name: capture_after_word(&q, &["called", "named"]).unwrap_or_else(origin),
+                url,
+            })
+        }
+        "find_lost_work" => IntentType::ScopedWrite(ScopedWriteOp::ForensicRecover),
+        "remotes" => IntentType::ReadOnly(ReadOnlyOp::Remotes),
+        "stash_pop" => IntentType::ScopedWrite(ScopedWriteOp::StashPop),
+        "pull_rebase" => IntentType::ScopedWrite(ScopedWriteOp::PullRebase { remote: origin() }),
+        "set_upstream" => {
+            // "track origin/develop" → (origin, develop); no target → current branch.
+            let (remote, branch) = match capture_after_word(&q, &["track", "to"]) {
+                Some(t) if t.contains('/') => {
+                    let (r, b) = t.split_once('/').unwrap_or(("origin", ""));
+                    (r.to_string(), b.to_string())
+                }
+                Some(t) => (origin(), t),
+                None => (origin(), String::new()),
+            };
+            IntentType::ScopedWrite(ScopedWriteOp::SetUpstream { remote, branch })
+        }
+        // Removal is confirmed by name downstream; default origin as before.
+        "remove_remote" => IntentType::ScopedWrite(ScopedWriteOp::RemoveRemote {
+            name: capture_after_word(&q, &["remote", "called", "named"])
+                .or_else(|| word_before(&q, "remote"))
+                .unwrap_or_else(origin),
+        }),
+        // Guarded downstream: only allowed when the repo has zero commits.
+        "delete_repo" => IntentType::ScopedWrite(ScopedWriteOp::DeleteRepo),
+        other => match build_in_progress(other) {
+            Some(it) => it,
+            None => anyhow::bail!("No operation '{}' to build.", other),
+        },
+    };
+    Ok(it)
+}
+
+/// Ask for a missing argument; an empty answer (including `--yes`, which can't
+/// type one) is an error — never a guessed default.
+fn required(
+    ask: &mut dyn FnMut(ArgKind) -> anyhow::Result<String>,
+    kind: ArgKind,
+) -> anyhow::Result<String> {
+    let a = ask(kind)?;
+    let a = a.trim().to_string();
+    if a.is_empty() {
+        anyhow::bail!(
+            "No {} given — nothing was done. Include it in your request.",
+            kind.noun()
+        );
+    }
+    Ok(a)
+}
+
+/// A user-typed ref must be a single git-legal token.
+fn ref_token(s: String) -> anyhow::Result<String> {
+    if is_single_git_ref_token(&s) {
+        Ok(s)
+    } else {
+        anyhow::bail!("'{}' is not a valid branch name.", s)
+    }
+}
+
+/// Words that are never a topic/branch on their own.
+const FILLER: &[&str] = &[
+    "the",
+    "a",
+    "an",
+    "my",
+    "this",
+    "that",
+    "these",
+    "those",
+    "all",
+    "some",
+    "any",
+    "new",
+    "only",
+    "just",
+    "everything",
+    "it",
+    "me",
+    "up",
+    "please",
+    "branch",
+    "called",
+    "named",
+    "to",
+    "onto",
+    "into",
+    "over",
+    "on",
+    "of",
+    "and",
+    "but",
+    "nothing",
+    "else",
+    "related",
+    // verbs: never a ref name when they sit next to "branch"/"remote"
+    "remove",
+    "delete",
+    "drop",
+    "unset",
+    "create",
+    "make",
+    "start",
+    "open",
+    "switch",
+    "change",
+    "go",
+    "checkout",
+    "use",
+    "set",
+];
+
+/// Topic for a scoped push. Generalises `capture_scoped_push` beyond the
+/// literal "push" verb ("ship the X fixes", "commit and push only the X work",
+/// "push everything related to X"); anything else → None (the user is asked).
+fn capture_topic(q: &str) -> Option<String> {
+    if let Some(t) = capture_scoped_push(q) {
+        return Some(t);
+    }
+    if let Some(i) = q.find(" related to ") {
+        let w = q[i + " related to ".len()..]
+            .split_whitespace()
+            .find(|w| !FILLER.contains(w))?;
+        let w = w.trim_matches(|c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_');
+        return (!w.is_empty()).then(|| w.to_string());
+    }
+    for verb in [
+        "commit and push only ",
+        "commit and push ",
+        "push only ",
+        "ship ",
+        "send up just ",
+        "send up ",
+        "send ",
+        "upload ",
+        "publish ",
+    ] {
+        if let Some(rest) = q.strip_prefix(verb) {
+            // Re-use the "<topic> <filter-noun>" shape of capture_scoped_push.
+            let rest: Vec<&str> = rest
+                .split_whitespace()
+                .take_while(|w| !matches!(*w, "but" | "and"))
+                .filter(|w| !FILLER.contains(w))
+                .collect();
+            if let Some(t) = capture_scoped_push(&format!("push {}", rest.join(" "))) {
+                return Some(t);
             }
         }
     }
+    None
 }
 
-// =============================================================================
-// Commit-message generation from diff
-// =============================================================================
-
-/// Cap on the diff bytes we feed to the model — keeps the prompt small for 3B.
-const MAX_DIFF_BYTES_FOR_MSG: usize = 6000;
-
-/// Build a compact patch text describing the changes that would be committed.
-/// `include_workdir=true` covers both staged AND unstaged changes (used by add_commit).
-/// `include_workdir=false` covers only the index vs HEAD (used by plain commit).
-fn build_diff_for_message(
-    repo: &git2::Repository,
-    include_workdir: bool,
-) -> anyhow::Result<String> {
-    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
-
-    let mut diff_opts = git2::DiffOptions::new();
-    diff_opts.context_lines(2);
-
-    let diff = if include_workdir {
-        repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut diff_opts))?
-    } else {
-        repo.diff_tree_to_index(head_tree.as_ref(), None, Some(&mut diff_opts))?
-    };
-
-    let mut buf = String::new();
-    let mut bytes_so_far = 0usize;
-    let mut truncated = false;
-
-    diff.print(git2::DiffFormat::Patch, |_delta, _hunk, line| {
-        if bytes_so_far >= MAX_DIFF_BYTES_FOR_MSG {
-            truncated = true;
-            return true;
-        }
-        let prefix = match line.origin() {
-            '+' => "+",
-            '-' => "-",
-            _ => " ",
-        };
-        if let Ok(content) = std::str::from_utf8(line.content()) {
-            buf.push_str(prefix);
-            buf.push_str(content);
-            bytes_so_far += content.len() + 1;
-        }
-        true
-    })?;
-
-    if truncated {
-        buf.push_str("\n(diff truncated)\n");
+/// Name for a new branch: the canonical prefixes, or a ref token right after
+/// "called"/"named"/"as".
+fn capture_new_branch_name(q: &str) -> Option<String> {
+    if let Some(IntentType::ScopedWrite(ScopedWriteOp::Branch { name })) =
+        try_canonical_parameterized(q)
+    {
+        return Some(name);
     }
-    Ok(buf)
+    capture_after_word(q, &["called", "named", "as"]).or_else(|| word_before_branch(q))
 }
 
-/// Ask the LLM for a one-line conventional-commit message based on the diff.
-/// Falls back to a generic message on any failure.
-pub async fn generate_commit_message(
-    repo: &git2::Repository,
-    include_workdir: bool,
-    config: &Config,
-) -> String {
-    let diff_text = match build_diff_for_message(repo, include_workdir) {
-        Ok(s) if !s.trim().is_empty() => s,
-        _ => return "update files".to_string(),
-    };
+/// Target of a checkout: the canonical prefixes, "the X branch", or a ref token
+/// after "to"/"onto".
+fn capture_checkout_target(q: &str) -> Option<String> {
+    if let Some(IntentType::ScopedWrite(ScopedWriteOp::Checkout { target })) =
+        try_canonical_parameterized(q)
+    {
+        return Some(target);
+    }
+    capture_after_word(q, &["to", "onto"]).or_else(|| word_before_branch(q))
+}
 
-    let prompt = format!("{}\n\nChanges:\n{}", *COMMIT_MESSAGE_PROMPT, diff_text);
+/// "the release-2.1 branch" → release-2.1 (the token right before "branch").
+fn word_before_branch(q: &str) -> Option<String> {
+    word_before(q, "branch")
+}
 
-    // Bare-text mode — must NOT use call_ollama (which forces format:"json").
-    let raw = match call_ollama_text(&prompt, "", config, 0.2).await {
-        Ok(r) => r,
-        Err(_) => return "update files".to_string(),
-    };
+/// The ref-shaped, non-filler token right before `marker`.
+fn word_before(q: &str, marker: &str) -> Option<String> {
+    let words: Vec<&str> = q.split_whitespace().collect();
+    let i = words.iter().position(|w| *w == marker)?;
+    let w = *words.get(i.checked_sub(1)?)?;
+    (!FILLER.contains(&w) && is_single_git_ref_token(w)).then(|| w.to_string())
+}
 
-    // Pick the first line that actually looks like a commit message.
-    // Skip empty lines, markdown fences, and JSON noise ({}, [], "...":).
-    let candidate = raw
-        .lines()
-        .map(|l| l.trim())
-        .find(|l| {
-            !l.is_empty()
-                && !l.starts_with("```")
-                && !l.starts_with('{')
-                && !l.starts_with('}')
-                && !l.starts_with('[')
-                && !l.starts_with(']')
-                // Reject lines that look like JSON key-value: "message":
-                && !(l.starts_with('"') && l.contains("\":"))
+/// The first ref-shaped, non-filler token after any of `markers`.
+fn capture_after_word(q: &str, markers: &[&str]) -> Option<String> {
+    let words: Vec<&str> = q.split_whitespace().collect();
+    let i = words.iter().position(|w| markers.contains(w))?;
+    words[i + 1..]
+        .iter()
+        .map(|w| w.trim_matches(|c: char| matches!(c, ',' | '.' | '?' | '!' | '\'' | '"')))
+        .find(|w| !FILLER.contains(w))
+        .filter(|w| is_single_git_ref_token(w))
+        .map(String::from)
+}
+
+/// A commit count anywhere in the query (digit or number word), ≥ 2.
+fn count_in(q: &str) -> Option<u32> {
+    first_number(q)
+        .or_else(|| word_to_number(q))
+        .filter(|n| *n >= 2)
+}
+
+fn first_number(q: &str) -> Option<u32> {
+    q.split(|c: char| !c.is_ascii_digit())
+        .find(|t| !t.is_empty())
+        .and_then(|t| t.parse().ok())
+}
+
+/// A user-supplied commit message: a quoted string, or text after
+/// "message:"/"with message"/"msg:"/"-m". Case preserved.
+fn capture_commit_message(raw: &str) -> Option<String> {
+    if let Some(m) = extract_quoted(raw) {
+        return Some(m);
+    }
+    let lower = raw.to_lowercase();
+    for delim in [
+        "with message ",
+        "message: ",
+        "message:",
+        "msg: ",
+        "msg:",
+        "-m ",
+    ] {
+        if let Some(i) = lower.find(delim) {
+            let m = raw[i + delim.len()..].trim();
+            if !m.is_empty() {
+                return Some(m.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// A commit reference: a 7–40 char hex sha or HEAD~N / HEAD^.
+fn capture_commit_ref(raw: &str) -> Option<String> {
+    raw.split_whitespace()
+        .map(|w| w.trim_matches(|c: char| matches!(c, ',' | '.' | '?' | '!' | '\'' | '"' | '`')))
+        .find(|w| {
+            let hex = w.len() >= 7
+                && w.len() <= 40
+                && w.chars().all(|c| c.is_ascii_hexdigit())
+                && w.chars().any(|c| c.is_ascii_digit());
+            let head = w.starts_with("HEAD~") || w.starts_with("HEAD^");
+            hex || head
         })
-        .unwrap_or("update files");
+        .map(String::from)
+}
 
-    let cleaned = candidate
-        .trim_start_matches("- ")
-        .trim_start_matches("* ")
-        .trim_matches(|c: char| c == '"' || c == '`' || c == '\'')
-        .trim();
+/// A remote URL token (scheme://… or scp-style git@host:path).
+fn capture_url(raw: &str) -> Option<String> {
+    raw.split_whitespace()
+        .find(|w| w.contains("://") || (w.starts_with("git@") && w.contains(':')))
+        .map(|w| {
+            w.trim_matches(|c: char| matches!(c, ',' | '\'' | '"'))
+                .to_string()
+        })
+}
 
-    if cleaned.is_empty() {
-        return "update files".to_string();
-    }
-
-    if cleaned.len() > 72 {
-        // Truncate at byte boundary safely.
-        let mut end = 70;
-        while !cleaned.is_char_boundary(end) && end > 0 {
-            end -= 1;
+/// Files the query names, matched against the repo's changed files by full
+/// path or basename (case-insensitive). Deterministic replacement for the old
+/// LLM `files` field; unknown names are simply not matched.
+fn named_files(raw: &str, ctx: &RepoContext) -> Vec<String> {
+    let s = &ctx.status;
+    let known: Vec<&String> = s
+        .staged
+        .iter()
+        .chain(&s.modified)
+        .chain(&s.untracked)
+        .collect();
+    let mut out: Vec<String> = Vec::new();
+    for w in raw.split(|c: char| c.is_whitespace() || c == ',') {
+        let w = w.trim_matches(|c: char| matches!(c, '.' | '?' | '!' | '\'' | '"' | '`'));
+        if w.is_empty() {
+            continue;
         }
-        return format!("{}…", &cleaned[..end]);
-    }
-    cleaned.to_string()
-}
-
-// =============================================================================
-// Ollama HTTP client
-// =============================================================================
-
-/// Build the JSON schema that constrains the classifier output.
-/// Ollama (>= v0.5) decodes against this schema at the token level,
-/// making it impossible to return invalid enum values or missing required fields.
-fn classifier_schema() -> serde_json::Value {
-    serde_json::json!({
-        "type": "object",
-        "properties": {
-            // Property order MATTERS — llama.cpp's grammar generator emits
-            // properties in declaration order. Forcing "reasoning" first means
-            // the model must commit to a brief justification before picking
-            // an intent. Costs ~50 tokens, materially improves accuracy on
-            // ambiguous queries.
-            "reasoning": {
-                "type": "string",
-                "minLength": 10,
-                "maxLength": 200
-            },
-            "intent": {
-                "type": "string",
-                "enum": ["read_only", "scoped_write", "feature_pipeline", "clarify"]
-            },
-            "op": {
-                "type": "string",
-                "enum": [
-                    "status", "log", "diff", "remotes", "branches", "config",
-                    "add", "commit", "add_commit", "branch", "checkout", "stash",
-                    "stash_pop", "reset", "pull", "push", "sync", "init",
-                    "add_remote", "remove_remote", "delete_repo", "show", "undo",
-                    "fetch", "merge_preview",
-                    "pull_rebase", "rebase", "force_push", "force_push_with_lease",
-                    "discard_local", "reset_to_remote",
-                    "amend", "revert", "unstage", "set_upstream", "squash",
-                    ""
-                ]
-            },
-            "files": { "type": "array", "items": { "type": "string" } },
-            "feature_hint": { "type": "string" },
-            "message": { "type": "string" },
-            "remote_name": { "type": "string" },
-            "remote_url": { "type": "string" },
-            "reset_mode": { "type": "string", "enum": ["soft", "mixed", "hard", ""] },
-            "count": { "type": "integer", "minimum": 1, "maximum": 100 },
-            "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
-            "question": { "type": "string" }
-        },
-        "required": ["reasoning", "intent", "confidence"]
-    })
-}
-
-/// Call Ollama with a strict JSON schema, falling back to free-form JSON
-/// if the server rejects the schema (older Ollama versions).
-pub async fn call_ollama_with_schema(
-    prompt: &str,
-    system: &str,
-    config: &Config,
-    temperature: f32,
-    schema: serde_json::Value,
-) -> anyhow::Result<String> {
-    match call_ollama_inner(prompt, system, config, temperature, schema).await {
-        Ok(text) => Ok(text),
-        Err(_) => {
-            // Older Ollama versions reject schema with 4xx — retry with free-form JSON.
-            call_ollama(prompt, system, config, temperature).await
+        let wl = w.to_lowercase();
+        for path in &known {
+            let pl = path.to_lowercase();
+            let base = pl.rsplit('/').next().unwrap_or(&pl);
+            if (pl == wl || base == wl) && !out.contains(path) {
+                out.push((*path).clone());
+            }
         }
     }
-}
-
-async fn call_ollama_inner(
-    prompt: &str,
-    system: &str,
-    config: &Config,
-    temperature: f32,
-    format: serde_json::Value,
-) -> anyhow::Result<String> {
-    let url = format!("{}/api/generate", config.ollama_url.trim_end_matches('/'));
-
-    let body = serde_json::json!({
-        "model": config.model,
-        "prompt": prompt,
-        "system": system,
-        "format": format,
-        "stream": false,
-        "options": {
-            "temperature": temperature,
-            // Greedy decode — eliminates sampling noise for classification.
-            "top_k": 1,
-            "top_p": 0.1,
-            // Repeat penalty is meaningless for short JSON output.
-            "repeat_penalty": 1.0,
-            // Our prompts are ~2KB; 2048 is plenty and halves KV-cache cost.
-            "num_ctx": 2048,
-            // Cap output — even with CoT field, a classifier should never need more.
-            "num_predict": 512
-        }
-    });
-
-    call_ollama_post(&url, &body).await
-}
-
-async fn call_ollama_post(url: &str, body: &serde_json::Value) -> anyhow::Result<String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(60))
-        .build()
-        .context("Failed to build HTTP client")?;
-
-    let resp = client
-        .post(url)
-        .json(body)
-        .send()
-        .await
-        .with_context(|| {
-            format!(
-                "Failed to connect to Ollama at {}.\n  Run `gitrust setup` to install and configure Ollama, \
-                 or start it manually with `ollama serve`.",
-                url
-            )
-        })?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        return Err(anyhow::anyhow!("Ollama returned HTTP {}: {}", status, text));
-    }
-
-    let json: serde_json::Value = resp
-        .json()
-        .await
-        .context("Ollama response was not valid JSON")?;
-
-    let response_text = json["response"]
-        .as_str()
-        .ok_or_else(|| anyhow::anyhow!("Ollama response missing 'response' field"))?
-        .to_string();
-
-    Ok(response_text)
-}
-
-/// Call Ollama's /api/generate endpoint with free-form JSON output mode.
-/// Returns the raw response text (may be JSON or prose with fences).
-pub async fn call_ollama(
-    prompt: &str,
-    system: &str,
-    config: &Config,
-    temperature: f32,
-) -> anyhow::Result<String> {
-    let url = format!("{}/api/generate", config.ollama_url.trim_end_matches('/'));
-
-    let body = serde_json::json!({
-        "model": config.model,
-        "prompt": prompt,
-        "system": system,
-        "format": "json",
-        "stream": false,
-        "options": {
-            "temperature": temperature,
-            "top_k": 1,
-            "top_p": 0.1,
-            "repeat_penalty": 1.0,
-            "num_ctx": 2048,
-            "num_predict": 512
-        }
-    });
-
-    let response_text = call_ollama_post(&url, &body).await?;
-
-    Ok(response_text)
-}
-
-/// Call Ollama's /api/generate WITHOUT forcing JSON output.
-/// Used when we want a bare-text response (e.g. commit messages).
-pub async fn call_ollama_text(
-    prompt: &str,
-    system: &str,
-    config: &Config,
-    temperature: f32,
-) -> anyhow::Result<String> {
-    let url = format!("{}/api/generate", config.ollama_url.trim_end_matches('/'));
-
-    let body = serde_json::json!({
-        "model": config.model,
-        "prompt": prompt,
-        "system": system,
-        // No "format" — the model is free to emit plain text.
-        "stream": false,
-        "options": {
-            "temperature": temperature,
-            "top_k": 40,
-            "top_p": 0.9,
-            "repeat_penalty": 1.1,
-            "num_ctx": 4096,
-            "num_predict": 128
-        }
-    });
-
-    call_ollama_post(&url, &body).await
-}
-
-/// Embed one or more strings via Ollama's `/api/embed` using the SAME model as
-/// classification (`config.model`) — no second model, no extra RAM (verified on
-/// the 8 GB target). Returns one vector per input, in order. Used by the
-/// embedding router (`router.rs`).
-pub async fn embed_texts(inputs: &[String], config: &Config) -> anyhow::Result<Vec<Vec<f32>>> {
-    if inputs.is_empty() {
-        return Ok(vec![]);
-    }
-    let url = format!("{}/api/embed", config.ollama_url.trim_end_matches('/'));
-    let body = serde_json::json!({
-        "model": config.model,
-        "input": inputs,
-    });
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .context("Failed to build HTTP client")?;
-    let resp = client
-        .post(&url)
-        .json(&body)
-        .send()
-        .await
-        .with_context(|| format!("Failed to reach Ollama /api/embed at {}", url))?;
-    if !resp.status().is_success() {
-        return Err(anyhow::anyhow!(
-            "Ollama /api/embed returned HTTP {}",
-            resp.status()
-        ));
-    }
-    let json: serde_json::Value = resp
-        .json()
-        .await
-        .context("Ollama /api/embed response was not valid JSON")?;
-    let arr = json["embeddings"]
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("Ollama /api/embed response missing 'embeddings'"))?;
-    let mut out = Vec::with_capacity(arr.len());
-    for row in arr {
-        let v: Vec<f32> = row
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("embedding row was not an array"))?
-            .iter()
-            .filter_map(|x| x.as_f64().map(|f| f as f32))
-            .collect();
-        out.push(v);
-    }
-    Ok(out)
-}
-
-// =============================================================================
-// JSON repair
-// =============================================================================
-
-/// Strip markdown fences, trim whitespace, fix common JSON issues from LLM output.
-pub fn json_repair(raw: &str) -> String {
-    let mut s = raw.trim().to_string();
-
-    // Strip markdown code fences
-    for prefix in &["```json\n", "```json", "```\n", "```"] {
-        if s.starts_with(prefix) {
-            s = s[prefix.len()..].to_string();
-            break;
-        }
-    }
-    if s.ends_with("```") {
-        s = s[..s.len() - 3].to_string();
-    }
-
-    s = s.trim().to_string();
-
-    // If the string starts with `{` and ends before a `}`, try to close it
-    if s.starts_with('{') && !s.ends_with('}') {
-        s.push('}');
-    }
-
-    // Replace common LLM typos: Python None/True/False → JSON null/true/false
-    s = s.replace(": None", ": null");
-    s = s.replace(": True", ": true");
-    s = s.replace(": False", ": false");
-
-    s
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_json_repair_strips_markdown_fence() {
-        let raw = "```json\n{\"intent\": \"read_only\"}\n```";
-        let result = json_repair(raw);
-        assert_eq!(result, "{\"intent\": \"read_only\"}");
-    }
-
-    #[test]
-    fn test_json_repair_strips_plain_fence() {
-        let raw = "```\n{\"op\": \"status\"}\n```";
-        let result = json_repair(raw);
-        assert_eq!(result, "{\"op\": \"status\"}");
-    }
-
-    #[test]
-    fn test_json_repair_no_fence() {
-        let raw = "  {\"intent\": \"clarify\"} ";
-        let result = json_repair(raw);
-        assert_eq!(result, "{\"intent\": \"clarify\"}");
-    }
-
-    #[test]
-    fn test_json_repair_fixes_python_literals() {
-        let raw = r#"{"flag": None, "ok": True}"#;
-        let result = json_repair(raw);
-        assert!(result.contains("null"));
-        assert!(result.contains("true"));
-    }
-
-    #[test]
-    fn test_json_repair_closes_open_brace() {
-        let raw = r#"{"intent": "status""#;
-        let result = json_repair(raw);
-        assert!(result.ends_with('}'));
-    }
-
-    #[test]
-    fn test_build_intent_type_read_only_status() {
-        let ri = RawIntent {
-            intent: "read_only".to_string(),
-            op: "status".to_string(),
-            confidence: 0.9,
-            ..Default::default()
-        };
-        let result = build_intent_type(&ri, "show status").unwrap();
-        assert!(matches!(result, IntentType::ReadOnly(ReadOnlyOp::Status)));
-    }
-
-    #[test]
-    fn test_build_intent_type_read_only_log() {
-        let ri = RawIntent {
-            intent: "read_only".to_string(),
-            op: "log".to_string(),
-            confidence: 0.9,
-            count: Some(5),
-            ..Default::default()
-        };
-        let result = build_intent_type(&ri, "show last 5 commits").unwrap();
-        match result {
-            IntentType::ReadOnly(ReadOnlyOp::Log { count }) => assert_eq!(count, 5),
-            _ => panic!("Expected ReadOnly Log"),
-        }
-    }
-
-    #[test]
-    fn test_build_intent_type_scoped_write_commit_with_message() {
-        let ri = RawIntent {
-            intent: "scoped_write".to_string(),
-            op: "commit".to_string(),
-            message: "feat: add login".to_string(),
-            confidence: 0.85,
-            ..Default::default()
-        };
-        let result = build_intent_type(&ri, "commit login changes").unwrap();
-        match result {
-            IntentType::ScopedWrite(ScopedWriteOp::Commit { message }) => {
-                assert!(matches!(message, CommitMessage::Provided(_)));
-                if let CommitMessage::Provided(m) = message {
-                    assert_eq!(m, "feat: add login");
-                }
-            }
-            _ => panic!("Expected ScopedWrite Commit"),
-        }
-    }
-
-    #[test]
-    fn test_build_intent_type_feature_pipeline_push() {
-        let ri = RawIntent {
-            intent: "feature_pipeline".to_string(),
-            op: "push".to_string(),
-            feature_hint: "login".to_string(),
-            confidence: 0.9,
-            ..Default::default()
-        };
-        let result = build_intent_type(&ri, "push login changes").unwrap();
-        match result {
-            IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush { feature_hint }) => {
-                assert_eq!(feature_hint, "login");
-            }
-            _ => panic!("Expected FeaturePipeline AddCommitPush"),
-        }
-    }
-
-    #[test]
-    fn test_build_intent_type_feature_pipeline_sync_rebase() {
-        let ri = RawIntent {
-            intent: "feature_pipeline".to_string(),
-            op: "sync".to_string(),
-            confidence: 0.8,
-            ..Default::default()
-        };
-        let result = build_intent_type(&ri, "sync with main via rebase").unwrap();
-        match result {
-            IntentType::FeaturePipeline(FeaturePipelineOp::Sync { strategy }) => {
-                assert!(matches!(strategy, SyncStrategy::Rebase));
-            }
-            _ => panic!("Expected FeaturePipeline Sync"),
-        }
-    }
-
-    #[test]
-    fn test_build_intent_type_scoped_write_reset_hard() {
-        let ri = RawIntent {
-            intent: "scoped_write".to_string(),
-            op: "reset".to_string(),
-            reset_mode: "hard".to_string(),
-            confidence: 0.9,
-            ..Default::default()
-        };
-        let result = build_intent_type(&ri, "hard reset").unwrap();
-        match result {
-            IntentType::ScopedWrite(ScopedWriteOp::Reset { mode }) => {
-                assert_eq!(mode, ResetMode::Hard);
-            }
-            _ => panic!("Expected ScopedWrite Reset Hard"),
-        }
-    }
-
-    #[test]
-    fn test_build_intent_type_unknown_returns_error() {
-        let ri = RawIntent {
-            intent: "totally_unknown".to_string(),
-            confidence: 0.9,
-            ..Default::default()
-        };
-        let result = build_intent_type(&ri, "do something");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_derive_draft_message_strips_verb() {
-        let msg = derive_draft_message("commit login form changes");
-        assert!(msg.starts_with("Login"));
-    }
-
-    #[test]
-    fn test_derive_draft_message_truncates() {
-        let long_query = "add ".to_string() + &"x".repeat(100);
-        let msg = derive_draft_message(&long_query);
-        assert!(msg.len() <= 73); // 72 chars + ellipsis
-    }
 
     #[test]
     fn test_canonical_status() {
@@ -1853,6 +1416,271 @@ mod tests {
             "pop",
         ] {
             assert!(try_canonical(q).is_some(), "canonical missed: {:?}", q);
+        }
+    }
+
+    // ---- Kev routing: repo-state line + deterministic argument capture ----
+
+    fn kctx() -> RepoContext {
+        let mut c = RepoContext::empty();
+        c.branch = "main".into();
+        c.is_empty_repo = false;
+        c.situation = crate::commands::RepoSituation::Normal;
+        c
+    }
+
+    /// Build with an `ask` that must not be called.
+    fn build(op: &str, q: &str) -> IntentType {
+        build_from_op(op, q, &kctx(), &mut |k| {
+            panic!("unexpected ask for {:?}", k)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn test_repo_state_line_matches_training_shapes() {
+        let mut c = kctx();
+        assert_eq!(repo_state_line(&c), "clean repo, on branch main");
+        c.status.modified = vec!["a.rs".into(), "b.rs".into()];
+        c.status.staged = vec!["c.rs".into()];
+        c.upstream = Some("refs/remotes/origin/main".into());
+        c.ahead = 1;
+        assert_eq!(
+            repo_state_line(&c),
+            "on branch main, 2 files modified, 1 staged file, 1 commit ahead of origin"
+        );
+        c.situation = crate::commands::RepoSituation::MidRebase {
+            current: 2,
+            total: 5,
+            conflicted: vec![],
+        };
+        assert!(repo_state_line(&c).ends_with("rebase in progress (2/5)"));
+    }
+
+    #[test]
+    fn test_repo_state_line_uses_the_upstream_remote_name() {
+        let mut c = kctx();
+        c.upstream = Some("refs/remotes/upstream/main".into());
+        c.behind = 4;
+        assert_eq!(
+            repo_state_line(&c),
+            "on branch main, behind upstream by 4 commits"
+        );
+    }
+
+    #[test]
+    fn test_build_topic_beyond_the_push_verb() {
+        for (q, want) in [
+            ("ship the payments fixes", "payments"),
+            ("commit and push only the billing feature", "billing"),
+            ("push everything related to search", "search"),
+            ("send up just the cart stuff", "cart"),
+        ] {
+            match build("scoped_push", q) {
+                IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush { feature_hint }) => {
+                    assert_eq!(feature_hint, want, "{}", q)
+                }
+                other => panic!("{}: {:?}", q, other),
+            }
+        }
+    }
+
+    #[test]
+    fn test_build_asks_for_a_missing_topic() {
+        let mut asked = None;
+        let it = build_from_op("scoped_push", "push only some of it", &kctx(), &mut |k| {
+            asked = Some(k);
+            Ok("export".into())
+        })
+        .unwrap();
+        assert_eq!(asked, Some(ArgKind::Topic));
+        assert!(
+            matches!(it, IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush { ref feature_hint }) if feature_hint == "export")
+        );
+    }
+
+    #[test]
+    fn test_build_empty_answer_is_an_error_not_a_default() {
+        let r = build_from_op("branch", "make me a new branch", &kctx(), &mut |_| {
+            Ok("  ".into())
+        });
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_build_branch_and_checkout_names() {
+        for (q, want) in [
+            ("spin up a branch called hotfix", "hotfix"),
+            ("start a feature-x branch", "feature-x"),
+            ("branch off as release-2.1", "release-2.1"),
+        ] {
+            assert!(
+                matches!(build("branch", q), IntentType::ScopedWrite(ScopedWriteOp::Branch { ref name }) if name == want),
+                "{}",
+                q
+            );
+        }
+        for (q, want) in [
+            ("jump over to the dev branch", "dev"),
+            ("hop onto staging", "staging"),
+            ("change branch to develop", "develop"),
+            ("go to the release-2.1 branch", "release-2.1"),
+        ] {
+            assert!(
+                matches!(build("checkout", q), IntentType::ScopedWrite(ScopedWriteOp::Checkout { ref target }) if target == want),
+                "{}",
+                q
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_squash_count_or_ask() {
+        assert!(matches!(
+            build("squash", "collapse my last 4 commits"),
+            IntentType::ScopedWrite(ScopedWriteOp::SquashLastN { n: 4 })
+        ));
+        assert!(matches!(
+            build("squash", "fold the last five together"),
+            IntentType::ScopedWrite(ScopedWriteOp::SquashLastN { n: 5 })
+        ));
+        let it = build_from_op("squash", "squash my recent commits", &kctx(), &mut |_| {
+            Ok("three".into())
+        })
+        .unwrap();
+        assert!(matches!(
+            it,
+            IntentType::ScopedWrite(ScopedWriteOp::SquashLastN { n: 3 })
+        ));
+        assert!(
+            build_from_op("squash", "squash my recent commits", &kctx(), &mut |_| Ok(
+                "1".into()
+            ))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_build_commit_message_is_captured_never_drafted() {
+        match build("add_commit", "commit all with message 'add search'") {
+            IntentType::ScopedWrite(ScopedWriteOp::AddAndCommit {
+                message: CommitMessage::Provided(m),
+                ..
+            }) => assert_eq!(m, "add search"),
+            other => panic!("{:?}", other),
+        }
+        match build("add_commit", "record all my changes in a commit") {
+            IntentType::ScopedWrite(ScopedWriteOp::AddAndCommit {
+                message: CommitMessage::Draft(d),
+                files: FileSelection::All,
+            }) => assert!(d.is_empty()),
+            other => panic!("{:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_build_named_files_match_changed_paths() {
+        let mut c = kctx();
+        c.status.modified = vec!["src/app.py".into(), "README.md".into()];
+        c.status.staged = vec!["notes.txt".into()];
+        let it = build_from_op(
+            "add_commit",
+            "commit app.py and readme.md",
+            &c,
+            &mut |_| unreachable!(),
+        )
+        .unwrap();
+        match it {
+            IntentType::ScopedWrite(ScopedWriteOp::AddAndCommit {
+                files: FileSelection::Explicit(f),
+                ..
+            }) => {
+                assert_eq!(f, vec!["src/app.py".to_string(), "README.md".to_string()])
+            }
+            other => panic!("{:?}", other),
+        }
+        let it = build_from_op(
+            "unstage",
+            "take notes.txt out of staging",
+            &c,
+            &mut |_| unreachable!(),
+        )
+        .unwrap();
+        assert!(
+            matches!(it, IntentType::ScopedWrite(ScopedWriteOp::Unstage { ref paths }) if paths == &vec!["notes.txt".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_build_amend_keeps_a_quoted_message() {
+        match build(
+            "amend",
+            "change the message of my latest commit to 'add search'",
+        ) {
+            IntentType::ScopedWrite(ScopedWriteOp::Amend {
+                message: Some(m), ..
+            }) => assert_eq!(m, "add search"),
+            other => panic!("{:?}", other),
+        }
+        assert!(matches!(
+            build("amend", "put app.py into the previous commit"),
+            IntentType::ScopedWrite(ScopedWriteOp::Amend {
+                message: None,
+                include_staged: true
+            })
+        ));
+    }
+
+    #[test]
+    fn test_build_refs_urls_and_remotes() {
+        assert!(
+            matches!(build("revert", "revert commit 9f2e7d1"), IntentType::ScopedWrite(ScopedWriteOp::Revert { ref oid }) if oid == "9f2e7d1")
+        );
+        assert!(
+            matches!(build("revert", "revert the bad one"), IntentType::ScopedWrite(ScopedWriteOp::Revert { ref oid }) if oid.is_empty())
+        );
+        assert!(
+            matches!(build("show", "show me HEAD~2"), IntentType::ReadOnly(ReadOnlyOp::Show { target: Some(ref t) }) if t == "HEAD~2")
+        );
+        assert!(
+            matches!(build("add_remote", "add a remote called upstream at https://github.com/acme/site.git"),
+            IntentType::ScopedWrite(ScopedWriteOp::AddRemote { ref name, ref url }) if name == "upstream" && url == "https://github.com/acme/site.git")
+        );
+        assert!(
+            matches!(build("remove_remote", "delete the upstream remote"), IntentType::ScopedWrite(ScopedWriteOp::RemoveRemote { ref name }) if name == "upstream")
+        );
+        assert!(
+            matches!(build("remove_remote", "delete remote"), IntentType::ScopedWrite(ScopedWriteOp::RemoveRemote { ref name }) if name == "origin")
+        );
+        assert!(
+            matches!(build("set_upstream", "make this branch track origin/develop"),
+            IntentType::ScopedWrite(ScopedWriteOp::SetUpstream { ref remote, ref branch }) if remote == "origin" && branch == "develop")
+        );
+    }
+
+    #[test]
+    fn test_every_kev_op_builds() {
+        // Every routable option must have a builder arm — catches an op added
+        // to kev_ops.json without teaching build_from_op (the Kev analogue of
+        // the old "ungoverned intent" finding). Arg ops get a canned answer.
+        for (op, _) in crate::kev::ops() {
+            if op == crate::kev::REJECT {
+                continue;
+            }
+            let r = build_from_op(op, "do it", &kctx(), &mut |k| {
+                Ok(match k {
+                    ArgKind::SquashCount => "2".into(),
+                    ArgKind::RemoteUrl => "https://x.test/r.git".into(),
+                    _ => "feature-x".into(),
+                })
+            });
+            assert!(r.is_ok(), "op '{}' has no builder: {:?}", op, r.err());
+        }
+        for fam in ["rebase", "merge", "cherry_pick", "revert"] {
+            let (_, opts) = crate::kev::in_progress_question(fam).unwrap();
+            for (op, _) in opts.iter().filter(|(o, _)| o != "something_else") {
+                assert!(build_in_progress(op).is_some(), "{}", op);
+            }
         }
     }
 }

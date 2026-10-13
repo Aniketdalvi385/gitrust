@@ -20,7 +20,7 @@ import json, math, re, sys, time, urllib.request, os
 HERE = os.path.dirname(os.path.abspath(__file__))
 OLLAMA = "http://localhost:11434"
 MODEL = os.environ.get("EVAL_MODEL", "qwen2.5:3b")
-PROMPTS_RS = os.path.join(HERE, "..", "..", "gitrust", "src", "prompts.rs")
+PROMPTS_RS = os.path.join(HERE, "legacy_prompts.rs")  # the retired qwen2.5:3b prompt, kept to reproduce the paper
 
 # ---------------------------------------------------------------- ollama calls
 def _post(path, body):

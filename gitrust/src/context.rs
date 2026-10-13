@@ -15,7 +15,6 @@ pub struct RepoContext {
     pub ahead: usize,
     pub behind: usize,
     pub status: StatusSummary,
-    pub remotes: Vec<String>,
     /// Origin remote URL if configured — used to derive web URLs.
     pub origin_url: Option<String>,
     pub last_commit: String,
@@ -75,7 +74,6 @@ pub fn build_context(repo: &Repository) -> anyhow::Result<RepoContext> {
         })
         .unwrap_or_else(|| "(no commits yet)".to_string());
 
-    let remotes = list_remotes(repo);
     let origin_url = repo
         .find_remote("origin")
         .ok()
@@ -90,7 +88,6 @@ pub fn build_context(repo: &Repository) -> anyhow::Result<RepoContext> {
         ahead,
         behind,
         status,
-        remotes,
         origin_url,
         last_commit,
         is_empty_repo,
@@ -100,8 +97,8 @@ pub fn build_context(repo: &Repository) -> anyhow::Result<RepoContext> {
     })
 }
 
-/// One-line, plain-language description of a non-trivial situation, for the LLM
-/// prompt and status header. Returns `None` for Normal / EmptyRepo / NotARepo
+/// One-line, plain-language description of a non-trivial situation, for Kev's
+/// repo-state line (`intent::repo_state_line`). Returns `None` for Normal / EmptyRepo / NotARepo
 /// (EmptyRepo is already conveyed by the "(no commits yet)" last-commit line).
 pub fn describe_situation(s: &RepoSituation) -> Option<String> {
     use RepoSituation as S;
@@ -350,7 +347,6 @@ impl RepoContext {
                 untracked: vec![],
                 untracked_overflow: 0,
             },
-            remotes: vec![],
             origin_url: None,
             last_commit: "(unavailable)".to_string(),
             is_empty_repo: true,
@@ -462,45 +458,6 @@ impl RepoContext {
         }
         None
     }
-
-    pub fn to_prompt_string(&self) -> String {
-        let mut out = format!("Branch: {}", self.branch);
-        if let Some(ref up) = self.upstream {
-            out += &format!(" ({}, {} ahead, {} behind)", up, self.ahead, self.behind);
-        }
-        out += &format!("\nLast commit: {}", self.last_commit);
-
-        fn fmt_files(label: &str, files: &[String], overflow: usize) -> String {
-            if files.is_empty() {
-                return String::new();
-            }
-            let extra = if overflow > 0 {
-                format!(" (+{} more)", overflow)
-            } else {
-                String::new()
-            };
-            format!("\n{}: {}{}", label, files.join(", "), extra)
-        }
-
-        out += &fmt_files("Staged", &self.status.staged, self.status.staged_overflow);
-        out += &fmt_files(
-            "Modified",
-            &self.status.modified,
-            self.status.modified_overflow,
-        );
-        out += &fmt_files(
-            "Untracked",
-            &self.status.untracked,
-            self.status.untracked_overflow,
-        );
-        out += &format!("\nRemotes: {}", self.remotes.join(", "));
-        // Surface the situation so the classifier never advises a
-        // state-inappropriate action (e.g. "checkout a branch" mid-rebase, S12).
-        if let Some(desc) = describe_situation(&self.situation) {
-            out += &format!("\nState: {}", desc);
-        }
-        out
-    }
 }
 
 fn get_upstream_info(repo: &Repository, branch: &str) -> (Option<String>, usize, usize) {
@@ -517,12 +474,6 @@ fn get_upstream_info(repo: &Repository, branch: &str) -> (Option<String>, usize,
         .graph_ahead_behind(local_oid, upstream_oid)
         .unwrap_or((0, 0));
     (Some(upstream_ref), ahead, behind)
-}
-
-fn list_remotes(repo: &Repository) -> Vec<String> {
-    repo.remotes()
-        .map(|r| r.iter().flatten().map(String::from).collect())
-        .unwrap_or_default()
 }
 
 fn build_status_summary(repo: &Repository) -> anyhow::Result<StatusSummary> {
@@ -627,63 +578,6 @@ mod tests {
         assert!(ctx.is_empty_repo);
         assert_eq!(ctx.last_commit, "(no commits yet)");
         assert!(ctx.status.staged.is_empty());
-    }
-
-    #[test]
-    fn test_to_prompt_string_basic() {
-        let ctx = RepoContext {
-            branch: "main".to_string(),
-            upstream: None,
-            ahead: 0,
-            behind: 0,
-            status: StatusSummary {
-                staged: vec![],
-                staged_overflow: 0,
-                modified: vec!["src/main.rs".to_string()],
-                modified_overflow: 0,
-                untracked: vec![],
-                untracked_overflow: 0,
-            },
-            remotes: vec!["origin".to_string()],
-            origin_url: None,
-            last_commit: "abc1234 \"initial commit\"".to_string(),
-            is_empty_repo: false,
-            is_detached: false,
-            has_stash: false,
-            situation: RepoSituation::Normal,
-        };
-        let prompt = ctx.to_prompt_string();
-        assert!(prompt.contains("Branch: main"));
-        assert!(prompt.contains("Modified: src/main.rs"));
-        assert!(prompt.contains("Remotes: origin"));
-    }
-
-    #[test]
-    fn test_to_prompt_string_with_overflow() {
-        let ctx = RepoContext {
-            branch: "feat/test".to_string(),
-            upstream: Some("refs/remotes/origin/feat/test".to_string()),
-            ahead: 2,
-            behind: 1,
-            status: StatusSummary {
-                staged: vec!["a.rs".to_string()],
-                staged_overflow: 5,
-                modified: vec![],
-                modified_overflow: 0,
-                untracked: vec![],
-                untracked_overflow: 0,
-            },
-            remotes: vec!["origin".to_string()],
-            origin_url: None,
-            last_commit: "def5678 \"add feature\"".to_string(),
-            is_empty_repo: false,
-            is_detached: false,
-            has_stash: false,
-            situation: RepoSituation::Normal,
-        };
-        let prompt = ctx.to_prompt_string();
-        assert!(prompt.contains("2 ahead, 1 behind"));
-        assert!(prompt.contains("(+5 more)"));
     }
 
     #[test]

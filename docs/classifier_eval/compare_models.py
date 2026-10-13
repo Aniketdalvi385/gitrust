@@ -15,7 +15,7 @@ import json, os, sys, time, urllib.request
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OLLAMA = "http://localhost:11434"
-PROMPTS_RS = os.path.join(HERE, "..", "..", "gitrust", "src", "prompts.rs")
+PROMPTS_RS = os.path.join(HERE, "legacy_prompts.rs")  # the retired qwen2.5:3b prompt, kept to reproduce the paper
 EVAL = json.load(open(os.path.join(HERE, "eval_set.json")))["cases"]
 
 def _post(path, body):

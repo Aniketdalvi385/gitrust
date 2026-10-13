@@ -251,18 +251,18 @@ pub enum SyncStrategy {
 }
 
 /// Which engine produced an `IntentResult`. Surfaced as a one-glyph indicator
-/// (⚡ canonical fast-path, ✦ embedding router, ◉ LLM) so the user learns over
-/// time which phrasings hit the fast/cheap paths.
+/// (⚡ exact fast-path, ✦ Kev, ◇ user-picked) so the user learns over time
+/// which phrasings hit the instant path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Engine {
     Fast,
-    /// Embedding router (Layer 1.25): matched a paraphrase to an op by
-    /// nearest-exemplar similarity — no LLM call, ~30× faster.
-    Router,
-    Llm,
+    /// The local Kev decision model routed it with enough confidence.
+    Kev,
+    /// Kev wasn't confident; the user picked the op from its candidates.
+    User,
 }
 
-/// Result of a single LLM classification call.
+/// Result of Layer-1 classification.
 #[derive(Debug, Clone)]
 pub struct IntentResult {
     pub intent: IntentType,
@@ -474,7 +474,8 @@ pub enum FileSelection {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum CommitMessage {
-    /// LLM-generated draft — user edits in the gate.
+    /// No message yet — the user is asked to write one in the gate (GiTrust
+    /// never drafts commit messages; the payload is ignored).
     Draft(String),
     /// User provided exact message — still shown for confirmation.
     Provided(String),

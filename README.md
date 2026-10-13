@@ -16,6 +16,12 @@ and (for anything that deletes content Git can't recover) backed up first.
 > result* about where a small local LLM belongs in a tool like this — see
 > [`PROJECT_HISTORY.md`](PROJECT_HISTORY.md), which is the real centerpiece of
 > this repo.
+>
+> **Update (2026-10):** the local LLM (`qwen2.5:3b` via Ollama) and the embedding
+> router were replaced by **Kev-0.8B**, a local decision model that only ranks a
+> closed option list with calibrated probabilities (70% vs the LLM's 41% on the
+> same 44-case set; see `docs/classifier_eval/run_kev_eval.py`). The history
+> below describes the original design.
 
 ---
 
@@ -52,9 +58,10 @@ These are facts backed by the test suite, not aspirations:
 - **Lost-work forensics.** `find my lost work` scans reflogs *and* dangling
   objects (the only way to surface a dropped stash) and restores anything you
   pick to a fresh `rescue/*` branch — **without touching your current state.**
-- **Fully local.** Intent classification runs on `qwen2.5:3b` via
-  [Ollama](https://ollama.com). No diffs, code, or queries leave your machine.
-- **~197 unit/integration tests** plus a versioned manual acceptance-test record
+- **Fully local.** Intent classification runs on
+  [Kev](https://github.com/jaredpalmer/kev) (Kev-0.8B) served on 127.0.0.1.
+  No diffs, code, or queries leave your machine.
+- **226 unit/integration tests** plus a versioned manual acceptance-test record
   (see the companion `GiTrust-test` suite).
 
 ## How it works — the 5-layer pipeline
@@ -66,8 +73,8 @@ your query
 Layer 0  Context      detect repo situation (12 states), collect branch/ahead-behind/diff
    │
    ▼
-Layer 1  Intent       ⚡ exact fast-path  →  ✦ embedding router  →  ◉ local LLM
-   │                   (three engines, cheapest first; the LLM is the fallback)
+Layer 1  Intent       ⚡ exact fast-path  →  ✦ Kev ranks the known ops  →  ◇ you pick
+   │                   (Kev routes only when confident; otherwise you choose)
    ▼
 Layer 1.5 Situation gate   block/redirect intents invalid for the current repo state
    │
@@ -81,17 +88,19 @@ Layer 3  Validate & gate   pre-checks · danger grading by blast radius · confi
 Layer 4  Execute      run fully-concrete steps against git2 / shelled-out git
 ```
 
-The three Layer-1 engines are tried cheapest-first:
+Layer 1, in order:
 
 - **⚡ Fast-path** — an exact-phrase whitelist; instant, no model call.
-- **✦ Embedding router** — embeds your query via the *already-loaded* model and
-  routes paraphrases to a known operation by nearest-exemplar similarity.
-  Deliberately conservative: it only acts on high-confidence matches to *safe*
-  operations and **abstains** (falling back to the LLM) on anything destructive
-  or ambiguous. This layer exists because of a measured finding — see the history.
-- **◉ Local LLM** — the fallback, for genuinely novel phrasings and the
-  semantic judgment (e.g. "which files are part of the login feature?") the
-  cheaper layers can't do.
+- **✦ Kev** — a local *decision* model: it never writes text, it returns a
+  calibrated probability for each operation GiTrust lists. GiTrust's own code
+  decides: route when confident (a higher bar for anything destructive), say
+  "not a Git request" when that's confident, otherwise ask.
+- **◇ You pick** — when Kev isn't sure, you choose from its top candidates (each
+  shown with what it would do). `--yes` refuses rather than guess.
+
+The model never supplies arguments either: branch names, counts, files and
+commit messages are captured from what you typed, or GiTrust asks you. It
+never drafts a commit message.
 
 Full architecture, type vocabulary, and the conventions for extending it are in
 [`gitrust/CLAUDE.md`](gitrust/CLAUDE.md).
@@ -99,10 +108,13 @@ Full architecture, type vocabulary, and the conventions for extending it are in
 ## Requirements
 
 - **Rust** (2021 edition) to build.
-- **[Ollama](https://ollama.com)** installed and running.
-- The **`qwen2.5:3b`** model (~1.9 GB). `gitrust setup` pulls it for you.
-- Designed and tested on an **Apple M2 with 8 GB RAM** — the small-model choice
-  is a direct consequence of that constraint (see the history doc).
+- **[uv](https://docs.astral.sh/uv/)** — `gitrust setup` uses it to install
+  [Kev](https://github.com/jaredpalmer/kev) (pinned commit) and download
+  Kev-0.8B (~1.5 GB).
+- Designed and tested on an **Apple M2 with 8 GB RAM**. The Kev server uses
+  ~3 GB while running; GiTrust starts it in the background on the first query
+  that needs it (~25 s cold start) and it stays up afterwards
+  (`pkill -f kev.serve` to stop it).
 
 ## Build & run
 
@@ -110,10 +122,10 @@ Full architecture, type vocabulary, and the conventions for extending it are in
 cd gitrust
 cargo build --release          # optimized binary at target/release/gitrust
 
-cargo run -- setup             # verify Ollama + pull qwen2.5:3b
+cargo run -- setup             # install Kev, start it, smoke-test it
 cargo run -- "show status"     # one-shot query
 cargo run                      # interactive REPL
-cargo test                     # ~197 tests, no Ollama needed (classifier is mocked)
+cargo test                     # 226 tests, no model server needed (Kev is mocked)
 ```
 
 Config lives at `~/.gitrust.toml`; runtime state (snapshots, trash-net, logs) at
@@ -147,7 +159,7 @@ gitrust --recover                         # restore an interrupted pipeline
 ## Repository layout
 
 ```
-gitrust/                     the Rust crate (binary + 23 modules, ~20k LOC)
+gitrust/                     the Rust crate (binary + 22 modules, ~20k LOC)
   src/                       the 5-layer pipeline
   CLAUDE.md                  authoritative architecture reference
 docs/

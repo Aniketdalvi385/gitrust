@@ -11,12 +11,11 @@ mod explain;
 mod format;
 mod git_ops;
 mod intent;
+mod kev;
 mod log;
 mod manifest;
-mod prompts;
 mod recovery;
 mod resolver;
-mod router;
 mod setup;
 mod trash;
 mod validation;
@@ -25,7 +24,7 @@ use anyhow::Context;
 use clap::{Parser, Subcommand};
 
 /// GiTrust — Agentic Git CLI.
-/// Natural language interface for Git. Powered by a local LLM (Ollama).
+/// Natural language interface for Git. Powered by a local decision model (Kev).
 ///
 /// Examples:
 ///   gitrust setup
@@ -60,7 +59,8 @@ struct Cli {
     #[arg(long)]
     recover: bool,
 
-    /// Override the Ollama model for this run.
+    /// Kev checkpoint to serve if GiTrust has to start the server (Hub id or
+    /// local run directory, e.g. a fine-tune). Ignored if a server is already up.
     #[arg(long)]
     model: Option<String>,
 
@@ -71,7 +71,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Install Ollama (if missing), start service, and pull the LLM model.
+    /// Set up the local Kev model (clone, install, start, smoke test).
     Setup,
     /// Show the list of canonical phrases GiTrust understands.
     Help,
@@ -118,13 +118,10 @@ async fn run() -> anyhow::Result<()> {
         return run_recover_subcommand(list, clean);
     }
 
-    // Pre-flight: check Ollama is installed before doing anything else
-    check_ollama_or_guide();
-
     // Load config, apply CLI overrides
     let mut config = config::load()?;
     if let Some(model) = cli.model {
-        config.model = model;
+        config.kev_run = model;
     }
 
     // Recovery mode
@@ -148,7 +145,7 @@ async fn run() -> anyhow::Result<()> {
 }
 
 fn print_help() {
-    println!("GiTrust canonical phrases (always work, never need the LLM):\n");
+    println!("GiTrust canonical phrases (always work, instant, no model needed):\n");
     println!("  Inspect:    status · log · show · diff · branches · remotes · config");
     println!("  Track:      fetch · safe to pull · merge preview · check remote");
     println!("  Stage:      commit · commit all my files · commit <file>");
@@ -158,7 +155,7 @@ fn print_help() {
     println!("  Setup:      init · add remote <url> · delete repository");
     println!("  Tooling:    gitrust setup · gitrust help · gitrust recover --list / --clean");
     println!();
-    println!("Anything else: phrase it naturally — the AI will figure it out.");
+    println!("Anything else: phrase it naturally — the local Kev model routes it, and asks you when it isn't sure.");
     println!("Use --yes to auto-confirm non-destructive prompts.");
 }
 
@@ -214,29 +211,6 @@ fn run_recover_subcommand(list: bool, clean: bool) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Print a friendly setup guide and exit if Ollama is not installed.
-fn check_ollama_or_guide() {
-    if which::which("ollama").is_ok() {
-        return;
-    }
-
-    eprintln!("GiTrust needs Ollama to run the local LLM.\n");
-    eprintln!("  Install Ollama:");
-
-    if cfg!(target_os = "macos") {
-        eprintln!("    brew install ollama");
-    } else if cfg!(target_os = "linux") {
-        eprintln!("    curl -fsSL https://ollama.com/install.sh | sh");
-    } else {
-        eprintln!("    https://ollama.com/download");
-    }
-
-    eprintln!("\n  Then run the one-time setup:");
-    eprintln!("    gitrust setup\n");
-
-    std::process::exit(1);
-}
-
 /// REPL loop — read queries from the user interactively.
 async fn run_repl(
     config: &config::Config,
@@ -246,7 +220,10 @@ async fn run_repl(
     use inquire::Text;
 
     println!("GiTrust — Agentic Git CLI  (Ctrl-C or empty input to exit)");
-    println!("Model: {}  |  Remote: {}", config.model, config.remote);
+    println!(
+        "Model: kev ({})  |  Remote: {}",
+        config.kev_run, config.remote
+    );
     println!();
 
     loop {

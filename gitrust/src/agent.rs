@@ -10,18 +10,18 @@ use crate::confirm::{AutoConfirmGate, ConfirmationGate, InquireGate};
 use crate::context;
 use crate::executor::{DefaultExecutor, StepExecutor};
 use crate::git_ops::{Git2Operations, GitOperations};
-use crate::intent::{IntentClassifier, OllamaClassifier};
+use crate::intent::{ArgKind, IntentClassifier, KevClassifier};
 use crate::manifest;
 use crate::recovery::{FileRecoveryManager, RecoveryManager};
 use crate::resolver::{FileResolver, TwoPassResolver};
 use crate::validation::{capture_pre_step_state, DefaultValidator, PostCheckResult, Validator};
 
 /// Print the one-glyph engine indicator showing which path classified the
-/// query — fast canonical (⚡) vs LLM (◉). Latency is shown for the LLM only
-/// since the fast-path is sub-millisecond. ASCII fallback when color is off.
-fn print_engine_marker(engine: crate::commands::Engine, llm_elapsed: Option<std::time::Duration>) {
+/// query — exact fast-path (⚡) vs the local Kev model (✦, with its probability
+/// and latency). ASCII fallback when color is off.
+fn print_engine_marker(result: &crate::commands::IntentResult, elapsed: std::time::Duration) {
     let use_color = crate::danger::use_color();
-    let (glyph, suffix, ansi) = match engine {
+    let (glyph, suffix, ansi) = match result.engine {
         crate::commands::Engine::Fast => {
             let g = if use_color {
                 crate::copy::ENGINE_FAST_GLYPH
@@ -30,25 +30,26 @@ fn print_engine_marker(engine: crate::commands::Engine, llm_elapsed: Option<std:
             };
             (g, "(instant)".to_string(), "\x1b[2;36m") // dim cyan
         }
-        crate::commands::Engine::Router => {
+        crate::commands::Engine::Kev => {
             let g = if use_color {
-                crate::copy::ENGINE_ROUTER_GLYPH
+                crate::copy::ENGINE_KEV_GLYPH
             } else {
-                crate::copy::ENGINE_ROUTER_ASCII
+                crate::copy::ENGINE_KEV_ASCII
             };
-            (g, "(router)".to_string(), "\x1b[2;34m") // dim blue
+            let suffix = format!(
+                "(kev · p={:.2} · {:.1}s)",
+                result.confidence,
+                elapsed.as_secs_f32()
+            );
+            (g, suffix, "\x1b[2;34m") // dim blue
         }
-        crate::commands::Engine::Llm => {
+        crate::commands::Engine::User => {
             let g = if use_color {
-                crate::copy::ENGINE_LLM_GLYPH
+                crate::copy::ENGINE_USER_GLYPH
             } else {
-                crate::copy::ENGINE_LLM_ASCII
+                crate::copy::ENGINE_USER_ASCII
             };
-            let suffix = match llm_elapsed {
-                Some(d) if d.as_millis() >= 100 => format!("(llm · ~{:.1}s)", d.as_secs_f32()),
-                _ => "(llm)".to_string(),
-            };
-            (g, suffix, "\x1b[2;35m") // dim magenta
+            (g, "(you picked)".to_string(), "\x1b[2;35m") // dim magenta
         }
     };
     if use_color {
@@ -102,23 +103,10 @@ pub async fn run_agent(
     // If not inside a git repo, check if the intent is "init" before erroring out.
     if find_repo_root().is_err() {
         let empty_ctx = crate::context::RepoContext::empty();
-        let classifier = OllamaClassifier;
         let started = std::time::Instant::now();
-        let intent_result = clarification_loop(
-            &classifier,
-            &empty_ctx,
-            query,
-            config,
-            &*gate,
-            config.max_iters,
-        )
-        .await?;
-        let elapsed = if intent_result.engine == crate::commands::Engine::Llm {
-            Some(started.elapsed())
-        } else {
-            None
-        };
-        print_engine_marker(intent_result.engine, elapsed);
+        let intent_result =
+            classify_query(&KevClassifier, &empty_ctx, query, config, &*gate).await?;
+        print_engine_marker(&intent_result, started.elapsed());
         return match intent_result.intent {
             IntentType::ScopedWrite(ScopedWriteOp::Init) => init_repo(&*gate),
             _ => Err(anyhow::anyhow!(
@@ -160,24 +148,10 @@ pub async fn run_agent(
     // fails; empty, detached, and mid-operation repos all build successfully.
     let context = context::build_context(&repo)?;
 
-    // Layer 1: classify intent (with clarification loop)
-    let classifier = OllamaClassifier;
+    // Layer 1: classify intent — exact fast-path, else the local Kev model.
     let classify_started = std::time::Instant::now();
-    let intent_result = clarification_loop(
-        &classifier,
-        &context,
-        query,
-        config,
-        &*gate,
-        config.max_iters,
-    )
-    .await?;
-    let llm_elapsed = if intent_result.engine == crate::commands::Engine::Llm {
-        Some(classify_started.elapsed())
-    } else {
-        None
-    };
-    print_engine_marker(intent_result.engine, llm_elapsed);
+    let intent_result = classify_query(&KevClassifier, &context, query, config, &*gate).await?;
+    print_engine_marker(&intent_result, classify_started.elapsed());
 
     // Layer 3 (early): the situation gate. An intent that is invalid for the
     // current RepoSituation is stopped here, BEFORE resolution — the single
@@ -258,107 +232,225 @@ pub async fn run_agent(
     }
 }
 
-/// Run a clarification loop: keep re-classifying until confident or max_iters hit.
-async fn clarification_loop(
-    classifier: &OllamaClassifier,
+/// Layer 1: turn the query into an intent.
+///
+/// 1. ⚡ exact fast-path (`try_canonical`) — no model at all.
+/// 2. ✦ Kev ranks every known op; `kev::decide` (deterministic) then:
+///    * routes when the top op clears its confidence bar (a higher bar for
+///      destructive ops, which still meet their own gates downstream);
+///    * rejects a confident "not a Git request";
+///    * otherwise asks the user to pick from Kev's top candidates — a
+///      `ChoiceGate`, so `--yes` refuses instead of guessing.
+/// 3. Arguments are captured from the query by `build_from_op`; a missing one
+///    is asked for, never invented.
+///
+/// If Kev is unreachable, falls back to the manual operation menu.
+async fn classify_query(
+    classifier: &impl IntentClassifier,
     context: &crate::context::RepoContext,
-    initial_query: &str,
+    query: &str,
     config: &Config,
     gate: &dyn ConfirmationGate,
-    max_iters: u8,
 ) -> anyhow::Result<crate::commands::IntentResult> {
-    let mut query = initial_query.to_string();
+    use crate::commands::{Engine, IntentResult};
+    use crate::kev::KevDecision;
 
-    // Fast path: exact-match canonical phrases bypass the LLM entirely.
-    if let Some(intent) = crate::intent::try_canonical(&query) {
-        return Ok(crate::commands::IntentResult {
+    if let Some(intent) = crate::intent::try_canonical(query) {
+        return Ok(IntentResult {
             intent,
             confidence: 1.0,
-            raw_query: query,
-            engine: crate::commands::Engine::Fast,
+            raw_query: query.to_string(),
+            engine: Engine::Fast,
         });
     }
 
-    // Layer 1.25 — embedding router. Between the exact fast-path and the LLM:
-    // route confident, non-destructive paraphrases by nearest-exemplar over the
-    // loaded model's /api/embed (~30× faster than the LLM). It only ACTS on a
-    // high-margin, safe match; otherwise it abstains and we fall through to the
-    // LLM path unchanged. Any embedding error is a silent abstain — never a
-    // hard failure. Gated by config so it can be turned off.
-    if config.router_enabled {
-        match crate::router::embed_exemplars(config).await {
-            Ok(exemplars) => {
-                match crate::router::try_route(&query, &exemplars, config).await {
-                    Ok(Some(intent)) => {
-                        return Ok(crate::commands::IntentResult {
-                            intent,
-                            confidence: 0.9,
-                            raw_query: query,
-                            engine: crate::commands::Engine::Router,
-                        });
-                    }
-                    Ok(None) => { /* abstained — fall through to the LLM */ }
-                    Err(_e) => { /* embed failed — degrade to the LLM path */ }
+    let state = crate::intent::kev_state(context, query);
+
+    // Mid-operation: first ask whether the request controls that operation
+    // (continue / skip / abort). A confident control op routes (skip/abort need
+    // the destructive bar); an unsure one whose best guess is still a control
+    // op shows the family's menu; anything else falls through to the main
+    // question. The situation gate still validates whatever comes out.
+    if let Some(family) = crate::intent::in_progress_family(context) {
+        if let Some((instr, opts)) = crate::kev::in_progress_question(family) {
+            if let Ok(r) = classifier.rank(state.clone(), instr, &opts, config).await {
+                if std::env::var("GITRUST_DEBUG").is_ok() {
+                    let top: Vec<String> =
+                        r.iter().map(|(o, p)| format!("{}={:.2}", o, p)).collect();
+                    eprintln!("  (kev in-progress: {})", top.join(" "));
                 }
-            }
-            Err(_e) => { /* exemplar embedding failed — degrade to the LLM path */ }
-        }
-    }
-
-    for iter in 0..max_iters {
-        let result = match classifier.classify(context, &query, config).await {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("⚠  LLM classification failed: {}", e);
-                eprintln!("   Falling back to manual mode.\n");
-                return fallback_interactive_intent();
-            }
-        };
-
-        match &result.intent {
-            IntentType::NeedsClarification(question) => {
-                if iter + 1 >= max_iters {
-                    return Ok(result);
-                }
-                println!("? {}", question);
-
-                // Ask user for clarification
-                let clarified = match gate.prompt(&GateType::SimpleConfirm {
-                    message: "Would you like to provide more context? (no = abort)".to_string(),
-                }) {
-                    Ok(GateResponse::Confirmed) => {
-                        // Prompt for clarification text inline
-                        match Text::new("Clarification:").prompt() {
-                            Ok(t) => t,
-                            Err(_) => return Err(anyhow::anyhow!("Clarification aborted.")),
-                        }
+                let decided = match crate::kev::decide(
+                    &r,
+                    config.kev_min_confidence,
+                    config.kev_destructive_min_confidence,
+                ) {
+                    crate::kev::KevDecision::Route { op, p } => Some((op, p, Engine::Kev)),
+                    _ if r
+                        .first()
+                        .and_then(|(o, _)| crate::intent::build_in_progress(o))
+                        .is_some() =>
+                    {
+                        let other = opts.last().map(|(o, _)| o.clone()).unwrap_or_default();
+                        // Menu over the family's ops in the model's order, "something
+                        // else" last (it falls through to the main question).
+                        let mut menu: Vec<(String, f32)> =
+                            r.iter().filter(|(o, _)| *o != other).cloned().collect();
+                        menu.push((other.clone(), 0.0));
+                        let picked = pick_in_progress(&menu, &other, gate)?;
+                        picked.map(|op| (op, 1.0, Engine::User))
                     }
-                    _ => return Err(anyhow::anyhow!("Aborted.")),
+                    _ => None,
                 };
-
-                query = format!("{} (clarification: {})", query, clarified);
-            }
-            _ => {
-                // Mid-confidence: offer a deterministic disambiguation menu.
-                if result.confidence < 0.75 && result.confidence >= 0.4 {
-                    if let Some(chosen) = maybe_disambiguate(&result.intent, context, gate)? {
-                        return Ok(crate::commands::IntentResult {
-                            intent: chosen,
-                            confidence: 1.0,
-                            raw_query: result.raw_query,
-                            engine: result.engine,
+                if let Some((op, p, engine)) = decided {
+                    if let Some(intent) = crate::intent::build_in_progress(&op) {
+                        return Ok(IntentResult {
+                            intent,
+                            confidence: p,
+                            raw_query: query.to_string(),
+                            engine,
                         });
                     }
                 }
-                return Ok(result);
             }
         }
     }
 
-    Err(anyhow::anyhow!(
-        "Max clarification iterations ({}) reached.",
-        max_iters
-    ))
+    let ranked = match classifier
+        .rank(state, crate::kev::instructions(), crate::kev::ops(), config)
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("⚠  {}", e);
+            eprintln!("   Falling back to manual mode.\n");
+            return fallback_interactive_intent();
+        }
+    };
+    if std::env::var("GITRUST_DEBUG").is_ok() {
+        let top: Vec<String> = ranked
+            .iter()
+            .take(4)
+            .map(|(o, p)| format!("{}={:.2}", o, p))
+            .collect();
+        eprintln!("  (kev: {})", top.join(" "));
+    }
+
+    let (op, confidence, engine) = match crate::kev::decide(
+        &ranked,
+        config.kev_min_confidence,
+        config.kev_destructive_min_confidence,
+    ) {
+        KevDecision::Route { op, p } => (op, p, Engine::Kev),
+        KevDecision::Reject { p } => {
+            return Ok(IntentResult {
+                intent: IntentType::NeedsClarification(crate::copy::NOT_A_GIT_REQUEST.to_string()),
+                confidence: p,
+                raw_query: query.to_string(),
+                engine: Engine::Kev,
+            });
+        }
+        KevDecision::Ask { candidates } => {
+            // When "not a Git request" was Kev's best (but unconfident) guess,
+            // say so — the menu is then a "did you mean one of these?" escape
+            // hatch, not a claim that the request was about Git.
+            let maybe_not_git = ranked.first().map(|(o, _)| o == crate::kev::REJECT) == Some(true);
+            let op = pick_candidate(&candidates, maybe_not_git, gate)?;
+            (op, 1.0, Engine::User)
+        }
+    };
+
+    let mut ask = |kind: ArgKind| ask_argument(kind, gate);
+    let intent = crate::intent::build_from_op(&op, query, context, &mut ask)?;
+    Ok(IntentResult {
+        intent,
+        confidence,
+        raw_query: query.to_string(),
+        engine,
+    })
+}
+
+/// Kev wasn't sure: show its top candidates, each with what it would do, and
+/// let the user choose. A `ChoiceGate`, so `--yes` refuses — it never picks an
+/// operation the model itself wasn't confident about.
+fn pick_candidate(
+    candidates: &[(String, f32)],
+    maybe_not_git: bool,
+    gate: &dyn ConfirmationGate,
+) -> anyhow::Result<String> {
+    if candidates.is_empty() {
+        anyhow::bail!("{}", crate::copy::NOT_A_GIT_REQUEST);
+    }
+    let mut options: Vec<crate::commands::ChoiceOption> = candidates
+        .iter()
+        .map(|(op, p)| crate::commands::ChoiceOption {
+            label: format!("{}  ({:.0}%)", op.replace('_', " "), p * 100.0),
+            consequence: crate::kev::describe(op).to_string(),
+        })
+        .collect();
+    options.push(crate::commands::ChoiceOption {
+        label: "none of these".to_string(),
+        consequence: "Do nothing — rephrase your request.".to_string(),
+    });
+    match gate.prompt(&GateType::ChoiceGate {
+        question: if maybe_not_git {
+            crate::copy::KEV_MAYBE_NOT_GIT_QUESTION
+        } else {
+            crate::copy::KEV_UNSURE_QUESTION
+        }
+        .to_string(),
+        options,
+    })? {
+        GateResponse::Chose(i) if i < candidates.len() => Ok(candidates[i].0.clone()),
+        _ => Err(anyhow::anyhow!("Aborted — nothing was done.")),
+    }
+}
+
+/// The in-progress menu (continue / skip / abort / something else). Returns
+/// `None` for "something else" so the caller falls through to the main
+/// question. A `ChoiceGate`: `--yes` refuses rather than continue or abort an
+/// operation on the model's unsure guess.
+fn pick_in_progress(
+    menu: &[(String, f32)],
+    other: &str,
+    gate: &dyn ConfirmationGate,
+) -> anyhow::Result<Option<String>> {
+    let options: Vec<crate::commands::ChoiceOption> = menu
+        .iter()
+        .map(|(op, _)| crate::commands::ChoiceOption {
+            label: if op == other {
+                "something else".to_string()
+            } else {
+                op.replace('_', " ")
+            },
+            consequence: if op == other {
+                "Not about the operation in progress — continue with my request.".to_string()
+            } else {
+                crate::kev::describe(op).to_string()
+            },
+        })
+        .collect();
+    match gate.prompt(&GateType::ChoiceGate {
+        question: crate::copy::KEV_IN_PROGRESS_QUESTION.to_string(),
+        options,
+    })? {
+        GateResponse::Chose(i) if i < menu.len() => {
+            Ok((menu[i].0 != other).then(|| menu[i].0.clone()))
+        }
+        _ => Err(anyhow::anyhow!("Aborted — nothing was done.")),
+    }
+}
+
+/// Ask the user for an argument the query didn't contain. `--yes` answers an
+/// EditableText with its (empty) initial text, which `build_from_op` rejects —
+/// so a scripted run fails loudly instead of inventing a branch name or count.
+fn ask_argument(kind: ArgKind, gate: &dyn ConfirmationGate) -> anyhow::Result<String> {
+    match gate.prompt(&GateType::EditableText {
+        initial: String::new(),
+        label: kind.prompt().to_string(),
+    })? {
+        GateResponse::TextProvided(t) => Ok(t),
+        _ => Ok(String::new()),
+    }
 }
 
 // =============================================================================
@@ -2504,7 +2596,7 @@ pub fn execute_recovery() -> anyhow::Result<()> {
 pub fn fallback_interactive_intent() -> anyhow::Result<crate::commands::IntentResult> {
     use crate::commands::IntentResult;
 
-    println!("  LLM unavailable. Entering manual mode.");
+    println!("  The Kev model is unavailable. Entering manual mode.");
     println!("  What would you like to do?");
 
     let options = vec![
@@ -3543,47 +3635,6 @@ fn print_reset_preview(repo: &git2::Repository, mode: ResetMode) {
     println!();
 }
 
-/// Show a disambiguation menu when classifier confidence is mid-range.
-/// Returns `Some(chosen_intent)` when the user picks an alternate, `None` to keep the top.
-fn maybe_disambiguate(
-    top: &IntentType,
-    ctx: &crate::context::RepoContext,
-    gate: &dyn ConfirmationGate,
-) -> anyhow::Result<Option<IntentType>> {
-    let alts = crate::intent::alternates_for(top, ctx);
-    if alts.is_empty() {
-        return Ok(None);
-    }
-
-    let mut all: Vec<IntentType> = vec![top.clone()];
-    all.extend(alts);
-
-    let mut labels: Vec<String> = all
-        .iter()
-        .enumerate()
-        .map(|(i, intent)| {
-            let prefix = if i == 0 {
-                "(top guess) "
-            } else {
-                "(maybe)     "
-            };
-            format!("{}{}", prefix, crate::intent::intent_label(intent))
-        })
-        .collect();
-    labels.push("Cancel & rephrase".to_string());
-
-    println!("\n? I'm not fully sure what you meant. Pick one:");
-    let response = gate.prompt(&GateType::Choose {
-        message: "Choice:".to_string(),
-        options: labels,
-    })?;
-
-    match response {
-        GateResponse::Chose(idx) if idx < all.len() => Ok(Some(all[idx].clone())),
-        _ => Err(anyhow::anyhow!("Aborted.")),
-    }
-}
-
 /// Produce a one-line "what changed" summary after a successful pipeline step.
 /// Returns None when no meaningful before/after delta exists.
 fn summarize_step(
@@ -3849,22 +3900,27 @@ fn strip_comment_lines(s: &str) -> String {
         .to_string()
 }
 
-/// Async variant: when message is a Draft, generate a real conventional-commit
-/// message from the actual diff (via the LLM) instead of using the query-derived
-/// heuristic. Provided messages are passed through as-is to the edit gate.
+/// Get the final commit message. GiTrust never drafts one: a `Provided`
+/// message (quoted in the query) is offered for editing, a mid-merge commit
+/// offers git's own MERGE_MSG, and otherwise the user is ASKED to write it.
+///
+/// Returns `Ok("")` when the user cancels (callers treat that as "aborted").
+/// An empty message that was *submitted* — including `--yes`, which can only
+/// echo the empty prompt — is an error, so a scripted run without a message
+/// fails loudly instead of committing with a made-up one.
 async fn resolve_or_generate_commit_message(
     repo: &git2::Repository,
     message: CommitMessage,
-    include_workdir: bool,
-    config: &Config,
+    _include_workdir: bool,
+    _config: &Config,
     gate: &dyn ConfirmationGate,
 ) -> anyhow::Result<String> {
     let initial = match message {
         CommitMessage::Provided(m) => m,
         CommitMessage::Draft(_) => {
-            // Mid-merge, git has already prepared a MERGE_MSG — prefer it so the
-            // merge commit reads conventionally rather than an LLM re-draft (S17).
-            let merge_msg = if repo.state() == git2::RepositoryState::Merge {
+            // Mid-merge, git has already prepared a MERGE_MSG — offer it so the
+            // merge commit reads conventionally (S17).
+            if repo.state() == git2::RepositoryState::Merge {
                 std::fs::read_to_string(repo.path().join("MERGE_MSG"))
                     .ok()
                     // Strip git's comment lines (e.g. the "# Conflicts:" block a
@@ -3873,37 +3929,33 @@ async fn resolve_or_generate_commit_message(
                     // ourselves, we must strip them or they leak into the message
                     // (M-12).
                     .map(|s| strip_comment_lines(&s))
-                    .filter(|s| !s.is_empty())
+                    .unwrap_or_default()
             } else {
-                None
-            };
-            match merge_msg {
-                Some(m) => m,
-                None => {
-                    // Always regenerate from diff — the Draft heuristic produces
-                    // query-echo garbage like "All my changes with appropriate message".
-                    print!("  Drafting commit message from diff… ");
-                    std::io::Write::flush(&mut std::io::stdout()).ok();
-                    let msg =
-                        crate::intent::generate_commit_message(repo, include_workdir, config).await;
-                    println!("✓");
-                    msg
-                }
+                String::new()
             }
         }
     };
 
+    let label = if initial.is_empty() {
+        crate::copy::COMMIT_MESSAGE_ASK
+    } else {
+        "Commit message (edit or accept):"
+    };
     let response = gate.prompt(&GateType::EditableText {
         initial: initial.clone(),
-        label: "Commit message (edit or accept):".to_string(),
+        label: label.to_string(),
     })?;
 
-    match response {
-        GateResponse::TextProvided(msg) if !msg.trim().is_empty() => Ok(msg),
-        GateResponse::Confirmed => Ok(initial),
-        GateResponse::Aborted => Ok(String::new()),
-        _ => Ok(initial),
+    let msg = match response {
+        GateResponse::TextProvided(msg) => msg,
+        GateResponse::Confirmed => initial,
+        GateResponse::Aborted => return Ok(String::new()),
+        _ => initial,
+    };
+    if msg.trim().is_empty() {
+        anyhow::bail!("{}", crate::copy::COMMIT_MESSAGE_REQUIRED);
     }
+    Ok(msg)
 }
 
 fn step_name(step: &PipelineStep) -> &'static str {
@@ -5269,5 +5321,291 @@ impl RevwalkCount for git2::Repository {
         let mut rw = self.revwalk().unwrap();
         rw.push_head().unwrap();
         rw.count()
+    }
+}
+
+/// Layer 1 with Kev: the decision paths, driven by a fixed distribution so no
+/// server is needed. The safety-relevant cases: `--yes` never guesses when
+/// Kev is unsure, destructive ops need the higher bar, missing arguments are
+/// asked for (and refused under `--yes`), and the fast-path never calls Kev.
+#[cfg(test)]
+mod kev_layer1_tests {
+    use super::*;
+    use crate::commands::{Engine, RepoSituation};
+    use crate::confirm::ScriptedGate;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// Returns `main` for the main question and `in_progress` for the
+    /// in-progress question (recognised by its `something_else` option).
+    struct Fixed {
+        main: Vec<(&'static str, f32)>,
+        in_progress: Vec<(&'static str, f32)>,
+        main_calls: AtomicU32,
+        in_progress_calls: AtomicU32,
+    }
+
+    impl Fixed {
+        fn main(main: &[(&'static str, f32)]) -> Self {
+            Self::with(main, &[])
+        }
+        fn with(main: &[(&'static str, f32)], in_progress: &[(&'static str, f32)]) -> Self {
+            Fixed {
+                main: main.to_vec(),
+                in_progress: in_progress.to_vec(),
+                main_calls: AtomicU32::new(0),
+                in_progress_calls: AtomicU32::new(0),
+            }
+        }
+    }
+
+    impl IntentClassifier for Fixed {
+        async fn rank(
+            &self,
+            _state: serde_json::Value,
+            _instructions: &str,
+            options: &[(String, String)],
+            _config: &Config,
+        ) -> anyhow::Result<Vec<(String, f32)>> {
+            let in_progress = options.iter().any(|(o, _)| o == "something_else");
+            let src = if in_progress {
+                self.in_progress_calls.fetch_add(1, Ordering::SeqCst);
+                &self.in_progress
+            } else {
+                self.main_calls.fetch_add(1, Ordering::SeqCst);
+                &self.main
+            };
+            Ok(src.iter().map(|(o, p)| (o.to_string(), *p)).collect())
+        }
+    }
+
+    fn ctx() -> crate::context::RepoContext {
+        let mut c = crate::context::RepoContext::empty();
+        c.branch = "main".into();
+        c.is_empty_repo = false;
+        c.situation = RepoSituation::Normal;
+        c
+    }
+
+    async fn classify(
+        k: &Fixed,
+        c: &crate::context::RepoContext,
+        q: &str,
+        gate: &dyn ConfirmationGate,
+    ) -> anyhow::Result<crate::commands::IntentResult> {
+        classify_query(k, c, q, &Config::default(), gate).await
+    }
+
+    #[tokio::test]
+    async fn fast_path_never_calls_kev() {
+        let k = Fixed::main(&[("cleanup", 0.99)]);
+        let r = classify(&k, &ctx(), "status", &AutoConfirmGate)
+            .await
+            .unwrap();
+        assert_eq!(r.engine, Engine::Fast);
+        assert_eq!(k.main_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn confident_safe_op_routes() {
+        let k = Fixed::main(&[("log", 0.73), ("status", 0.1)]);
+        let r = classify(&k, &ctx(), "show me the history", &AutoConfirmGate)
+            .await
+            .unwrap();
+        assert_eq!(r.engine, Engine::Kev);
+        assert!(matches!(
+            r.intent,
+            IntentType::ReadOnly(ReadOnlyOp::Log { count: 10 })
+        ));
+    }
+
+    #[tokio::test]
+    async fn yes_refuses_to_guess_when_kev_is_unsure() {
+        let k = Fixed::main(&[("push", 0.3), ("scoped_push", 0.25), ("add_commit", 0.1)]);
+        let err = classify(&k, &ctx(), "put my work up", &AutoConfirmGate)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("--yes"), "got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn unsure_lets_the_user_pick_and_args_are_captured() {
+        let k = Fixed::main(&[("push", 0.3), ("scoped_push", 0.25), ("add_commit", 0.1)]);
+        let gate = ScriptedGate::new(1); // scoped_push
+        let r = classify(&k, &ctx(), "ship the payments fixes", &gate)
+            .await
+            .unwrap();
+        assert_eq!(r.engine, Engine::User);
+        assert_eq!(
+            gate.last_choice_options.get(),
+            4,
+            "3 candidates + none of these"
+        );
+        match r.intent {
+            IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush { feature_hint }) => {
+                assert_eq!(feature_hint, "payments")
+            }
+            other => panic!("got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn destructive_op_below_its_bar_is_not_acted_on() {
+        // 0.55 clears the read bar (0.5) but not the destructive one (0.6).
+        let k = Fixed::main(&[("cleanup", 0.55), ("stash", 0.2)]);
+        assert!(classify(&k, &ctx(), "nuke it all", &AutoConfirmGate)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn confident_reject_asks_to_rephrase() {
+        let k = Fixed::main(&[(crate::kev::REJECT, 0.8), ("status", 0.05)]);
+        let r = classify(&k, &ctx(), "make me a sandwich", &AutoConfirmGate)
+            .await
+            .unwrap();
+        assert!(matches!(r.intent, IntentType::NeedsClarification(_)));
+    }
+
+    #[tokio::test]
+    async fn missing_argument_is_refused_under_yes() {
+        let k = Fixed::main(&[("branch", 0.8)]);
+        let err = classify(&k, &ctx(), "make me a new branch", &AutoConfirmGate)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("branch name"), "got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn in_progress_question_routes_continue_without_the_main_question() {
+        let mut c = ctx();
+        c.situation = RepoSituation::MidRebase {
+            current: 2,
+            total: 5,
+            conflicted: vec![],
+        };
+        let k = Fixed::with(
+            &[("status", 0.9)],
+            &[("rebase_continue", 0.8), ("something_else", 0.1)],
+        );
+        let r = classify(&k, &c, "ok i fixed it, keep going", &AutoConfirmGate)
+            .await
+            .unwrap();
+        assert!(matches!(
+            r.intent,
+            IntentType::ScopedWrite(ScopedWriteOp::RebaseContinue)
+        ));
+        assert_eq!(k.main_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn in_progress_abort_needs_the_destructive_bar() {
+        let mut c = ctx();
+        c.situation = RepoSituation::MidRebase {
+            current: 2,
+            total: 5,
+            conflicted: vec![],
+        };
+        // 0.55 abort is below the 0.6 bar → never acted on: the family menu is
+        // shown instead, which --yes refuses (nothing aborted).
+        let k = Fixed::with(
+            &[("status", 0.9)],
+            &[("rebase_abort", 0.55), ("something_else", 0.3)],
+        );
+        let err = classify(&k, &c, "get me out", &AutoConfirmGate)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("--yes"), "got: {}", err);
+        assert_eq!(k.in_progress_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(k.main_calls.load(Ordering::SeqCst), 0);
+        // At 0.65 it clears the bar and routes.
+        let k = Fixed::with(
+            &[("status", 0.9)],
+            &[("rebase_abort", 0.65), ("something_else", 0.3)],
+        );
+        let r = classify(&k, &c, "abort the rebase", &AutoConfirmGate)
+            .await
+            .unwrap();
+        assert!(matches!(
+            r.intent,
+            IntentType::ScopedWrite(ScopedWriteOp::RebaseAbort)
+        ));
+    }
+
+    #[tokio::test]
+    async fn unsure_in_progress_control_shows_the_family_menu() {
+        let mut c = ctx();
+        c.situation = RepoSituation::MidRebase {
+            current: 1,
+            total: 1,
+            conflicted: vec![],
+        };
+        let k = Fixed::with(
+            &[("status", 0.9)],
+            &[
+                ("rebase_continue", 0.34),
+                ("something_else", 0.30),
+                ("rebase_skip", 0.2),
+                ("rebase_abort", 0.16),
+            ],
+        );
+        // Interactive: the user picks the first row (continue).
+        let gate = ScriptedGate::new(0);
+        let r = classify(&k, &c, "conflicts are sorted, carry on", &gate)
+            .await
+            .unwrap();
+        assert!(matches!(
+            r.intent,
+            IntentType::ScopedWrite(ScopedWriteOp::RebaseContinue)
+        ));
+        assert_eq!(r.engine, Engine::User);
+        assert_eq!(gate.last_choice_options.get(), 4);
+        assert_eq!(k.main_calls.load(Ordering::SeqCst), 0);
+        // "something else" (last row) falls through to the main question.
+        let gate = ScriptedGate::new(3);
+        let r = classify(&k, &c, "conflicts are sorted, carry on", &gate)
+            .await
+            .unwrap();
+        assert!(matches!(r.intent, IntentType::ReadOnly(ReadOnlyOp::Status)));
+        // --yes never continues/aborts on an unsure guess.
+        assert!(classify(&k, &c, "carry on", &AutoConfirmGate)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn no_in_progress_question_in_a_normal_repo() {
+        let k = Fixed::with(&[("status", 0.9)], &[("rebase_abort", 0.99)]);
+        classify(&k, &ctx(), "what's changed", &AutoConfirmGate)
+            .await
+            .unwrap();
+        assert_eq!(k.in_progress_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn yes_without_a_commit_message_refuses_to_commit() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo = git2::Repository::init(dir.path()).unwrap();
+        let cfg = Config::default();
+        let err = resolve_or_generate_commit_message(
+            &repo,
+            CommitMessage::Draft(String::new()),
+            true,
+            &cfg,
+            &AutoConfirmGate,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("commit message is required"));
+        // A message the user put in the request goes through untouched.
+        let ok = resolve_or_generate_commit_message(
+            &repo,
+            CommitMessage::Provided("fix login".into()),
+            true,
+            &cfg,
+            &AutoConfirmGate,
+        )
+        .await
+        .unwrap();
+        assert_eq!(ok, "fix login");
     }
 }

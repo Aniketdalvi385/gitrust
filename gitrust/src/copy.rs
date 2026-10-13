@@ -7,11 +7,11 @@
 // =============================================================================
 
 pub const ENGINE_FAST_GLYPH: &str = "⚡";
-pub const ENGINE_LLM_GLYPH: &str = "◉";
-pub const ENGINE_ROUTER_GLYPH: &str = "✦";
+pub const ENGINE_KEV_GLYPH: &str = "✦";
+pub const ENGINE_USER_GLYPH: &str = "◇";
 pub const ENGINE_FAST_ASCII: &str = "*";
-pub const ENGINE_LLM_ASCII: &str = "@";
-pub const ENGINE_ROUTER_ASCII: &str = "+";
+pub const ENGINE_KEV_ASCII: &str = "+";
+pub const ENGINE_USER_ASCII: &str = ">";
 
 // =============================================================================
 // Plan-execution box (Item 4 — design handoff §Flow 06½)
@@ -290,3 +290,29 @@ pub const CLEANUP_ABORT_CONSEQUENCE: &str = "do nothing.";
 /// Degenerate guard: nothing to clean, so no gate is rendered.
 pub const CLEANUP_NOTHING: &str =
     "Nothing to clean — the working tree has no changes or untracked files.";
+
+// ---------------------------------------------------------------------------
+// Kev (local decision model) — Layer 1 copy
+// ---------------------------------------------------------------------------
+
+/// Kev was confident the request isn't about Git.
+pub const NOT_A_GIT_REQUEST: &str =
+    "That doesn't look like a Git request. Try rephrasing — e.g. \"show status\" or \"push my commits\".";
+
+/// Header of the pick-from-candidates ChoiceGate when Kev isn't confident.
+pub const KEV_UNSURE_QUESTION: &str = "I'm not sure which operation you meant. Which one?";
+
+/// Same gate when Kev's best guess was "not a Git request" (but unconfident).
+pub const KEV_MAYBE_NOT_GIT_QUESTION: &str =
+    "That may not be a Git request. If it is, which operation did you mean?";
+
+/// Header of the in-progress menu (continue / skip / abort / something else).
+pub const KEV_IN_PROGRESS_QUESTION: &str =
+    "An operation is in progress. Did you mean to control it?";
+
+/// Label of the commit-message prompt when GiTrust has nothing to offer.
+pub const COMMIT_MESSAGE_ASK: &str = "Commit message:";
+
+/// An empty commit message was submitted (or --yes had none to submit).
+pub const COMMIT_MESSAGE_REQUIRED: &str = "A commit message is required — nothing was committed. \
+Put one in your request, e.g. commit everything with message 'fix login'.";

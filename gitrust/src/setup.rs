@@ -1,206 +1,114 @@
 use anyhow::{anyhow, Context};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::config::Config;
 
+/// The Kev commit GiTrust was evaluated against (docs/classifier_eval). Pinned
+/// so a setup today serves the same code the numbers were measured on.
+const KEV_REPO: &str = "https://github.com/jaredpalmer/kev.git";
+const KEV_COMMIT: &str = "85ccf56a0afb952323c621055b02876e8498d60c";
+
 /// Entry point for `gitrust setup`.
-/// Checks Ollama install → service running → model pulled → smoke test.
+/// uv on PATH → Kev checkout (cloned + synced if missing) → server running →
+/// smoke test. Saves `kev_dir` to ~/.gitrust.toml so later queries can start
+/// the server in the background on demand.
 pub async fn run_setup() -> anyhow::Result<()> {
-    let config = Config::default();
+    let mut config = crate::config::load().unwrap_or_default();
 
     println!("GiTrust setup\n");
 
-    // Step 1: Ollama binary on PATH
-    if which::which("ollama").is_err() {
-        println!("  Ollama not found on PATH.");
-        if confirm("Install Ollama now?")? {
-            install_ollama()?;
-        } else {
-            return Err(anyhow!(
-                "Ollama is required. Install it from https://ollama.com/download"
-            ));
-        }
-    } else {
-        println!("✓ Ollama installed");
+    // Step 1: uv (runs Kev's Python environment)
+    if which::which("uv").is_err() {
+        return Err(anyhow!(
+            "`uv` is required to run the local Kev model.\n  \
+             Install it: brew install uv   (or https://docs.astral.sh/uv/)"
+        ));
     }
+    println!("✓ uv installed");
 
-    // Step 2: Service reachable
-    if !is_ollama_reachable(&config).await {
-        println!("  Ollama service is not running.");
-        if confirm("Start Ollama now?")? {
-            start_ollama()?;
-            wait_until_reachable(&config, Duration::from_secs(20)).await?;
-        } else {
-            return Err(anyhow!(
-                "Ollama must be running. Start it with: ollama serve"
-            ));
-        }
-    } else {
-        println!("✓ Ollama running");
-    }
-
-    // Step 3: Model pulled
-    let model = &config.model;
-    if !is_model_pulled(&config, model).await? {
-        println!("  Model {} not found locally.", model);
-        if confirm(&format!("Pull model {} (~2GB)?", model))? {
-            ollama_pull(model)?;
-        } else {
-            return Err(anyhow!("Model {} is required.", model));
-        }
-    } else {
-        println!("✓ Model {} ready", model);
-    }
-
-    // Step 4: Smoke test
-    print!("  Running smoke test... ");
-    smoke_test(&config).await?;
-    println!("passed");
-
-    println!("\n✓ Setup complete. Try: gitrust \"show status\"");
-    Ok(())
-}
-
-// =============================================================================
-// Detection helpers
-// =============================================================================
-
-pub async fn is_ollama_reachable(config: &Config) -> bool {
-    let url = format!("{}/api/tags", config.ollama_url.trim_end_matches('/'));
-    reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .build()
-        .ok()
-        .map(|c| {
-            // Use blocking check via a short-lived runtime isn't possible here —
-            // we're already in async, so just try the request.
-            let _ = c;
-            true // handled below via await
-        });
-
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(3))
-        .build()
+    // Step 2: a Kev checkout with its serve environment
+    let default_dir = crate::config::gitrust_dir()?.join("kev");
+    let dir = config
+        .kev_dir
+        .clone()
+        .unwrap_or_else(|| default_dir.display().to_string());
+    if !std::path::Path::new(&dir)
+        .join("kev")
+        .join("serve.py")
+        .exists()
     {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
-    client
-        .get(&url)
-        .send()
-        .await
-        .map_or(false, |r| r.status().is_success())
-}
-
-async fn is_model_pulled(config: &Config, model: &str) -> anyhow::Result<bool> {
-    let url = format!("{}/api/tags", config.ollama_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
-        .build()
-        .context("Failed to build HTTP client")?;
-
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .context("Failed to reach Ollama /api/tags")?;
-
-    let json: serde_json::Value = resp.json().await.context("Invalid JSON from /api/tags")?;
-
-    let models = json["models"].as_array().cloned().unwrap_or_default();
-    let found = models.iter().any(|m| {
-        m["name"]
-            .as_str()
-            .map(|n| {
-                n == model
-                    || n.starts_with(&format!("{}:", model.split(':').next().unwrap_or(model)))
-            })
-            .unwrap_or(false)
-    });
-    Ok(found)
-}
-
-// =============================================================================
-// Install / start helpers
-// =============================================================================
-
-fn install_ollama() -> anyhow::Result<()> {
-    if cfg!(target_os = "macos") {
-        if which::which("brew").is_ok() {
-            println!("  Running: brew install ollama");
-            run_visible("brew", &["install", "ollama"])
-        } else {
-            println!("  Running: curl -fsSL https://ollama.com/install.sh | sh");
-            run_visible(
-                "sh",
-                &["-c", "curl -fsSL https://ollama.com/install.sh | sh"],
-            )
-        }
-    } else if cfg!(target_os = "linux") {
-        println!("  Running: curl -fsSL https://ollama.com/install.sh | sh");
-        run_visible(
-            "sh",
-            &["-c", "curl -fsSL https://ollama.com/install.sh | sh"],
-        )
-    } else {
-        Err(anyhow!(
-            "Auto-install not supported on this OS. \
-             Install Ollama manually from https://ollama.com/download"
-        ))
-    }
-}
-
-fn start_ollama() -> anyhow::Result<()> {
-    if cfg!(target_os = "macos") && which::which("brew").is_ok() {
-        println!("  Running: brew services start ollama");
-        // Non-fatal: if brew services fails we still try spawning directly
-        let _ = run_visible("brew", &["services", "start", "ollama"]);
-    } else {
-        // Spawn `ollama serve` in background, detached from this process
-        println!("  Starting: ollama serve (background)");
-        std::process::Command::new("ollama")
-            .arg("serve")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .context("Failed to spawn `ollama serve`")?;
-    }
-    Ok(())
-}
-
-async fn wait_until_reachable(config: &Config, timeout: Duration) -> anyhow::Result<()> {
-    let start = Instant::now();
-    loop {
-        if is_ollama_reachable(config).await {
-            println!("✓ Ollama running");
-            return Ok(());
-        }
-        if start.elapsed() >= timeout {
+        println!("  No Kev checkout at {}.", dir);
+        if !confirm(&format!(
+            "Clone Kev ({}) and install its environment (~1 GB)?",
+            &KEV_COMMIT[..7]
+        ))? {
             return Err(anyhow!(
-                "Ollama did not become reachable within {}s. \
-                 Try running `ollama serve` manually.",
-                timeout.as_secs()
+                "Kev is required. Clone {} and set kev_dir in ~/.gitrust.toml.",
+                KEV_REPO
             ));
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        run_visible("git", &["clone", KEV_REPO, &dir])?;
+        run_visible("git", &["-C", &dir, "checkout", "-q", KEV_COMMIT])?;
+        run_in(&dir, "uv", &["sync", "--extra", "serve"])?;
     }
-}
+    println!("✓ Kev checkout at {}", dir);
+    if config.kev_dir.as_deref() != Some(dir.as_str()) {
+        config.kev_dir = Some(dir.clone());
+        crate::config::save(&config)?;
+        println!("✓ Saved kev_dir to ~/.gitrust.toml");
+    }
 
-fn ollama_pull(model: &str) -> anyhow::Result<()> {
-    println!("  Running: ollama pull {}", model);
-    run_visible("ollama", &["pull", model])
-}
+    // Step 3: server reachable (starts it in the background if needed; the
+    // first start downloads the weights, ~1.5 GB, then ~25 s per cold start)
+    if !crate::kev::is_reachable(&config).await {
+        println!("  Starting Kev ({}) in the background…", config.kev_run);
+    }
+    crate::kev::ensure_running(&Config {
+        kev_autostart: true,
+        ..config.clone()
+    })
+    .await?;
+    println!("✓ Kev running at {}", config.kev_url);
 
-async fn smoke_test(config: &Config) -> anyhow::Result<()> {
-    crate::intent::call_ollama(
-        "Reply with the single word: ok",
-        "You are a test. Reply with the single word: ok",
-        config,
-        0.0,
+    // Step 4: smoke test — one routing question, timed.
+    print!("  Running smoke test… ");
+    let started = Instant::now();
+    let ranked = crate::kev::ask_choice(
+        &config,
+        serde_json::json!({ "user_request": "show me the commit history", "repo_state": "clean repo, on branch main" }),
+        crate::kev::instructions(),
+        crate::kev::ops(),
     )
     .await
-    .context("Smoke test failed — Ollama responded with an error")?;
+    .context("Smoke test failed — Kev responded with an error")?;
+    let (op, p) = ranked.first().cloned().unwrap_or_default();
+    println!(
+        "passed ('show me the commit history' → {} p={:.2}, {:.1}s)",
+        op,
+        p,
+        started.elapsed().as_secs_f32()
+    );
+
+    println!("\n✓ Setup complete. Try: gitrust \"show status\"");
+    println!("  The Kev server stays resident (~3 GB). Stop it any time: pkill -f kev.serve");
+    Ok(())
+}
+
+/// Run a command in `dir` with inherited stdout/stderr.
+fn run_in(dir: &str, cmd: &str, args: &[&str]) -> anyhow::Result<()> {
+    let status = std::process::Command::new(cmd)
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .with_context(|| format!("Failed to run `{}` in {}", cmd, dir))?;
+    if !status.success() {
+        return Err(anyhow!(
+            "`{} {}` exited with status {}",
+            cmd,
+            args.join(" "),
+            status
+        ));
+    }
     Ok(())
 }
 

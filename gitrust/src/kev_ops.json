@@ -1,0 +1,196 @@
+{
+ "_comment": "Single source of truth for Kev routing: GiTrust (include_str! in src/kev.rs) and the eval/training harness (docs/classifier_eval/kev_ops.py) both load THIS file. ORDER AND WORDING ARE LOAD-BEARING: Kev was fine-tuned on exactly these option strings in exactly this order; editing either invalidates the training data and the eval.",
+ "instructions": "A developer typed this request into a Git assistant. Which single Git operation are they asking for? If it is not about Git, choose __reject__.",
+ "ops": [
+  [
+   "status",
+   "Show the working tree status: which files are modified, staged or untracked. Local only."
+  ],
+  [
+   "log",
+   "List the history of past commits."
+  ],
+  [
+   "diff",
+   "Show the line-by-line changes in the working files."
+  ],
+  [
+   "branches",
+   "List the existing branches or report which branch is currently checked out."
+  ],
+  [
+   "config",
+   "Show Git configuration such as the user name and email."
+  ],
+  [
+   "show",
+   "Show the details of one single commit (author, date, message, files)."
+  ],
+  [
+   "fetch",
+   "Contact the remote to find out whether the local branch is ahead of or behind it, without changing local files."
+  ],
+  [
+   "merge_preview",
+   "Predict, without changing anything, whether pulling or merging would produce conflicts."
+  ],
+  [
+   "add_commit",
+   "Stage all changes (or the named files) and create a commit."
+  ],
+  [
+   "commit",
+   "Commit only the files that are already staged."
+  ],
+  [
+   "push",
+   "Upload the current branch's commits to the remote, everything, no filtering."
+  ],
+  [
+   "scoped_push",
+   "Commit and push only the files belonging to one named feature or topic (for example the files about one area of the code)."
+  ],
+  [
+   "branch",
+   "Create a new branch with a given name."
+  ],
+  [
+   "checkout",
+   "Switch to a different existing branch."
+  ],
+  [
+   "pull",
+   "Download and integrate the latest commits from the remote into the current branch."
+  ],
+  [
+   "sync",
+   "Bring another branch (usually main) into the current feature branch to update it."
+  ],
+  [
+   "undo",
+   "Undo one recent commit, or any request to undo / take back / roll back that leaves open how to undo it."
+  ],
+  [
+   "amend",
+   "Change the most recent commit, e.g. rewrite its message or add a forgotten file."
+  ],
+  [
+   "squash",
+   "Combine several recent commits into a single commit."
+  ],
+  [
+   "revert",
+   "Create a new commit that reverses an earlier commit, keeping history intact."
+  ],
+  [
+   "unstage",
+   "Remove files from the staging area without changing their contents."
+  ],
+  [
+   "stash",
+   "Temporarily shelve uncommitted changes to get a clean working tree."
+  ],
+  [
+   "cleanup",
+   "Discard uncommitted work in the working tree (modified and/or untracked files) to start fresh."
+  ],
+  [
+   "discard_local",
+   "Throw away local commits that are not on the remote by resetting the branch to the remote's version."
+  ],
+  [
+   "force_push",
+   "Push while overwriting the remote branch's history with the local version."
+  ],
+  [
+   "init",
+   "Create a new Git repository in this folder."
+  ],
+  [
+   "add_remote",
+   "Add or set the URL of a remote repository."
+  ],
+  [
+   "find_lost_work",
+   "Search for and recover lost or deleted commits."
+  ],
+  [
+   "remotes",
+   "List the configured remote repositories and their URLs."
+  ],
+  [
+   "stash_pop",
+   "Bring back the most recently stashed changes into the working tree."
+  ],
+  [
+   "pull_rebase",
+   "Pull the remote's commits and replay my local commits on top of them (rebase instead of merge)."
+  ],
+  [
+   "set_upstream",
+   "Make the current branch track a branch on the remote."
+  ],
+  [
+   "remove_remote",
+   "Remove a configured remote from this repository."
+  ],
+  [
+   "delete_repo",
+   "Delete this folder's Git repository (the .git directory), keeping the files."
+  ],
+  [
+   "__reject__",
+   "Not a request about Git or version control at all."
+  ]
+ ],
+ "in_progress": {
+  "_comment": "Asked ONLY when the repo is mid-operation (Layer 0 situation), before the main question. Same load-bearing order/wording rule.",
+  "instructions": "A Git operation is in progress in this repository. Does the developer's request control that operation (continue, skip or abort it)? If not, choose something_else.",
+  "families": {
+   "rebase": [
+    [
+     "rebase_continue",
+     "Continue the rebase in progress, after the conflicts are resolved."
+    ],
+    [
+     "rebase_skip",
+     "Skip the commit the rebase stopped on and carry on with the rest."
+    ],
+    [
+     "rebase_abort",
+     "Cancel the rebase and go back to how the branch was before it started."
+    ]
+   ],
+   "merge": [
+    [
+     "merge_abort",
+     "Cancel the merge in progress and go back to before it started."
+    ]
+   ],
+   "cherry_pick": [
+    [
+     "cherry_pick_continue",
+     "Continue the cherry-pick in progress, after the conflicts are resolved."
+    ],
+    [
+     "cherry_pick_abort",
+     "Cancel the cherry-pick and go back to before it started."
+    ]
+   ],
+   "revert": [
+    [
+     "revert_continue",
+     "Continue the revert in progress, after the conflicts are resolved."
+    ],
+    [
+     "revert_abort",
+     "Cancel the revert and go back to before it started."
+    ]
+   ]
+  },
+  "other": [
+   "something_else",
+   "Anything else: the request is not about continuing, skipping or aborting the operation in progress."
+  ]
+ }
+}

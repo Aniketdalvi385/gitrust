@@ -1,10 +1,7 @@
 use std::collections::HashSet;
 
-use anyhow::Context;
-
 use crate::commands::{ClassificationResult, ClassifiedFile, ResolutionOutcome};
 use crate::config::Config;
-use crate::intent;
 use crate::manifest::FileManifest;
 
 /// Trait for file resolution — enables swapping resolution strategy.
@@ -17,7 +14,7 @@ pub trait FileResolver {
     ) -> impl std::future::Future<Output = anyhow::Result<ResolutionOutcome>> + Send;
 }
 
-/// Default two-pass resolver (filename match + semantic LLM scan).
+/// Default two-pass resolver (filename match + per-file Kev relatedness).
 pub struct TwoPassResolver;
 
 impl FileResolver for TwoPassResolver {
@@ -48,9 +45,9 @@ impl FileResolver for TwoPassResolver {
             .filter(|m| !filename_matches.contains(&m.path))
             .collect();
 
-        // Pass 2: semantic LLM classification on unmatched files
+        // Pass 2: per-file Kev relatedness on unmatched files
         let semantic_result = if !unmatched.is_empty() {
-            classify_manifest_via_llm(&unmatched, feature_hint, config).await?
+            classify_manifest_via_kev(&unmatched, feature_hint, config).await?
         } else {
             ClassificationResult {
                 related: vec![],
@@ -108,103 +105,82 @@ pub fn filename_match(manifests: &[FileManifest], pattern: &str) -> Vec<String> 
         .collect()
 }
 
-/// Pass 2: semantic LLM classification via a single Ollama call.
-async fn classify_manifest_via_llm(
+/// Kev P(yes) at or above this → related (pre-selected in the picker).
+pub const RELATED_AT: f32 = 0.7;
+/// Kev P(yes) at or below this → unrelated (hidden unless --show-all).
+pub const UNRELATED_AT: f32 = 0.3;
+/// Files per Kev request. Kev-0.8B was trained on states up to ~7.5k tokens;
+/// 8 files × ≤600 diff chars stays far inside that.
+const FILES_PER_REQUEST: usize = 8;
+const DIFF_CHARS: usize = 600;
+
+/// Pass 2: ask Kev one yes/no question per file — "does this file belong in a
+/// commit of only the <feature> changes?" — with the change set as the state.
+/// Calibrated probabilities are banded rather than forced into a binary split:
+/// the middle band goes to the user as "uncertain", which is the honest answer
+/// when the evidence is thin (paper §9, Problem B).
+async fn classify_manifest_via_kev(
     manifests: &[&FileManifest],
     feature: &str,
     config: &Config,
 ) -> anyhow::Result<ClassificationResult> {
-    let manifest_block = build_classification_block(manifests);
-    let prompt = format!(
-        r#"A developer said: "push all changes related to {feature}".
-Below are ALL modified files with their diffs.
-Classify each file as related, uncertain, or unrelated to "{feature}".
-
-Key rules:
-- Look for SEMANTIC relevance — not just keyword matches in filename.
-- A file adding a nav link to /export IS related to export functionality.
-- A file registering a route IS related to that route's feature.
-- If you cannot tell from the diff alone, classify as uncertain.
-
-Return ONLY JSON — no prose:
-{{
-  "related":   [{{"index": N, "reason": "one sentence"}}],
-  "uncertain": [{{"index": N, "reason": "one sentence"}}],
-  "unrelated": [{{"index": N, "reason": "one sentence"}}]
-}}
-
-FILES:
-{manifest_block}"#
-    );
-
-    let raw = intent::call_ollama(&prompt, "", config, 0.0)
-        .await
-        .context("Semantic file classification failed. Is ollama serve running?")?;
-    let cleaned = intent::json_repair(&raw);
-
-    parse_classification_response(&cleaned, manifests)
-}
-
-fn build_classification_block(manifests: &[&FileManifest]) -> String {
-    let mut block = String::new();
-    for (i, f) in manifests.iter().enumerate() {
-        let snippet = if f.diff_snippet.len() > 2000 {
-            format!(
-                "({} lines — large diff, showing first 500 chars)\n{}",
-                f.line_count,
-                &f.diff_snippet[..500.min(f.diff_snippet.len())]
-            )
-        } else {
-            f.diff_snippet.clone()
-        };
-        block += &format!(
-            "FILE {} [{:?}] {}\n{}\n---\n",
-            i, f.change_type, f.path, snippet
-        );
-    }
-    block
-}
-
-fn parse_classification_response(
-    json_str: &str,
-    manifests: &[&FileManifest],
-) -> anyhow::Result<ClassificationResult> {
-    let v: serde_json::Value = serde_json::from_str(json_str)
-        .context("LLM returned unparseable JSON for classification")?;
-
-    fn extract_files(
-        v: &serde_json::Value,
-        key: &str,
-        manifests: &[&FileManifest],
-    ) -> Vec<ClassifiedFile> {
-        let mut result = Vec::new();
-        if let Some(arr) = v[key].as_array() {
-            for item in arr {
-                let idx = item["index"].as_u64().unwrap_or(999) as usize;
-                let reason = item["reason"]
-                    .as_str()
-                    .unwrap_or("no reason given")
-                    .to_string();
-                if idx < manifests.len() {
-                    result.push(ClassifiedFile {
-                        path: manifests[idx].path.clone(),
-                        reason,
-                    });
-                }
+    let mut result = ClassificationResult {
+        related: vec![],
+        uncertain: vec![],
+        unrelated: vec![],
+    };
+    for chunk in manifests.chunks(FILES_PER_REQUEST) {
+        let files: Vec<serde_json::Value> = chunk
+            .iter()
+            .map(|f| {
+                let diff: String = f.diff_snippet.chars().take(DIFF_CHARS).collect();
+                serde_json::json!({ "path": f.path, "change": format!("{:?}", f.change_type), "diff": diff })
+            })
+            .collect();
+        let state = serde_json::json!({
+            "user_request": format!("push the {} changes", feature),
+            "changed_files": files,
+        });
+        let questions: Vec<String> = chunk
+            .iter()
+            .map(|f| {
+                format!(
+                    "Should the changed file `{}` be included in a commit of only the '{}' changes?",
+                    f.path, feature
+                )
+            })
+            .collect();
+        let probs = crate::kev::ask_nouls(config, state, &questions).await?;
+        for (f, p) in chunk.iter().zip(probs) {
+            let file = ClassifiedFile {
+                path: f.path.clone(),
+                reason: format!("kev p={:.2}", p),
+            };
+            match band(p) {
+                Band::Related => result.related.push(file),
+                Band::Uncertain => result.uncertain.push(file),
+                Band::Unrelated => result.unrelated.push(file),
             }
         }
-        result
     }
+    Ok(result)
+}
 
-    let related = extract_files(&v, "related", manifests);
-    let uncertain = extract_files(&v, "uncertain", manifests);
-    let unrelated = extract_files(&v, "unrelated", manifests);
+#[derive(Debug, PartialEq, Eq)]
+enum Band {
+    Related,
+    Uncertain,
+    Unrelated,
+}
 
-    Ok(ClassificationResult {
-        related,
-        uncertain,
-        unrelated,
-    })
+fn band(p: f32) -> Band {
+    if p >= RELATED_AT {
+        Band::Related
+    } else if p <= UNRELATED_AT {
+        Band::Unrelated
+    } else {
+        Band::Uncertain
+    }
 }
 
 /// Validate explicitly named files exist and are modified in the repo.
@@ -377,25 +353,12 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_classification_response() {
-        let manifests = vec![
-            make_manifest("src/login.rs", "+login"),
-            make_manifest("src/main.rs", "+route"),
-            make_manifest("src/config.rs", "+config"),
-        ];
-        let refs: Vec<&FileManifest> = manifests.iter().collect();
-
-        let json = r#"{
-            "related": [{"index": 0, "reason": "login form"}, {"index": 1, "reason": "registers route"}],
-            "uncertain": [{"index": 2, "reason": "might configure login"}],
-            "unrelated": []
-        }"#;
-
-        let result = parse_classification_response(json, &refs).unwrap();
-        assert_eq!(result.related.len(), 2);
-        assert_eq!(result.uncertain.len(), 1);
-        assert_eq!(result.unrelated.len(), 0);
-        assert_eq!(result.related[0].path, "src/login.rs");
-        assert_eq!(result.related[1].path, "src/main.rs");
+    fn test_band_thresholds() {
+        assert_eq!(band(0.88), Band::Related);
+        assert_eq!(band(RELATED_AT), Band::Related);
+        assert_eq!(band(0.58), Band::Uncertain);
+        assert_eq!(band(0.31), Band::Uncertain);
+        assert_eq!(band(UNRELATED_AT), Band::Unrelated);
+        assert_eq!(band(0.08), Band::Unrelated);
     }
 }
