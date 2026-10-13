@@ -44,6 +44,11 @@ repo; where a number is a single run on a small set, it is marked as such.
   the 21** non-canonical queries (14 dirty), rejects all 4 out-of-scope inputs, asks on 2, and takes
   **zero wrong Git actions**. Order-stability rises from 26/44 to 39/44. One confident miss
   remains ("push all api changes" → `push`, p 0.96) — calibration cannot catch a confident error.
+- **Hardening around the fine-tune (§12.7):** four deterministic second opinions — a topic
+  cross-check, a reversed-order re-ask for destructive ops, a 0.9 bar for "not a Git request", and
+  an idle shutdown that hands the ~3 GB back. Measured through the release binary on the 21
+  non-fast-path queries: **0 wrong actions and 0 wrong refusals** in both repo states (before: 1
+  wrong refusal dirty), at the cost of 3 more menus per state.
 - The architecture thesis survives and sharpens: the model still only *ranks*; deterministic code
   decides, captures every argument, and gates everything destructive. What changed is that the
   thing doing the ranking is now good at ranking.
@@ -247,7 +252,7 @@ confidence is the fine-tune's job (§12).
 | File scoping (Problem B) | one LLM call returning related/uncertain/unrelated JSON | one Kev yes/no per file (8 per request, ≤600 diff chars each), **banded** ≥0.7 related / ≤0.3 unrelated / else uncertain | calibrated probabilities make the "uncertain" band honest (paper §9) |
 | Runtime | Ollama + `qwen2.5:3b` | `uv` + Kev checkout; server autostarted in the background on first need, own process group | "background if required" |
 | Setup | install Ollama, pull model | clone Kev @ pinned commit into `~/.gitrust/kev`, `uv sync --extra serve`, start, smoke-test, save `kev_dir` | |
-| Config | `model`, `ollama_url`, `router_enabled`, `router_min_margin` | `kev_url`, `kev_run`, `kev_dir`, `kev_autostart`, `kev_min_confidence`, `kev_destructive_min_confidence` | old keys are ignored, so old configs still load (tested) |
+| Config | `model`, `ollama_url`, `router_enabled`, `router_min_margin` | `kev_url`, `kev_run`, `kev_dir`, `kev_autostart`, `kev_min_confidence`, `kev_destructive_min_confidence` (later: `kev_reject_min_confidence`, `kev_idle_minutes`, §12.7) | old keys are ignored, so old configs still load (tested) |
 | Removed | — | `router.rs`, `prompts.rs` (moved to `docs/classifier_eval/legacy_prompts.rs` so the paper harness still runs), all Ollama HTTP code, JSON repair, LLM commit drafting, alternates menu, prompt-string rendering | |
 
 **Unchanged on purpose:** the fast-path whitelist and captures, the Layer-1.5 situation gate (still
@@ -327,7 +332,8 @@ cover these; a coverage extension is owed.**
   paper's 4B finding in a new form: on 8 GB, there is room for exactly one model. Hence "Kev
   replaces qwen", and hence commit-message drafting (which needs a generator) was dropped.
 - **Cold start:** 24 s from spawn to `/v1/models` ready; first query via autostart **37.4 s**
-  end-to-end; the next query **1.4 s**. The server stays resident after GiTrust exits.
+  end-to-end; the next query **1.4 s**. The server stays resident after GiTrust exits — until
+  `kev_idle_minutes` (default 15) pass without a query, when the supervisor stops it (§12.7).
 - **Fast-path needs no server** (verified: 23/44 eval queries ran with Kev off).
 
 ## 10. Things that went wrong (methodology and code) — the honest part
@@ -530,6 +536,57 @@ carries its fitted temperature, so no environment variable is needed. The weight
 this machine (and the Colab download); the binary's default stays the public stock checkpoint
 until the fine-tune is published somewhere `gitrust setup` can fetch it.
 
+### 12.7 Hardening the harness around the fine-tune (no retraining)
+
+The fine-tune's remaining failures are ones a threshold cannot see: a *confident* wrong op
+(`push` for "push all api changes", p 0.96), confident order-flips (undo↔revert at 0.77), and a
+mid-confidence wrong refusal ("where am i right now", `__reject__` 0.66). Four deterministic
+additions, each written test-first (each new test was also checked to fail with its check
+switched off), none able to *add* an action — they only turn "act" into "ask":
+
+| Check | Rule | Code |
+|---|---|---|
+| **Topic cross-check** | Kev routes `push` / `add_commit` but `capture_topic` finds a topic in the request → menu {scoped_push, Kev's op} | `intent::conflicting_op`, `classify_query` |
+| **Reordered re-ask** | a route to a `DESTRUCTIVE_OPS` member (incl. in-progress skip/abort) is re-asked with the options reversed (`__reject__` / `something_else` kept last); a different top op, or a failed second call, → menu | `kev::reversed_keep_last`, `agent::reversed_top` |
+| **Softer refusal** | refuse only at `__reject__` ≥ `kev_reject_min_confidence` (0.9); below it, a menu of Kev's top Git ops + "none of these" | `kev::decide` |
+| **Idle shutdown** | a server GiTrust starts is owned by a hidden `gitrust kev-supervise` process (same process group), which stops the group after `kev_idle_minutes` (15) without a request; requests touch `~/.gitrust/kev.last_used`. 0 = never; a server you started yourself is never stopped | `kev::supervise`, `kev::idle_expired` |
+
+Cost: the re-ask adds one model call (~0.5 s) to destructive routes only — which then still meet
+their own gates. The supervisor is ~2.5 MB resident.
+
+**Whole-system, through the release binary** (`run_binary_policy.py`: `gitrust --yes "<q>"` per
+query in a fresh scratch repo, so every layer is in the loop; the 21 queries the ⚡ fast-path
+doesn't catch; fine-tuned, T 3.564):
+
+| | FT clean before (§12.5) | **FT clean after** | FT dirty before | **FT dirty after** |
+|---|---|---|---|---|
+| Kev acts alone (all correct) | 15 | **14** | 14 | **13** |
+| "Not a Git request" — right | 4 | 2 | 4 | 3 |
+| "Not a Git request" — wrong | 0 | 0 | 1 | **0** |
+| Menu | 2 | 5 | 2 | 5 |
+| **Wrong Git action** | 0 | **0** | 0 | **0** |
+
+("Before" is §12.5's policy replay from the raw rankings; "after" is the binary. "Acts alone"
+counts "collapse my last few commits": Kev routes `squash` at 0.95 and the count is then *asked*
+for — "few" is not a number — which `--yes` refuses, correctly.)
+
+What moved, case by case:
+- "roll back that last commit i just made" → **menu** (both states): undo 0.68, but revert 0.62
+  with the options reversed. This is the confident flip §12.5 found; it is now asked, not acted on.
+- "where am i right now" (dirty) → **menu** instead of a wrong refusal.
+- "write me a poem about git" (0.55 / 0.67) and "what time is it" (0.85, clean only) → **menu**
+  instead of a correct refusal. That is the price of the 0.9 bar: harmless (the menu's "none of
+  these" does nothing, `--yes` refuses) but noisier. 0.7 would have cost one menu per state, but
+  the dirty-state margin there is 0.66 vs 0.67 — too thin to set a bar on.
+- The topic cross-check **never fired** on this set: every "push … <topic> changes" eval phrasing
+  is a ⚡ fast-path hit, and Kev got the non-canonical ones right ("ship the auth stuff"; live:
+  "ship the api fixes" 0.86, "publish the login work" 0.82, "send up the api fixes" 0.66). It is a
+  backstop for the known confident confusion, verified by unit test, not by an eval number.
+
+Two small bugs surfaced by the live probe and fixed (test-first): a trailing destination broke
+topic capture ("push only the login stuff **to github**" → no topic), and the missing-argument
+error read "No the feature/topic to push given" (now "Couldn't find … in your request").
+
 ## 13. What this changes in the write-up (`writing/`)
 
 - The spine holds and gets sharper: *the intelligence belongs in deterministic layers around the
@@ -559,7 +616,7 @@ until the fine-tune is published somewhere `gitrust setup` can fetch it.
   `gitrust setup` can fetch them and make it the default, or keep it opt-in via `kev_run`.
 - Thresholds were set for stock; with the fine-tune, 0.5/0.6 already route 37–41 of 44 with the only
   confident miss at 0.96, so raising them buys nothing on this set. Re-check on a larger eval before
-  changing them.
+  changing them. The same goes for the 0.9 refusal bar (§12.7), set from four out-of-scope items.
 - A training round 2 for `push all <topic> changes` vs `push` (the remaining confident miss) — with
   new held-out phrasings, since these eval items cannot be trained on.
 - **Manual acceptance suite** (`GiTrust-test`) needs a v0.4.0 pass. Ollama-specific cases (e.g.
@@ -594,6 +651,9 @@ python3 run_kev_eval.py --expect-run runs/gitrust-v1 --tag ft-clean
 python3 run_kev_eval.py --expect-run runs/gitrust-v1 --tag ft-dirty --repo-state "on branch main, 2 files modified, 1 untracked file"
 python3 run_kev_eval.py --expect-run runs/gitrust-v1 --tag ft-permute --permute
 python3 run_kev_scope_eval.py --expect-run runs/gitrust-v1
+(cd ../../gitrust && cargo build --release)   # §12.7: whole system, through the binary
+python3 run_binary_policy.py --expect-run runs/gitrust-v1
+python3 run_binary_policy.py --expect-run runs/gitrust-v1 --dirty
 ```
 
 Known-good baselines (35 ops): stock **31/44 clean, 30/44 dirty**; `gitrust-v1` at T 3.564

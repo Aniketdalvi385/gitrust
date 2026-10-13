@@ -125,7 +125,7 @@ cargo build --release          # optimized binary at target/release/gitrust
 cargo run -- setup             # install Kev, start it, smoke-test it
 cargo run -- "show status"     # one-shot query
 cargo run                      # interactive REPL
-cargo test                     # 226 tests, no model server needed (Kev is mocked)
+cargo test                     # 238 tests, no model server needed (Kev is mocked)
 ```
 
 Config lives at `~/.gitrust.toml`; runtime state (snapshots, trash-net, logs) at
