@@ -224,12 +224,15 @@ pub async fn run_agent(
         IntentType::FeaturePipeline(op) => {
             handle_feature_pipeline(&mut repo, op, config, &*gate, auto_confirm, show_all).await
         }
-        IntentType::NeedsClarification(question) => {
-            println!("? {}", question);
-            println!("  (Max clarification attempts reached. Try rephrasing your query.)");
-            Ok(())
-        }
+        IntentType::NeedsClarification(question) => unclear_request(&question),
     }
+}
+
+/// A request GiTrust won't act on (e.g. Kev is confident it isn't about Git).
+/// Nothing was done, so it is an `Err`: main() renders `✗ …` and exits 1 (the
+/// REPL prints and continues) — a refusal must never read as success.
+fn unclear_request(question: &str) -> anyhow::Result<()> {
+    Err(anyhow::anyhow!("{}", question))
 }
 
 /// Layer 1: turn the query into an intent.
@@ -5455,6 +5458,14 @@ mod kev_layer1_tests {
         assert!(classify(&k, &ctx(), "nuke it all", &AutoConfirmGate)
             .await
             .is_err());
+    }
+
+    #[test]
+    fn unclear_request_is_a_nonzero_refusal() {
+        // "Not a Git request" did nothing, so it must not exit 0 — a script must
+        // never read a refused, never-executed request as success.
+        let err = unclear_request(crate::copy::NOT_A_GIT_REQUEST).unwrap_err();
+        assert_eq!(err.to_string(), crate::copy::NOT_A_GIT_REQUEST);
     }
 
     #[tokio::test]
