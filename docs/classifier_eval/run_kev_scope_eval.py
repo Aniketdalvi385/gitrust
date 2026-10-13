@@ -49,6 +49,11 @@ def ask(topic, files):
     return probs, r.get("latency_ms"), (time.time() - t) * 1000
 
 def main():
+    m = json.loads(urllib.request.urlopen(URL + "/v1/models").read())["models"][0]
+    print(f"server: run={m['run']} temperature={m['temperature']:.3f}")
+    expect = sys.argv[sys.argv.index("--expect-run") + 1] if "--expect-run" in sys.argv else None
+    if expect and not m["run"].rstrip("/").endswith(expect.rstrip("/")):
+        sys.exit(f"REFUSING: server is serving {m['run']}, expected {expect}")
     hi, lo = 0.7, 0.3  # include ≥ hi, exclude ≤ lo, else "uncertain" (user decides)
     tot = right = unc = wrong = 0
     for vid, topic, files, gold in FIXTURES:

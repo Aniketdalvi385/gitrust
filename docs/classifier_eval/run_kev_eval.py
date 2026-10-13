@@ -28,6 +28,7 @@ Usage:  python3 run_kev_eval.py [--url http://127.0.0.1:8009] [--tag name]
                                 [--with-ollama]   # keep qwen2.5:3b resident too
                                 [--permute]       # also measure option-order sensitivity
                                 [--repo-state "on branch main, 2 untracked files"]
+                                [--expect-run runs/gitrust-v1]   # refuse if another model answers
 Requires: a running `python -m kev.serve`. Pure stdlib.
 """
 import json, os, re, statistics, subprocess, sys, threading, time, urllib.request
@@ -106,7 +107,11 @@ def ask(q, endpoint="/v1/systemone", extra=None):
 # ------------------------------------------------------------------ main
 def main():
     info = json.loads(urllib.request.urlopen(URL + "/v1/models").read())
-    print(f"server: {json.dumps(info)[:300]}")
+    m0 = info["models"][0]
+    print(f"server: run={m0['run']} temperature={m0['temperature']:.3f} backend={m0.get('backend')}")
+    expect = arg("--expect-run")
+    if expect and not m0["run"].rstrip("/").endswith(expect.rstrip("/")):
+        sys.exit(f"REFUSING: server is serving {m0['run']}, expected {expect}")
     if "--with-ollama" in sys.argv:
         # Make qwen2.5:3b resident at the production context, as GiTrust would.
         post(OLLAMA + "/api/generate", {"model": "qwen2.5:3b", "prompt": "hi", "stream": False,

@@ -1,7 +1,7 @@
 # From qwen2.5:3b to Kev — replacing the local LLM with a decision model (v0.3.0 → v0.4.0)
 
-**Status:** v0.4.0 ships **stock Kev-0.8B**. A fine-tune (Colab T4) is in progress; its results
-will be appended as §12 and compared against the stock numbers here.
+**Status:** v0.4.0 ships **stock Kev-0.8B** by default. A GiTrust fine-tune (`gitrust-v1`, Colab T4)
+is measured in §12 and is a large improvement; it is used by setting `kev_run` (§12.6).
 **Date:** 2026-10-13. **Machine:** Apple M2, **8 GB RAM** (unchanged binding constraint).
 **Kev:** github.com/jaredpalmer/kev @ `85ccf56`, weights `jaredpalmer/kev-0.8b@v1.0`
 (Hub snapshot `bf75a6a8`), served by `kev.serve` via MLX, bf16, temperature 2.35.
@@ -39,6 +39,11 @@ repo; where a number is a single run on a small set, it is marked as such.
   therefore **replaces** the LLM; it does not join it.
 - Fine-tuning Kev-0.8B **locally is impossible on 8 GB** (MPS OOM moving weights to the GPU;
   system free memory hit 1%). Training was moved to Google Colab.
+- **Fine-tuned on ~1.2k synthetic phrasings (§12)**, Kev-0.8B reaches **40/44 (91%) clean and
+  41/44 (93%) dirty**, safety 5/5, and becomes confident: whole-system it acts alone on **15 of
+  the 21** non-canonical queries (14 dirty), rejects all 4 out-of-scope inputs, asks on 2, and takes
+  **zero wrong Git actions**. Order-stability rises from 26/44 to 39/44. One confident miss
+  remains ("push all api changes" → `push`, p 0.96) — calibration cannot catch a confident error.
 - The architecture thesis survives and sharpens: the model still only *ranks*; deterministic code
   decides, captures every argument, and gates everything destructive. What changed is that the
   thing doing the ranking is now good at ranking.
@@ -351,6 +356,18 @@ convincing wrong answer before it was caught.
    the empty prompt); now an error.
 9. **Ctrl-C would kill the background server** (same process group); now spawned in its own group.
 10. **Local fine-tuning OOM** (§11) — three attempts; the watchdog killed the first two at 1% free.
+11. **The Colab before/after check scored the stock model twice** (147/216 for both). `p.kill()` on
+    the `uv run` wrapper left the Python server on the port; the "fine-tuned" readiness probe was
+    answered by the old server. Identical numbers after a run whose loss fell 0.97 → 0.01 was the
+    tell. Fixed: own process group, kill the group, refuse if the port is busy, and verify the run
+    the server reports before scoring (`run_kev_dev.py`, `run_kev_eval.py --expect-run`). Local
+    re-measurement: 147 vs **197**.
+12. **The fine-tuned checkpoint was uncalibrated** (temperature 1.0 vs stock 2.35). Comparing its raw
+    confidences against thresholds tuned for calibrated probabilities would have flattered it.
+    Caught by reading `head.pt` before evaluating; fitted on dev (§12.2).
+13. **A "not a Git request" refusal exited 0** and printed a leftover line from the retired qwen
+    clarification loop. A refusal that did nothing must not read as success (the v0.2 exit-code
+    finding, again); now exit 1, with a test.
 
 ## 11. Fine-tuning: why Colab
 
@@ -373,12 +390,145 @@ schema, auth; dev, hotfix; 3/three/few), any phrasing equal to an eval query or 
 Jaccard ≥ 0.6 is dropped (15 dropped, listed by the script), and train/dev are split by source
 phrasing. The 44-case set is never uploaded.
 
-## 12. Fine-tuned results
+## 12. Fine-tuned results (`gitrust-v1`)
 
-*Pending (Colab run started 2026-10-13).* To fill: dev accuracy stock vs fine-tuned (notebook §4);
-44-case top-1, by bucket, selective-routing table, permute stability, clean and dirty states;
-shipped-policy Table 3; in-progress probe; Problem B probe. Comparison must use the same 35-op
-`kev_ops.json`.
+### 12.1 The run
+
+Colab T4, 2026-10-13: delta mode from `kev-0.8b@v1.0`, 1,251 training records, 2 epochs = 314
+optimizer steps, lr 2e-5, batch 1 × accum 8, `--perm_kl 1.0`, `--checkpointing 1`, autocast bf16
+over fp32 weights, 5,971 s (~100 min) wall, 2.14M forward tokens. Loss ~0.97 → ~0.01; the
+permutation-KL term ~0.17 → ~0.01. All 372 LoRA tensors changed vs stock (max |Δ| 1.3e-3).
+Artifacts: `adapter_model.safetensors` (sha256 `7192732b…`), `head.pt`; 65 MB total. Evaluated
+locally on the 8 GB M2 via MLX — the same path GiTrust serves.
+
+### 12.2 Calibration — the fine-tune ships uncalibrated
+
+The trained `head.pt` carries **temperature 1.0** (raw logits); stock ships 2.35. Served raw, the
+fine-tune is over-confident. A temperature was fitted on the **dev split** (216 held-out
+phrasings — never trained on, but generated from the same templates, i.e. in-distribution) by
+minimum NLL over Kev's own 0.25–4 log grid: **T = 3.564** (NLL 0.795 → 0.361, ECE 0.065 → 0.025).
+It is written into `runs/gitrust-v1/head.pt` (`temperature_fit` records the provenance; the T=1
+original is kept as `head.pt.T1-backup`). All numbers below are at T = 3.564. The 44-case set was
+**not** used for fitting. Yes/no (`noul`) questions use the same temperature, which was fitted on
+choice questions only — an untested assumption for §12.5.
+
+### 12.3 Dev split (in-distribution; sanity check only)
+
+| | stock (T 2.35) | fine-tuned (T 1 → fitted) |
+|---|---|---|
+| routing questions (199) | 131 (65.8%) | **180 (90.5%)** |
+| in-progress questions (17) | 16 (94.1%) | **17 (100%)** |
+| all (216) | 147 (68.1%) | **197 (91.2%)** |
+| NLL / ECE | 1.483 / 0.341 | 0.361 / 0.025 |
+
+Stock's ECE of 0.34 on this task is the quantitative form of "stock mostly asks": it is badly
+**under**-confident on GiTrust's questions.
+
+### 12.4 The 44-case set (held out, never trained or fitted on)
+
+**Table 4. Stock vs fine-tuned, 35 ops, fast-path bypassed.**
+
+| Bucket (n) | qwen LLM | Router | Stock clean | Stock dirty | **FT clean** | **FT dirty** |
+|---|---|---|---|---|---|---|
+| variant-M04 scope (4) | 0/4 | 4/4 | 0/4 | 0/4 | 2/4 | 3/4 |
+| variant-M19 squash (3) | 0/3 | 3/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+| variant-M03 commit (3) | 1/3 | 3/3 | 2/3 | 2/3 | 3/3 | 3/3 |
+| variant-M10 sync (3) | 1/3 | 2/3 | 1/3 | 1/3 | **3/3** | **3/3** |
+| variant-M20 amend (3) | 0/3 | 1/3 | 3/3 | 3/3 | 3/3 | 3/3 |
+| unseen (12) | 4/12 | 8/12 | 8/12 | 9/12 | 10/12 | 10/12 |
+| canonical (5) | 5/5 | 3/5 | 4/5 | 3/5 | 5/5 | 5/5 |
+| tricky (2) | 2/2 | 2/2 | 2/2 | 1/2 | 2/2 | 2/2 |
+| out-of-scope (4) | 4/4 | 0/4 | 4/4 | 4/4 | 4/4 | 4/4 |
+| safety (5) | 1/5 | 2/5 | 4/5 | 4/5 | **5/5** | **5/5** |
+| **total** | 18 (41%) | 28 (64%) | 31 (70%) | 30 (68%) | **40 (91%)** | **41 (93%)** |
+
+Misses (clean): "push all docs changes" → `push` (0.68), "push all api changes" → `push` (**0.96**),
+"where am i right now" → `status` (0.41), "put my work up on github" → `scoped_push` (0.32).
+Dirty: "push all api changes" → `push` (0.91), "where am i right now" → `__reject__` (0.66),
+"put my work up on github" → `scoped_push` (0.40).
+
+**Confidence and selective routing.**
+
+| | top-prob correct (min / mean / max) | top-prob wrong (min / mean / max) |
+|---|---|---|
+| stock clean | 0.14 / 0.39 / 0.79 | 0.12 / 0.25 / 0.52 |
+| FT clean | 0.36 / 0.89 / 1.00 | 0.32 / 0.59 / 0.96 |
+| FT dirty | 0.42 / 0.90 / 1.00 | 0.40 / 0.66 / 0.91 |
+
+| threshold | stock clean | FT clean | FT dirty |
+|---|---|---|---|
+| 0.5 | 9 routed / 8 right | **39 / 37** | **41 / 39** |
+| 0.6 | 7 / 7 | 37 / 35 | 40 / 38 |
+| 0.7 | 5 / 5 | 35 / 34 | 36 / 35 |
+| 0.9 | 0 / 0 | 31 / 30 | 34 / 33 |
+
+No destructive misroute survives any threshold, in either state. **The weakness that remains is
+over-confidence on near-synonyms:** `push` vs `scoped_push` at p 0.96 survives every threshold —
+calibrated on average, wrong with conviction on a specific confusion. The training data's
+scoped-push templates evidently did not teach "push all <topic> changes" (eval topics were banned
+from training slots, §11), and nothing in the confidence signal flags it. This is the case for
+keeping deterministic captures in front of the model: in the binary, all four "push … changes"
+eval phrasings are ⚡ fast-path hits and never reach Kev.
+
+**Repo-state sensitivity is gone** at the top-1 level (40 → 41 dirty vs stock's 31 → 30); the
+training data varied the state across six shapes.
+
+### 12.5 Robustness, probes, whole-system
+
+**Option order** (`/permute`, 6 orders): stable on **39/44** (stock 26/44). Unstable:
+"push all docs changes" {push, scoped_push} (p 0.68), "push all schema changes" {push, scoped_push}
+(0.42), "roll back that last commit i just made" {revert, **undo**} (0.77), "put my work up on
+github" {add_commit, push, scoped_push} (0.32), "clean up my repo" {cleanup, delete_repo} (0.47).
+**Correction to §5.1's claim:** for the fine-tune, confident answers are *not* all order-stable
+(0.68 and 0.77 flip). Both land on gated or confirmed operations, and "clean up my repo" (a
+destructive-vs-destructive confusion) is a ⚡ canonical and `delete_repo` refuses on any repo with
+commits — but "confident ⇒ order-stable" can no longer be claimed.
+
+**Problem B probe** (same M-04 fixtures, §8.1; the fine-tune never saw a file-relatedness
+question):
+
+| fixture | P(yes), stock → fine-tuned (gold **related**) |
+|---|---|
+| M-04a login | **login 0.88→0.97**, **auth 0.58→0.71**, readme 0.08→0.02, api_client 0.13→0.05 |
+| M-04b docs | **README 0.75→0.92**, **guide 0.78→0.92**, login 0.33→0.22, schema 0.36→0.26 |
+| M-04c api | **api_client 0.74→0.90**, **api_routes 0.69→0.82**, login 0.39→0.31, README 0.48→0.49 |
+| M-04d schema | **schema 0.89→0.98**, **migrations 0.62→0.70**, api_client 0.36→0.27, README 0.40→0.37 |
+
+Banded 0.3/0.7: confidently right **7/16 → 13/16**, uncertain 9 → 3, confidently wrong 0 → 0. The
+same caveat stands (one-line fixtures whose names give the answer) — this is transfer, not proof.
+
+**In-progress probe** (rebase, §8.2): "conflicts are sorted, carry on" → continue 0.92;
+"continue" → continue 0.97; "abort the rebase" → abort 0.99; "skip this commit" → skip 0.97;
+"what files are changed" → something_else 0.97; "get me out of here" → something_else 0.62
+(abort 0.33). **Contaminated:** "continue" and "skip this commit"-style phrasings are in the
+training records, so this probe is largely in-distribution. It shows the mechanism works, not how
+well it generalizes.
+
+**Whole-system under the shipped policy** (the 21 queries the ⚡ fast-path does not catch):
+
+| | stock clean | stock dirty | **FT clean** | **FT dirty** |
+|---|---|---|---|---|
+| Kev acts alone (all correct) | 3 | 1 | **15** | **14** |
+| "Not a Git request" — right | 0 | 0 | **4** | **4** |
+| "Not a Git request" — wrong | 0 | 0 | 0 | 1 ("where am i right now", 0.66) |
+| Menu | 18 | 20 | **2** | **2** |
+| **Wrong Git action** | 0 | 0 | **0** | **0** |
+
+Without the fast-path, the fine-tune would have taken two wrong (non-destructive) actions:
+"push all docs/api changes" → plain `push`. With it, none.
+
+**Live binary check** (dirty repo, fine-tuned, `--yes`): "show me the history" → log **0.99** (stock
+0.38); "make me a sandwich" → `__reject__` **0.97** (stock 0.20); "take back that commit" → undo
+1.00 → the undo gate correctly refused (first commit); "commit all with message 'add login'" →
+add_commit 0.97, quoted message captured, committed; "put my work up on github" → scoped_push 0.33
+→ menu → refused under `--yes`. Latency unchanged (~0.5 s; median model time 514–529 ms).
+
+### 12.6 Using the fine-tune
+
+`~/.gitrust.toml`: `kev_run = "runs/gitrust-v1"` (resolved inside `kev_dir`). The checkpoint
+carries its fitted temperature, so no environment variable is needed. The weights exist only on
+this machine (and the Colab download); the binary's default stays the public stock checkpoint
+until the fine-tune is published somewhere `gitrust setup` can fetch it.
 
 ## 13. What this changes in the write-up (`writing/`)
 
@@ -393,14 +543,25 @@ shipped-policy Table 3; in-progress probe; Problem B probe. Comparison must use 
   load-bearing); anything about Problem B beyond "smoke test passed".
 - Claims supported: zero wrong actions under the shipped policy on this set; calibrated confidence
   that separates right from wrong; out-of-scope rejection restored at router-class latency;
-  confident routes order-stable.
+  confident routes order-stable **for stock only** (the fine-tune has confident order-flips, §12.5).
+- With the fine-tune: **~1.2k synthetic phrasings and ~100 T4-minutes took a 0.8B decision model
+  from 70% to 91–93%** on held-out phrasings, and from "mostly asks" to "acts alone on 15/21, wrong
+  on 0". That is the strongest single result of the project, with the honest caveats: author-written
+  training phrasings and author-labeled eval (same author, though the near-duplicate filter and
+  banned slots keep them apart), N = 44, one confident miss that calibration cannot see.
 - Methodology lessons to add to the paper's §7: RSS vs footprint (bug 1) and state-sensitivity
-  (bug 2) — both, like the original three, produced convincing wrong numbers.
+  (bug 2), the double-scored Colab check (bug 11) and the uncalibrated checkpoint (bug 12) — all,
+  like the original three, produced convincing wrong numbers.
 
 ## 14. Open items
 
-- Fine-tune results (§12); if they improve confidence, re-check the 0.5 / 0.6 thresholds with the
-  dirty-state run before changing them.
+- **Decide how to ship the fine-tune** (§12.6): publish the weights (e.g. a Hugging Face repo) so
+  `gitrust setup` can fetch them and make it the default, or keep it opt-in via `kev_run`.
+- Thresholds were set for stock; with the fine-tune, 0.5/0.6 already route 37–41 of 44 with the only
+  confident miss at 0.96, so raising them buys nothing on this set. Re-check on a larger eval before
+  changing them.
+- A training round 2 for `push all <topic> changes` vs `push` (the remaining confident miss) — with
+  new held-out phrasings, since these eval items cannot be trained on.
 - **Manual acceptance suite** (`GiTrust-test`) needs a v0.4.0 pass. Ollama-specific cases (e.g.
   M-01 "Ollama OFF", `T_OLLAMA` fields, M-02 "LLM-path classification") must be rewritten for Kev,
   and commit tests now require the user to type the message.
@@ -424,9 +585,19 @@ python3 run_kev_eval.py --tag 35ops-dirty --repo-state "on branch main, 2 files 
 python3 run_kev_eval.py --tag permute --permute           # option-order stability
 python3 run_kev_scope_eval.py                             # Problem B probe
 python3 make_kev_train.py                                 # regenerate fine-tune data
+
+# Fine-tuned comparison (one server at a time): export KEV_DIR=<kev checkout>; kevctl.sh is in this folder
+kevctl.sh start jaredpalmer/kev-0.8b@v1.0 && python3 run_kev_dev.py --expect-run jaredpalmer/kev-0.8b@v1.0 --tag stock; kevctl.sh stop
+kevctl.sh start runs/gitrust-v1 1.0 && python3 run_kev_dev.py --expect-run runs/gitrust-v1 --tag ft-T1 --fit-temperature; kevctl.sh stop
+kevctl.sh start runs/gitrust-v1      # serves at the temperature stored in head.pt (3.564)
+python3 run_kev_eval.py --expect-run runs/gitrust-v1 --tag ft-clean
+python3 run_kev_eval.py --expect-run runs/gitrust-v1 --tag ft-dirty --repo-state "on branch main, 2 files modified, 1 untracked file"
+python3 run_kev_eval.py --expect-run runs/gitrust-v1 --tag ft-permute --permute
+python3 run_kev_scope_eval.py --expect-run runs/gitrust-v1
 ```
 
-Known-good stock baseline: **31/44 clean, 30/44 dirty** (35 ops). A run that moves it is suspect
+Known-good baselines (35 ops): stock **31/44 clean, 30/44 dirty**; `gitrust-v1` at T 3.564
+**40/44 clean, 41/44 dirty**; dev split stock 147/216, fine-tuned 197/216. A run that moves it is suspect
 until explained — the same rule as the paper's §7.1.
 
 ---
@@ -482,3 +653,52 @@ the fast-path does not catch.
 | 42 | make me a sandwich | out-of-scope | __reject__ |  | ✓ __reject__ 0.25 | ✓ __reject__ 0.17 | ask / ask |
 | 43 | write me a poem about git | out-of-scope | __reject__ |  | ✓ __reject__ 0.18 | ✓ __reject__ 0.18 | ask / ask |
 | 44 | what time is it | out-of-scope | __reject__ |  | ✓ __reject__ 0.30 | ✓ __reject__ 0.26 | ask / ask |
+
+## Appendix B. Per-case results, stock vs fine-tuned (35 ops)
+
+| # | query | label | ⚡ | stock (clean) | fine-tuned (clean) | fine-tuned (dirty) | shipped outcome, fine-tuned (clean / dirty) |
+|---|---|---|---|---|---|---|---|
+| 1 | push the login changes | scoped_push | yes | ✗ __reject__ 0.14 | ✓ scoped_push 0.96 | ✓ scoped_push 0.96 | ⚡ fast-path |
+| 2 | push all docs changes | scoped_push | yes | ✗ push 0.31 | ✗ push 0.68 | ✓ scoped_push 0.62 | ⚡ fast-path |
+| 3 | push all api changes | scoped_push | yes | ✗ push 0.39 | ✗ push 0.96 | ✗ push 0.91 | ⚡ fast-path |
+| 4 | push all schema changes | scoped_push | yes | ✗ push 0.26 | ✓ scoped_push 0.42 | ✓ scoped_push 0.49 | ⚡ fast-path |
+| 5 | commit this | add_commit | yes | ✓ add_commit 0.14 | ✓ add_commit 0.95 | ✓ add_commit 0.95 | ⚡ fast-path |
+| 6 | save my changes | add_commit | yes | ✗ commit 0.12 | ✓ add_commit 0.36 | ✓ add_commit 0.42 | ⚡ fast-path |
+| 7 | commit everything | add_commit | yes | ✓ add_commit 0.31 | ✓ add_commit 0.96 | ✓ add_commit 0.96 | ⚡ fast-path |
+| 8 | sync with main | sync | yes | ✗ pull 0.37 | ✓ sync 0.99 | ✓ sync 1.00 | ⚡ fast-path |
+| 9 | update feature from main | sync | yes | ✓ sync 0.19 | ✓ sync 0.94 | ✓ sync 0.90 | ⚡ fast-path |
+| 10 | pull main into feature | sync | yes | ✗ pull 0.52 | ✓ sync 0.58 | ✓ sync 0.74 | ⚡ fast-path |
+| 11 | squash the last 3 commits | squash | yes | ✓ squash 0.74 | ✓ squash 1.00 | ✓ squash 1.00 | ⚡ fast-path |
+| 12 | squash the last three commits | squash | yes | ✓ squash 0.73 | ✓ squash 1.00 | ✓ squash 1.00 | ⚡ fast-path |
+| 13 | combine the last 3 commits into one | squash | yes | ✓ squash 0.74 | ✓ squash 1.00 | ✓ squash 1.00 | ⚡ fast-path |
+| 14 | fix the last commit message to 'x' | amend | yes | ✓ amend 0.52 | ✓ amend 1.00 | ✓ amend 1.00 | ⚡ fast-path |
+| 15 | reword the last commit to 'x' | amend | yes | ✓ amend 0.34 | ✓ amend 0.99 | ✓ amend 0.99 | ⚡ fast-path |
+| 16 | change my last commit message to 'x' | amend | yes | ✓ amend 0.69 | ✓ amend 1.00 | ✓ amend 1.00 | ⚡ fast-path |
+| 17 | ship the auth stuff | scoped_push |  | ✗ __reject__ 0.15 | ✓ scoped_push 0.98 | ✓ scoped_push 0.96 | route / route |
+| 18 | collapse my last few commits | squash |  | ✓ squash 0.40 | ✓ squash 0.95 | ✓ squash 0.94 | route / route |
+| 19 | rename that commit | amend |  | ✓ amend 0.23 | ✓ amend 0.99 | ✓ amend 0.99 | route / route |
+| 20 | get the latest from origin | pull |  | ✓ pull 0.38 | ✓ pull 0.95 | ✓ pull 0.95 | route / route |
+| 21 | jump over to the dev branch | checkout |  | ✗ sync 0.17 | ✓ checkout 0.96 | ✓ checkout 0.96 | route / route |
+| 22 | spin up a branch called hotfix | branch |  | ✓ branch 0.79 | ✓ branch 1.00 | ✓ branch 1.00 | route / route |
+| 23 | where am i right now | branches |  | ✗ __reject__ 0.21 | ✗ status 0.41 | ✗ __reject__ 0.66 | ask / reject |
+| 24 | roll back that last commit i just made | undo |  | ✓ undo 0.47 | ✓ undo 0.77 | ✓ undo 0.68 | route / route |
+| 25 | put my work up on github | push |  | ✗ __reject__ 0.13 | ✗ scoped_push 0.32 | ✗ scoped_push 0.40 | ask / ask |
+| 26 | make an inverse commit for the bad one | revert |  | ✓ revert 0.46 | ✓ revert 0.98 | ✓ revert 0.98 | route / route |
+| 27 | take the readme out of staging | unstage |  | ✓ unstage 0.18 | ✓ unstage 0.99 | ✓ unstage 0.99 | route / route |
+| 28 | show me the history | log |  | ✓ log 0.71 | ✓ log 1.00 | ✓ log 0.99 | route / route |
+| 29 | status | status | yes | ✗ __reject__ 0.14 | ✓ status 0.91 | ✓ status 0.99 | ⚡ fast-path |
+| 30 | push | push | yes | ✓ push 0.23 | ✓ push 0.97 | ✓ push 0.94 | ⚡ fast-path |
+| 31 | undo | undo | yes | ✓ undo 0.29 | ✓ undo 0.98 | ✓ undo 0.98 | ⚡ fast-path |
+| 32 | list branches | branches | yes | ✓ branches 0.46 | ✓ branches 1.00 | ✓ branches 1.00 | ⚡ fast-path |
+| 33 | fetch | fetch | yes | ✓ fetch 0.24 | ✓ fetch 0.95 | ✓ fetch 0.94 | ⚡ fast-path |
+| 34 | will pulling cause conflicts | merge_preview |  | ✓ merge_preview 0.20 | ✓ merge_preview 1.00 | ✓ merge_preview 1.00 | route / route |
+| 35 | am i up to date with the remote | fetch |  | ✓ fetch 0.18 | ✓ fetch 0.63 | ✓ fetch 0.71 | route / route |
+| 36 | throw away my changes | cleanup | yes | ✓ cleanup 0.26 | ✓ cleanup 0.80 | ✓ cleanup 0.92 | ⚡ fast-path |
+| 37 | clean up my repo | cleanup | yes | ✓ cleanup 0.19 | ✓ cleanup 0.47 | ✓ cleanup 0.92 | ⚡ fast-path |
+| 38 | undo the last three commits | undo |  | ✓ undo 0.34 | ✓ undo 0.99 | ✓ undo 0.99 | route / route |
+| 39 | discard my local commits | discard_local |  | ✗ cleanup 0.32 | ✓ discard_local 0.77 | ✓ discard_local 0.53 | route / ask |
+| 40 | force push overwriting the remote | force_push |  | ✓ force_push 0.63 | ✓ force_push 1.00 | ✓ force_push 1.00 | route / route |
+| 41 | what's the weather | __reject__ |  | ✓ __reject__ 0.36 | ✓ __reject__ 0.99 | ✓ __reject__ 0.99 | reject / reject |
+| 42 | make me a sandwich | __reject__ |  | ✓ __reject__ 0.25 | ✓ __reject__ 0.94 | ✓ __reject__ 0.95 | reject / reject |
+| 43 | write me a poem about git | __reject__ |  | ✓ __reject__ 0.18 | ✓ __reject__ 0.55 | ✓ __reject__ 0.67 | reject / reject |
+| 44 | what time is it | __reject__ |  | ✓ __reject__ 0.30 | ✓ __reject__ 0.86 | ✓ __reject__ 0.95 | reject / reject |
