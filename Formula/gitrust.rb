@@ -1,9 +1,9 @@
 class Gitrust < Formula
   desc "Agentic Git CLI — natural language interface for Git"
   homepage "https://github.com/YOUR_ORG/gitrust"
-  version "0.1.0"
+  version "0.4.0"
 
-  depends_on "ollama"
+  depends_on "uv" # runs the local Kev decision model (gitrust setup installs it)
 
   on_macos do
     on_arm do
@@ -33,12 +33,15 @@ class Gitrust < Formula
 
   def caveats
     <<~EOS
-      One-time setup required (downloads ~2GB model):
+      One-time setup required (~1 GB environment + ~1.5 GB model):
         gitrust setup
 
       This will:
-        • Verify Ollama is running  (brew services start ollama)
-        • Pull qwen2.5:3b from the Ollama registry
+        • Clone Kev (github.com/jaredpalmer/kev, pinned) into ~/.gitrust/kev
+        • Install its environment with uv and download Kev-0.8B
+        • Start the model server in the background and smoke-test it
+
+      The server uses ~3 GB while running. Stop it with: pkill -f kev.serve
     EOS
   end
 
