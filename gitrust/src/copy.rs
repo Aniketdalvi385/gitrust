@@ -306,6 +306,15 @@ pub const KEV_UNSURE_QUESTION: &str = "I'm not sure which operation you meant. W
 pub const KEV_MAYBE_NOT_GIT_QUESTION: &str =
     "That may not be a Git request. If it is, which operation did you mean?";
 
+/// Same gate when Kev's choice ignored something the request names (e.g. a
+/// plain push for "push the api changes").
+pub const KEV_CONFLICT_QUESTION: &str =
+    "Your request names specific changes, but that operation would ignore them. Which did you mean?";
+
+/// Same gate when a destructive pick changed once the options were reordered.
+pub const KEV_UNSTABLE_QUESTION: &str =
+    "That could rewrite or discard work, and I'm not certain which operation you meant. Which one?";
+
 /// Header of the in-progress menu (continue / skip / abort / something else).
 pub const KEV_IN_PROGRESS_QUESTION: &str =
     "An operation is in progress. Did you mean to control it?";

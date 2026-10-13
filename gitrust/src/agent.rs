@@ -282,12 +282,26 @@ async fn classify_query(
                         r.iter().map(|(o, p)| format!("{}={:.2}", o, p)).collect();
                     eprintln!("  (kev in-progress: {})", top.join(" "));
                 }
-                let decided = match crate::kev::decide(
+                let mut d = crate::kev::decide(
                     &r,
                     config.kev_min_confidence,
                     config.kev_destructive_min_confidence,
-                ) {
-                    crate::kev::KevDecision::Route { op, p } => Some((op, p, Engine::Kev)),
+                    config.kev_reject_min_confidence,
+                );
+                // skip / abort discard work: only act if the pick survives reordering
+                // (an unstable one falls to the family menu below).
+                if let KevDecision::Route { op, .. } = &d {
+                    if crate::kev::DESTRUCTIVE_OPS.contains(&op.as_str())
+                        && reversed_top(classifier, &state, instr, &opts, config)
+                            .await
+                            .as_ref()
+                            != Some(op)
+                    {
+                        d = KevDecision::Ask { candidates: vec![] };
+                    }
+                }
+                let decided = match d {
+                    KevDecision::Route { op, p } => Some((op, p, Engine::Kev)),
                     _ if r
                         .first()
                         .and_then(|(o, _)| crate::intent::build_in_progress(o))
@@ -319,7 +333,12 @@ async fn classify_query(
     }
 
     let ranked = match classifier
-        .rank(state, crate::kev::instructions(), crate::kev::ops(), config)
+        .rank(
+            state.clone(),
+            crate::kev::instructions(),
+            crate::kev::ops(),
+            config,
+        )
         .await
     {
         Ok(r) => r,
@@ -338,11 +357,56 @@ async fn classify_query(
         eprintln!("  (kev: {})", top.join(" "));
     }
 
-    let (op, confidence, engine) = match crate::kev::decide(
+    // When "not a Git request" was Kev's best (but unconfident) guess, say so —
+    // the menu is then a "did you mean one of these?" escape hatch, not a claim
+    // that the request was about Git.
+    let mut question = if ranked.first().map(|(o, _)| o == crate::kev::REJECT) == Some(true) {
+        crate::copy::KEV_MAYBE_NOT_GIT_QUESTION
+    } else {
+        crate::copy::KEV_UNSURE_QUESTION
+    };
+    let mut decision = crate::kev::decide(
         &ranked,
         config.kev_min_confidence,
         config.kev_destructive_min_confidence,
-    ) {
+        config.kev_reject_min_confidence,
+    );
+    // Second opinions on a route — both deterministic, both can only turn "act"
+    // into "ask", never pick a different op on the user's behalf:
+    //  * the request's own words contradict the op (a named topic, plain push);
+    //  * a destructive op that changes when the options are reordered.
+    if let KevDecision::Route { op, p } = &decision {
+        let p_of = |o: &str| ranked.iter().find(|(x, _)| x == o).map_or(0.0, |(_, p)| *p);
+        if let Some(alt) = crate::intent::conflicting_op(op, query) {
+            decision = KevDecision::Ask {
+                candidates: vec![(alt.to_string(), p_of(alt)), (op.clone(), *p)],
+            };
+            question = crate::copy::KEV_CONFLICT_QUESTION;
+        } else if crate::kev::DESTRUCTIVE_OPS.contains(&op.as_str()) {
+            let opts = crate::kev::ops();
+            let second =
+                reversed_top(classifier, &state, crate::kev::instructions(), opts, config).await;
+            if second.as_ref() != Some(op) {
+                let mut candidates: Vec<(String, f32)> = ranked
+                    .iter()
+                    .filter(|(o, _)| o != crate::kev::REJECT)
+                    .take(3)
+                    .cloned()
+                    .collect();
+                if let Some(s) = second
+                    .filter(|s| s != crate::kev::REJECT && !candidates.iter().any(|(o, _)| o == s))
+                {
+                    let ps = p_of(&s);
+                    candidates.insert(1, (s, ps));
+                    candidates.truncate(3);
+                }
+                decision = KevDecision::Ask { candidates };
+                question = crate::copy::KEV_UNSTABLE_QUESTION;
+            }
+        }
+    }
+
+    let (op, confidence, engine) = match decision {
         KevDecision::Route { op, p } => (op, p, Engine::Kev),
         KevDecision::Reject { p } => {
             return Ok(IntentResult {
@@ -353,11 +417,7 @@ async fn classify_query(
             });
         }
         KevDecision::Ask { candidates } => {
-            // When "not a Git request" was Kev's best (but unconfident) guess,
-            // say so — the menu is then a "did you mean one of these?" escape
-            // hatch, not a claim that the request was about Git.
-            let maybe_not_git = ranked.first().map(|(o, _)| o == crate::kev::REJECT) == Some(true);
-            let op = pick_candidate(&candidates, maybe_not_git, gate)?;
+            let op = pick_candidate(&candidates, question, gate)?;
             (op, 1.0, Engine::User)
         }
     };
@@ -372,12 +432,39 @@ async fn classify_query(
     })
 }
 
+/// Kev's top op when the same question is asked with the options reversed
+/// (`kev::reversed_keep_last`). `None` if that second call fails — the caller
+/// then treats the route as unstable and asks: a missing second opinion must
+/// never become a silent destructive action.
+async fn reversed_top(
+    classifier: &impl IntentClassifier,
+    state: &serde_json::Value,
+    instructions: &str,
+    opts: &[(String, String)],
+    config: &Config,
+) -> Option<String> {
+    let reversed = crate::kev::reversed_keep_last(opts);
+    let r = classifier
+        .rank(state.clone(), instructions, &reversed, config)
+        .await
+        .ok()?;
+    if std::env::var("GITRUST_DEBUG").is_ok() {
+        let top: Vec<String> = r
+            .iter()
+            .take(3)
+            .map(|(o, p)| format!("{}={:.2}", o, p))
+            .collect();
+        eprintln!("  (kev, options reversed: {})", top.join(" "));
+    }
+    r.into_iter().next().map(|(o, _)| o)
+}
+
 /// Kev wasn't sure: show its top candidates, each with what it would do, and
 /// let the user choose. A `ChoiceGate`, so `--yes` refuses — it never picks an
 /// operation the model itself wasn't confident about.
 fn pick_candidate(
     candidates: &[(String, f32)],
-    maybe_not_git: bool,
+    question: &str,
     gate: &dyn ConfirmationGate,
 ) -> anyhow::Result<String> {
     if candidates.is_empty() {
@@ -395,12 +482,7 @@ fn pick_candidate(
         consequence: "Do nothing — rephrase your request.".to_string(),
     });
     match gate.prompt(&GateType::ChoiceGate {
-        question: if maybe_not_git {
-            crate::copy::KEV_MAYBE_NOT_GIT_QUESTION
-        } else {
-            crate::copy::KEV_UNSURE_QUESTION
-        }
-        .to_string(),
+        question: question.to_string(),
         options,
     })? {
         GateResponse::Chose(i) if i < candidates.len() => Ok(candidates[i].0.clone()),
@@ -5343,6 +5425,9 @@ mod kev_layer1_tests {
     struct Fixed {
         main: Vec<(&'static str, f32)>,
         in_progress: Vec<(&'static str, f32)>,
+        /// What Kev answers when the main options arrive in reversed order
+        /// (the order-stability check); `None` → same as `main`.
+        reordered: Option<Vec<(&'static str, f32)>>,
         main_calls: AtomicU32,
         in_progress_calls: AtomicU32,
     }
@@ -5355,9 +5440,14 @@ mod kev_layer1_tests {
             Fixed {
                 main: main.to_vec(),
                 in_progress: in_progress.to_vec(),
+                reordered: None,
                 main_calls: AtomicU32::new(0),
                 in_progress_calls: AtomicU32::new(0),
             }
+        }
+        fn flips_to(mut self, reordered: &[(&'static str, f32)]) -> Self {
+            self.reordered = Some(reordered.to_vec());
+            self
         }
     }
 
@@ -5370,12 +5460,17 @@ mod kev_layer1_tests {
             _config: &Config,
         ) -> anyhow::Result<Vec<(String, f32)>> {
             let in_progress = options.iter().any(|(o, _)| o == "something_else");
+            let reversed = options.first().map(|(o, _)| o.as_str())
+                != crate::kev::ops().first().map(|(o, _)| o.as_str());
             let src = if in_progress {
                 self.in_progress_calls.fetch_add(1, Ordering::SeqCst);
                 &self.in_progress
             } else {
                 self.main_calls.fetch_add(1, Ordering::SeqCst);
-                &self.main
+                match (&self.reordered, reversed) {
+                    (Some(r), true) => r,
+                    _ => &self.main,
+                }
             };
             Ok(src.iter().map(|(o, p)| (o.to_string(), *p)).collect())
         }
@@ -5470,11 +5565,98 @@ mod kev_layer1_tests {
 
     #[tokio::test]
     async fn confident_reject_asks_to_rephrase() {
-        let k = Fixed::main(&[(crate::kev::REJECT, 0.8), ("status", 0.05)]);
+        let k = Fixed::main(&[(crate::kev::REJECT, 0.97), ("status", 0.01)]);
         let r = classify(&k, &ctx(), "make me a sandwich", &AutoConfirmGate)
             .await
             .unwrap();
         assert!(matches!(r.intent, IntentType::NeedsClarification(_)));
+    }
+
+    #[tokio::test]
+    async fn unconfident_reject_offers_git_ops_instead_of_refusing() {
+        // Fine-tune, dirty repo: "where am i right now" → __reject__ 0.66.
+        let k = Fixed::main(&[
+            (crate::kev::REJECT, 0.66),
+            ("branches", 0.11),
+            ("status", 0.1),
+        ]);
+        let gate = ScriptedGate::new(0);
+        let r = classify(&k, &ctx(), "where am i right now", &gate)
+            .await
+            .unwrap();
+        assert_eq!(r.engine, Engine::User);
+        assert!(matches!(
+            r.intent,
+            IntentType::ReadOnly(ReadOnlyOp::Branches)
+        ));
+        // ...and --yes refuses the menu rather than picking a Git op.
+        assert!(
+            classify(&k, &ctx(), "where am i right now", &AutoConfirmGate)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_named_topic_overrides_a_confident_plain_push() {
+        // The fine-tune's confident miss: plain push at 0.96 for a scoped request.
+        let k = Fixed::main(&[("push", 0.96), ("scoped_push", 0.02), ("add_commit", 0.01)]);
+        let err = classify(&k, &ctx(), "ship the api fixes", &AutoConfirmGate)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("--yes"), "got: {}", err);
+        let gate = ScriptedGate::new(0);
+        let r = classify(&k, &ctx(), "ship the api fixes", &gate)
+            .await
+            .unwrap();
+        assert_eq!(r.engine, Engine::User);
+        assert_eq!(gate.last_choice_options.get(), 3, "scoped_push, push, none");
+        match r.intent {
+            IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush { feature_hint }) => {
+                assert_eq!(feature_hint, "api")
+            }
+            other => panic!("got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn destructive_route_is_rechecked_in_reversed_option_order() {
+        let k = Fixed::main(&[("undo", 0.77), ("revert", 0.2)]);
+        let r = classify(&k, &ctx(), "roll back that last commit", &AutoConfirmGate)
+            .await
+            .unwrap();
+        assert_eq!(r.engine, Engine::Kev);
+        assert_eq!(k.main_calls.load(Ordering::SeqCst), 2, "asked twice");
+    }
+
+    #[tokio::test]
+    async fn destructive_route_that_flips_under_reordering_asks() {
+        let k = Fixed::main(&[("undo", 0.77), ("revert", 0.2)])
+            .flips_to(&[("revert", 0.6), ("undo", 0.3)]);
+        let err = classify(&k, &ctx(), "roll back that last commit", &AutoConfirmGate)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("--yes"), "got: {}", err);
+        let gate = ScriptedGate::new(1);
+        let r = classify(&k, &ctx(), "roll back that last commit", &gate)
+            .await
+            .unwrap();
+        assert_eq!(r.engine, Engine::User);
+        let labels = gate.last_choice_labels.borrow().clone();
+        assert!(
+            labels[0].starts_with("undo") && labels[1].starts_with("revert"),
+            "{:?}",
+            labels
+        );
+    }
+
+    #[tokio::test]
+    async fn safe_route_is_not_rechecked() {
+        let k = Fixed::main(&[("log", 0.73), ("status", 0.1)]);
+        classify(&k, &ctx(), "show me the history", &AutoConfirmGate)
+            .await
+            .unwrap();
+        assert_eq!(k.main_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

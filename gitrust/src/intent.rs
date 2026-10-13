@@ -471,6 +471,18 @@ fn capture_scoped_push(q: &str) -> Option<String> {
     // docs changes" reduce to "<topic> <filter-noun>". "all"/"the" here are
     // determiners, NOT the topic (the topic-is-word check below still rejects a
     // bare determiner as the topic).
+    // A trailing destination ("… to github") names where, not what.
+    let rest = [
+        " to the remote",
+        " to remote",
+        " to github",
+        " to gitlab",
+        " to origin",
+        " to upstream",
+    ]
+    .iter()
+    .find_map(|d| rest.strip_suffix(d))
+    .unwrap_or(rest);
     let rest = rest
         .strip_prefix("the ")
         .or_else(|| rest.strip_prefix("all the "))
@@ -845,7 +857,7 @@ fn required(
     let a = a.trim().to_string();
     if a.is_empty() {
         anyhow::bail!(
-            "No {} given — nothing was done. Include it in your request.",
+            "Couldn't find {} in your request — nothing was done.",
             kind.noun()
         );
     }
@@ -912,6 +924,19 @@ const FILLER: &[&str] = &[
     "use",
     "set",
 ];
+
+/// A deterministic cross-check of Kev's route against the request's own words:
+/// returns the op the words point to when they contradict Kev's choice, so the
+/// caller can ask instead of acting. Calibration can't see a confident confusion
+/// (the fine-tune sent "push all api changes" to plain `push` at p 0.96), but the
+/// topic capture can: a request that names a topic is never "push everything".
+pub fn conflicting_op(op: &str, raw: &str) -> Option<&'static str> {
+    let q = raw.trim().to_lowercase();
+    match op {
+        "push" | "add_commit" if capture_topic(&q).is_some() => Some("scoped_push"),
+        _ => None,
+    }
+}
 
 /// Topic for a scoped push. Generalises `capture_scoped_push` beyond the
 /// literal "push" verb ("ship the X fixes", "commit and push only the X work",
@@ -1656,6 +1681,57 @@ mod tests {
             matches!(build("set_upstream", "make this branch track origin/develop"),
             IntentType::ScopedWrite(ScopedWriteOp::SetUpstream { ref remote, ref branch }) if remote == "origin" && branch == "develop")
         );
+    }
+
+    #[test]
+    fn test_topic_survives_a_trailing_destination() {
+        for q in [
+            "push only the login stuff to github",
+            "push the login changes to origin",
+            "push the login changes to the remote",
+        ] {
+            assert_eq!(capture_topic(q).as_deref(), Some("login"), "{}", q);
+        }
+        // "to" that isn't a destination is left alone.
+        assert_eq!(capture_topic("push the changes to login"), None);
+    }
+
+    #[test]
+    fn test_missing_argument_message_reads_as_a_sentence() {
+        let err = required(&mut |_| Ok(String::new()), ArgKind::Topic)
+            .unwrap_err()
+            .to_string();
+        assert_eq!(
+            err,
+            "Couldn't find the feature/topic to push in your request — nothing was done."
+        );
+    }
+
+    #[test]
+    fn test_conflicting_op_catches_a_topic_kev_ignored() {
+        // The fine-tune's one confident miss: "push all api changes" → push @0.96.
+        for q in [
+            "push all api changes",
+            "ship the api fixes",
+            "Push the Login changes",
+        ] {
+            assert_eq!(conflicting_op("push", q), Some("scoped_push"), "{}", q);
+        }
+        assert_eq!(
+            conflicting_op("add_commit", "commit and push only the login work"),
+            Some("scoped_push")
+        );
+        // No topic → no conflict; other ops are never second-guessed.
+        for q in [
+            "push",
+            "push my commits",
+            "push all changes",
+            "push everything",
+        ] {
+            assert_eq!(conflicting_op("push", q), None, "{}", q);
+        }
+        assert_eq!(conflicting_op("scoped_push", "push all api changes"), None);
+        assert_eq!(conflicting_op("log", "push all api changes"), None);
     }
 
     #[test]

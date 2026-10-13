@@ -84,6 +84,18 @@ enum Command {
         #[arg(long)]
         clean: bool,
     },
+    /// Internal: owns a background Kev server and stops it when idle.
+    #[command(name = "kev-supervise", hide = true)]
+    KevSupervise {
+        #[arg(long)]
+        dir: String,
+        #[arg(long)]
+        run: String,
+        #[arg(long)]
+        port: u16,
+        #[arg(long)]
+        idle_minutes: u64,
+    },
 }
 
 #[tokio::main]
@@ -101,6 +113,16 @@ async fn main() {
 
 async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
+
+    if let Some(Command::KevSupervise {
+        dir,
+        run,
+        port,
+        idle_minutes,
+    }) = &cli.command
+    {
+        return kev::supervise(dir, run, *port, *idle_minutes);
+    }
 
     // Setup subcommand — runs before loading config
     if let Some(Command::Setup) = cli.command {

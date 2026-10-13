@@ -53,6 +53,19 @@ pub struct Config {
     /// those ops still hit their ChoiceGate / type-to-confirm downstream.
     #[serde(default = "default_kev_destructive_min_confidence")]
     pub kev_destructive_min_confidence: f32,
+    /// Minimum Kev probability to refuse a request outright as "not a Git
+    /// request". Below it (but still Kev's top answer) the user gets a menu of
+    /// Kev's best Git ops plus "none of these" instead. Fine-tuned eval: true
+    /// out-of-scope requests scored 0.55–0.99; the one wrong refusal ("where am
+    /// i right now") scored 0.66 — a wrong refusal is cheaper than a wrong
+    /// action, but a menu is cheaper still.
+    #[serde(default = "default_kev_reject_min_confidence")]
+    pub kev_reject_min_confidence: f32,
+    /// Stop a Kev server that GiTrust started after this many idle minutes, to
+    /// give its ~3 GB back (the next query pays the ~25 s cold start again).
+    /// 0 = keep it resident. A server you started yourself is never stopped.
+    #[serde(default = "default_kev_idle_minutes")]
+    pub kev_idle_minutes: u64,
 }
 
 fn default_remote() -> String {
@@ -85,6 +98,12 @@ fn default_kev_min_confidence() -> f32 {
 fn default_kev_destructive_min_confidence() -> f32 {
     0.6
 }
+fn default_kev_reject_min_confidence() -> f32 {
+    0.9
+}
+fn default_kev_idle_minutes() -> u64 {
+    15
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -100,6 +119,8 @@ impl Default for Config {
             kev_autostart: default_kev_autostart(),
             kev_min_confidence: default_kev_min_confidence(),
             kev_destructive_min_confidence: default_kev_destructive_min_confidence(),
+            kev_reject_min_confidence: default_kev_reject_min_confidence(),
+            kev_idle_minutes: default_kev_idle_minutes(),
         }
     }
 }
@@ -156,6 +177,8 @@ mod tests {
         assert!(config.kev_autostart);
         assert_eq!(config.kev_min_confidence, 0.5);
         assert_eq!(config.kev_destructive_min_confidence, 0.6);
+        assert_eq!(config.kev_reject_min_confidence, 0.9);
+        assert_eq!(config.kev_idle_minutes, 15);
     }
 
     #[test]

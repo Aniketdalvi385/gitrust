@@ -120,14 +120,21 @@ pub enum KevDecision {
 }
 
 /// Decide from a ranked (descending) distribution. Thresholds come from config
-/// (`kev_min_confidence`, `kev_destructive_min_confidence`), calibrated on the
-/// eval: at p ≥ 0.5 stock Kev-0.8B routed 9/44 with 8 right, none of them
-/// flipping under option reordering, and the 1 miss a harmless pull-for-sync.
-pub fn decide(ranked: &[(String, f32)], min_conf: f32, destructive_min_conf: f32) -> KevDecision {
+/// (`kev_min_confidence`, `kev_destructive_min_confidence`,
+/// `kev_reject_min_confidence`), calibrated on the eval: at p ≥ 0.5 stock
+/// Kev-0.8B routed 9/44 with 8 right, and the fine-tune 39/44 with 37 right,
+/// none of the misses destructive. A refusal needs its own, higher bar: an
+/// unconfident "not Git" becomes a menu of Git ops (with "none of these").
+pub fn decide(
+    ranked: &[(String, f32)],
+    min_conf: f32,
+    destructive_min_conf: f32,
+    reject_min_conf: f32,
+) -> KevDecision {
     let Some((top, p)) = ranked.first().map(|(o, p)| (o.as_str(), *p)) else {
         return KevDecision::Ask { candidates: vec![] };
     };
-    if top == REJECT && p >= min_conf {
+    if top == REJECT && p >= reject_min_conf {
         return KevDecision::Reject { p };
     }
     let needed = if DESTRUCTIVE_OPS.contains(&top) {
@@ -149,6 +156,19 @@ pub fn decide(ranked: &[(String, f32)], min_conf: f32, destructive_min_conf: f32
             .cloned()
             .collect(),
     }
+}
+
+/// The same options with their order reversed, except the last one (`__reject__`
+/// / `something_else`), which Kev was always trained to see last. Used to check
+/// that a destructive route isn't an artifact of option order: the fine-tune
+/// flipped confident answers (undo↔revert at p 0.77) under reordering.
+pub fn reversed_keep_last(opts: &[(String, String)]) -> Vec<(String, String)> {
+    let Some((last, rest)) = opts.split_last() else {
+        return vec![];
+    };
+    let mut v: Vec<_> = rest.iter().rev().cloned().collect();
+    v.push(last.clone());
+    v
 }
 
 // =============================================================================
@@ -173,6 +193,7 @@ async fn system_one(
     questions: serde_json::Value,
 ) -> anyhow::Result<serde_json::Value> {
     ensure_running(config).await?;
+    mark_used();
     let body = serde_json::json!({ "model": "kev-latest", "state": state, "questions": questions });
     let resp = client(Duration::from_secs(120))?
         .post(endpoint(config, "/v1/systemone"))
@@ -263,7 +284,8 @@ pub async fn is_reachable(config: &Config) -> bool {
 /// Make sure a server is up. If not and `kev_autostart` is on (with `kev_dir`
 /// pointing at a Kev checkout), start one detached in the background and wait
 /// for it — a cold start is ~25 s on the 8 GB M2, after which it stays resident
-/// (~2.9 GB) for later queries. Never starts a second server on a busy port.
+/// (~2.9 GB) until `kev_idle_minutes` pass without a query. Never starts a
+/// second server on a busy port.
 pub async fn ensure_running(config: &Config) -> anyhow::Result<()> {
     if is_reachable(config).await {
         return Ok(());
@@ -282,7 +304,7 @@ pub async fn ensure_running(config: &Config) -> anyhow::Result<()> {
         .and_then(|p| p.trim_end_matches('/').parse::<u16>().ok())
         .unwrap_or(8009);
     eprintln!("  Starting the local Kev model in the background (first run takes ~25 s)…");
-    spawn_server(dir, &config.kev_run, port)?;
+    spawn_server(dir, &config.kev_run, port, config.kev_idle_minutes)?;
     for _ in 0..120 {
         tokio::time::sleep(Duration::from_millis(500)).await;
         if is_reachable(config).await {
@@ -296,9 +318,35 @@ pub async fn ensure_running(config: &Config) -> anyhow::Result<()> {
     )
 }
 
-/// Spawn `uv run --extra serve python -m kev.serve` detached, logging to
-/// ~/.gitrust/serve.log. Binds 127.0.0.1 only (kev.serve's default).
-pub fn spawn_server(kev_dir: &str, run: &str, port: u16) -> anyhow::Result<()> {
+/// `~/.gitrust/kev.last_used` — touched on every request, read by the idle
+/// supervisor. Its mtime is the only shared state between them.
+fn last_used_path() -> anyhow::Result<std::path::PathBuf> {
+    Ok(crate::config::gitrust_dir()?.join("kev.last_used"))
+}
+
+/// Best effort: a failed touch only means the server may stop a little early.
+fn mark_used() {
+    if let Ok(p) = last_used_path() {
+        let _ = std::fs::write(p, b"");
+    }
+}
+
+/// True once `idle` has passed since the later of the server's start and its
+/// last use (a marker left by an earlier server must not stop a fresh one).
+pub fn idle_expired(
+    last_used: Option<std::time::SystemTime>,
+    started: std::time::SystemTime,
+    now: std::time::SystemTime,
+    idle: Duration,
+) -> bool {
+    let since = last_used.map_or(started, |l| l.max(started));
+    now.duration_since(since).is_ok_and(|d| d >= idle)
+}
+
+/// `uv run --extra serve python -m kev.serve --run <run> --port <port>` in the
+/// Kev checkout, logging to ~/.gitrust/serve.log. Binds 127.0.0.1 only
+/// (kev.serve's default).
+fn serve_command(kev_dir: &str, run: &str, port: u16) -> anyhow::Result<std::process::Command> {
     let log_dir = crate::config::gitrust_dir()?;
     std::fs::create_dir_all(&log_dir).ok();
     let log = std::fs::File::create(log_dir.join("serve.log")).context("creating serve.log")?;
@@ -319,8 +367,29 @@ pub fn spawn_server(kev_dir: &str, run: &str, port: u16) -> anyhow::Result<()> {
     .stdin(std::process::Stdio::null())
     .stdout(log.try_clone()?)
     .stderr(log);
-    // Own process group: a Ctrl-C at the GiTrust prompt must not take the
-    // background server down with it.
+    Ok(cmd)
+}
+
+/// Start the server detached. With an idle timeout, GiTrust starts a small
+/// supervisor (`gitrust kev-supervise`, hidden) that owns the server and stops
+/// it once idle; with 0 the server is started directly and stays resident.
+/// Either way it gets its own process group: a Ctrl-C at the GiTrust prompt
+/// must not take the background server down with it.
+pub fn spawn_server(kev_dir: &str, run: &str, port: u16, idle_minutes: u64) -> anyhow::Result<()> {
+    let mut cmd = if idle_minutes == 0 {
+        serve_command(kev_dir, run, port)?
+    } else {
+        let mut c = std::process::Command::new(
+            std::env::current_exe().context("locating the gitrust binary")?,
+        );
+        c.args(["kev-supervise", "--dir", kev_dir, "--run", run])
+            .args(["--port", &port.to_string()])
+            .args(["--idle-minutes", &idle_minutes.to_string()])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        c
+    };
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
@@ -329,6 +398,43 @@ pub fn spawn_server(kev_dir: &str, run: &str, port: u16) -> anyhow::Result<()> {
     cmd.spawn()
         .with_context(|| format!("failed to start Kev via `uv` in {}", kev_dir))?;
     Ok(())
+}
+
+/// The supervisor (`gitrust kev-supervise`): runs the server as its child, in
+/// its own process group, and stops the whole group (uv + python + itself) once
+/// `idle_minutes` pass with no request. Exits when the server exits on its own.
+/// Only servers GiTrust started this way are ever stopped.
+pub fn supervise(kev_dir: &str, run: &str, port: u16, idle_minutes: u64) -> anyhow::Result<()> {
+    let mut child = serve_command(kev_dir, run, port)?
+        .spawn()
+        .with_context(|| format!("failed to start Kev via `uv` in {}", kev_dir))?;
+    let started = std::time::SystemTime::now();
+    let idle = Duration::from_secs(idle_minutes.max(1) * 60);
+    let last_used = || {
+        last_used_path()
+            .ok()
+            .and_then(|p| std::fs::metadata(p).ok())
+            .and_then(|m| m.modified().ok())
+    };
+    loop {
+        std::thread::sleep(Duration::from_secs(15));
+        if child.try_wait()?.is_some() {
+            return Ok(());
+        }
+        if idle_expired(last_used(), started, std::time::SystemTime::now(), idle) {
+            #[cfg(unix)]
+            {
+                // We lead the group (spawn_server's process_group(0)), so this
+                // reaches uv and the python it started, then us.
+                let _ = std::process::Command::new("kill")
+                    .args(["-TERM", "--", &format!("-{}", std::process::id())])
+                    .status();
+            }
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -368,7 +474,7 @@ mod tests {
 
     #[test]
     fn routes_confident_safe_op() {
-        let d = decide(&r(&[("log", 0.73), ("status", 0.1)]), 0.5, 0.6);
+        let d = decide(&r(&[("log", 0.73), ("status", 0.1)]), 0.5, 0.6, 0.9);
         assert_eq!(
             d,
             KevDecision::Route {
@@ -381,16 +487,53 @@ mod tests {
     #[test]
     fn destructive_op_needs_the_higher_bar() {
         // 0.55 clears the safe bar but not the destructive one → ask, never act.
-        let d = decide(&r(&[("cleanup", 0.55), ("stash", 0.2)]), 0.5, 0.6);
+        let d = decide(&r(&[("cleanup", 0.55), ("stash", 0.2)]), 0.5, 0.6, 0.9);
         assert!(matches!(d, KevDecision::Ask { .. }), "got {:?}", d);
-        let d = decide(&r(&[("cleanup", 0.65), ("stash", 0.2)]), 0.5, 0.6);
+        let d = decide(&r(&[("cleanup", 0.65), ("stash", 0.2)]), 0.5, 0.6, 0.9);
         assert!(matches!(d, KevDecision::Route { ref op, .. } if op == "cleanup"));
     }
 
     #[test]
     fn confident_reject_is_a_reject() {
-        let d = decide(&r(&[(REJECT, 0.8), ("status", 0.05)]), 0.5, 0.6);
-        assert_eq!(d, KevDecision::Reject { p: 0.8 });
+        let d = decide(&r(&[(REJECT, 0.97), ("status", 0.01)]), 0.5, 0.6, 0.9);
+        assert_eq!(d, KevDecision::Reject { p: 0.97 });
+    }
+
+    #[test]
+    fn unconfident_reject_asks_instead_of_refusing() {
+        // "where am i right now" on the fine-tune: __reject__ 0.66. A wrong
+        // refusal is harmless but useless — offer the Git ops instead.
+        let d = decide(
+            &r(&[
+                (REJECT, 0.66),
+                ("remotes", 0.11),
+                ("branches", 0.1),
+                ("status", 0.05),
+            ]),
+            0.5,
+            0.6,
+            0.9,
+        );
+        match d {
+            KevDecision::Ask { candidates } => {
+                let names: Vec<_> = candidates.iter().map(|(o, _)| o.as_str()).collect();
+                assert_eq!(names, vec!["remotes", "branches", "status"]);
+            }
+            other => panic!("expected Ask, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn reversed_keeps_the_sentinel_last() {
+        let opts: Vec<(String, String)> = ["a", "b", "c", REJECT]
+            .iter()
+            .map(|o| (o.to_string(), String::new()))
+            .collect();
+        let names: Vec<String> = reversed_keep_last(&opts)
+            .into_iter()
+            .map(|(o, _)| o)
+            .collect();
+        assert_eq!(names, vec!["c", "b", "a", REJECT]);
     }
 
     #[test]
@@ -405,6 +548,7 @@ mod tests {
             ]),
             0.5,
             0.6,
+            0.9,
         );
         match d {
             KevDecision::Ask { candidates } => {
@@ -416,9 +560,24 @@ mod tests {
     }
 
     #[test]
+    fn idle_clock_runs_from_the_later_of_start_and_last_use() {
+        use std::time::{Duration as D, UNIX_EPOCH};
+        let t = |s: u64| UNIX_EPOCH + D::from_secs(s);
+        let idle = D::from_secs(900);
+        // Never used since start: counts from the start.
+        assert!(!idle_expired(None, t(1000), t(1899), idle));
+        assert!(idle_expired(None, t(1000), t(1900), idle));
+        // A stale marker from an earlier server doesn't stop a fresh one early.
+        assert!(!idle_expired(Some(t(10)), t(1000), t(1500), idle));
+        // Recent use keeps it alive.
+        assert!(!idle_expired(Some(t(2000)), t(1000), t(2600), idle));
+        assert!(idle_expired(Some(t(2000)), t(1000), t(2900), idle));
+    }
+
+    #[test]
     fn empty_distribution_asks() {
         assert_eq!(
-            decide(&[], 0.5, 0.6),
+            decide(&[], 0.5, 0.6, 0.9),
             KevDecision::Ask { candidates: vec![] }
         );
     }
