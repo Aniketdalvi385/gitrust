@@ -448,7 +448,7 @@ mod tests {
     #[test]
     fn ops_load_in_trained_order_with_reject_last() {
         let names: Vec<&str> = ops().iter().map(|(o, _)| o.as_str()).collect();
-        assert_eq!(names.len(), 35);
+        assert_eq!(names.len(), 36);
         assert_eq!(names[0], "status");
         assert_eq!(*names.last().unwrap(), REJECT);
         assert!(!instructions().is_empty());

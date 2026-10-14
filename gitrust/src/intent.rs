@@ -202,6 +202,16 @@ pub fn try_canonical(query: &str) -> Option<IntentType> {
             message: CommitMessage::Draft(String::new()),
             files: FileSelection::All,
         }),
+        // Stage everything, commit (the user writes the message), push.
+        "commit and push"
+        | "commit & push"
+        | "commit and push everything"
+        | "commit and push all"
+        | "commit everything and push"
+        | "add commit and push" => IntentType::FeaturePipeline(FeaturePipelineOp::CommitPush {
+            message: CommitMessage::Draft(String::new()),
+            stage_first: Some(FileSelection::All),
+        }),
         "show" | "show head" | "last commit" | "commit details" | "last commit details" => {
             IntentType::ReadOnly(ReadOnlyOp::Show { target: None })
         }
@@ -732,6 +742,14 @@ pub fn build_from_op(
             },
         }),
         "commit" => IntentType::ScopedWrite(ScopedWriteOp::Commit { message: message() }),
+        "commit_push" => IntentType::FeaturePipeline(FeaturePipelineOp::CommitPush {
+            message: message(),
+            stage_first: Some(if named.is_empty() {
+                FileSelection::All
+            } else {
+                FileSelection::Explicit(named.clone())
+            }),
+        }),
         "push" => IntentType::ScopedWrite(ScopedWriteOp::Push { remote: origin() }),
         "scoped_push" => {
             let topic = match capture_topic(&q) {
@@ -937,10 +955,26 @@ const FILLER: &[&str] = &[
 /// caller can ask instead of acting. Calibration can't see a confident confusion
 /// (the fine-tune sent "push all api changes" to plain `push` at p 0.96), but the
 /// topic capture can: a request that names a topic is never "push everything".
+/// Likewise a request that says both "commit" and "push" is never only one of
+/// them (eval_set_v2: "commit n push" → plain push at 0.92), and `commit_push`
+/// — which publishes every changed file — needs a push word and no topic
+/// (gitrust-v1, never trained on it, chose it for "push all schema changes" at
+/// 0.89 and "commit everything" at 0.51).
 pub fn conflicting_op(op: &str, raw: &str) -> Option<&'static str> {
     let q = raw.trim().to_lowercase();
+    let says = |w: &str| {
+        q.split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|t| t == w)
+    };
+    let says_push = ["push", "upload", "send", "ship", "publish"]
+        .iter()
+        .any(|w| says(w));
     match op {
-        "push" | "add_commit" if capture_topic(&q).is_some() => Some("scoped_push"),
+        "push" | "add_commit" | "commit" | "commit_push" if capture_topic(&q).is_some() => {
+            Some("scoped_push")
+        }
+        "push" | "add_commit" | "commit" if says("commit") && says("push") => Some("commit_push"),
+        "commit_push" if !says_push => Some("add_commit"),
         _ => None,
     }
 }
@@ -1762,6 +1796,84 @@ mod tests {
         }
         assert_eq!(conflicting_op("scoped_push", "push all api changes"), None);
         assert_eq!(conflicting_op("log", "push all api changes"), None);
+    }
+
+    #[test]
+    fn test_commit_push_stages_then_commits_then_pushes() {
+        let it = build("commit_push", "commit everything and push it");
+        assert!(
+            matches!(
+                it,
+                IntentType::FeaturePipeline(FeaturePipelineOp::CommitPush {
+                    message: CommitMessage::Draft(_),
+                    stage_first: Some(FileSelection::All),
+                })
+            ),
+            "{:?}",
+            it
+        );
+        // A quoted message is captured, never drafted.
+        let it = build("commit_push", "commit all with message 'ship it' and push");
+        assert!(matches!(
+            it,
+            IntentType::FeaturePipeline(FeaturePipelineOp::CommitPush {
+                message: CommitMessage::Provided(ref m), ..
+            }) if m == "ship it"
+        ));
+        // The bare phrase is a fast-path canonical.
+        assert!(matches!(
+            try_canonical("commit and push"),
+            Some(IntentType::FeaturePipeline(FeaturePipelineOp::CommitPush {
+                stage_first: Some(FileSelection::All),
+                ..
+            }))
+        ));
+    }
+
+    #[test]
+    fn test_conflicting_op_catches_commit_and_push_split_in_half() {
+        // eval_set_v2 S07: "commit n push" → plain push at 0.92 (fine-tune v1).
+        assert_eq!(conflicting_op("push", "commit n push"), Some("commit_push"));
+        assert_eq!(
+            conflicting_op("add_commit", "commit everything and push it to origin"),
+            Some("commit_push")
+        );
+        assert_eq!(
+            conflicting_op("commit", "commit and then push"),
+            Some("commit_push")
+        );
+        // A named topic still wins: that is a scoped push.
+        assert_eq!(
+            conflicting_op("push", "commit and push the billing work"),
+            Some("scoped_push")
+        );
+        // One verb only → no conflict.
+        assert_eq!(conflicting_op("push", "push my commits"), None);
+        assert_eq!(conflicting_op("add_commit", "commit all my changes"), None);
+        assert_eq!(conflicting_op("commit_push", "commit n push"), None);
+    }
+
+    #[test]
+    fn test_conflicting_op_guards_commit_push_itself() {
+        // gitrust-v1 has never seen commit_push; once offered, it picks it for
+        // scoped pushes (0.89) and plain commits (0.51) — measured, §12.9.
+        assert_eq!(
+            conflicting_op("commit_push", "push all schema changes"),
+            Some("scoped_push")
+        );
+        assert_eq!(
+            conflicting_op("commit_push", "commit everything"),
+            Some("add_commit")
+        );
+        assert_eq!(
+            conflicting_op("commit_push", "commit it all and upload"),
+            None
+        );
+        assert_eq!(
+            conflicting_op("commit_push", "commit then send it up"),
+            None
+        );
+        assert_eq!(conflicting_op("commit_push", "commit and push"), None);
     }
 
     #[test]

@@ -1655,6 +1655,7 @@ mod tests {
                 }),
                 "commitpush" => IntentType::FeaturePipeline(FeaturePipelineOp::CommitPush {
                     message: CommitMessage::Provided("m".into()),
+                    stage_first: None,
                 }),
                 "sync" => IntentType::FeaturePipeline(FeaturePipelineOp::Sync {
                     strategy: SyncStrategy::Rebase,

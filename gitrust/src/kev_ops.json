@@ -139,6 +139,10 @@
    "Delete this folder's Git repository (the .git directory), keeping the files."
   ],
   [
+   "commit_push",
+   "Stage all changes (or the named files), commit them and push to the remote, in one go."
+  ],
+  [
    "__reject__",
    "Not a request about Git or version control at all."
   ]

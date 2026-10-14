@@ -311,6 +311,14 @@ pub const KEV_MAYBE_NOT_GIT_QUESTION: &str =
 pub const KEV_CONFLICT_QUESTION: &str =
     "Your request names specific changes, but that operation would ignore them. Which did you mean?";
 
+/// Same gate when the request asks to commit AND push but Kev picked only one.
+pub const KEV_COMMIT_PUSH_CONFLICT_QUESTION: &str =
+    "Your request says both commit and push, but that operation does only one. Which did you mean?";
+
+/// Same gate when Kev picked commit-and-push but the request never says push.
+pub const KEV_NO_PUSH_CONFLICT_QUESTION: &str =
+    "Your request doesn't mention pushing, but that operation would also push. Which did you mean?";
+
 /// Same gate when a destructive pick changed once the options were reordered.
 pub const KEV_UNSTABLE_QUESTION: &str =
     "That could rewrite or discard work, and I'm not certain which operation you meant. Which one?";

@@ -384,7 +384,11 @@ async fn classify_query(
             decision = KevDecision::Ask {
                 candidates: vec![(alt.to_string(), p_of(alt)), (op.clone(), *p)],
             };
-            question = crate::copy::KEV_CONFLICT_QUESTION;
+            question = match alt {
+                "commit_push" => crate::copy::KEV_COMMIT_PUSH_CONFLICT_QUESTION,
+                "add_commit" => crate::copy::KEV_NO_PUSH_CONFLICT_QUESTION,
+                _ => crate::copy::KEV_CONFLICT_QUESTION,
+            };
         } else if crate::kev::DESTRUCTIVE_OPS.contains(&op.as_str()) {
             let opts = crate::kev::ops();
             let second =
@@ -1465,9 +1469,10 @@ async fn handle_feature_pipeline(
         FeaturePipelineOp::AddCommitPush { feature_hint } => {
             add_commit_push_pipeline(repo, &feature_hint, config, gate, show_all).await
         }
-        FeaturePipelineOp::CommitPush { message } => {
-            commit_push_pipeline(repo, message, config, gate).await
-        }
+        FeaturePipelineOp::CommitPush {
+            message,
+            stage_first,
+        } => commit_push_pipeline(repo, message, stage_first, config, gate).await,
         FeaturePipelineOp::Sync { strategy: _ } => {
             // S13 — cross-branch freshness: reconcile the current branch against
             // the remote default branch (origin/HEAD), reusing the rebase-vs-merge
@@ -1577,12 +1582,34 @@ async fn add_commit_push_pipeline(
 async fn commit_push_pipeline(
     repo: &mut git2::Repository,
     message: CommitMessage,
+    stage_first: Option<crate::commands::FileSelection>,
     config: &Config,
     gate: &dyn ConfirmationGate,
 ) -> anyhow::Result<()> {
-    // commit_push only commits already-staged files → use index-vs-HEAD diff.
+    let branch = current_branch_name(repo);
+    let remote = config.remote.clone();
+    let set_upstream = !branch_has_upstream(repo, &branch);
+
+    // "Commit everything and push" on a clean tree: there is nothing to commit,
+    // so do the half that still applies — push the commits that exist.
+    if stage_first.is_some() && !has_uncommitted_changes(repo) {
+        println!("  Nothing to commit — pushing the commits you already have.");
+        let steps = vec![PipelineStep::Push {
+            remote,
+            branch,
+            set_upstream,
+        }];
+        return execute_pipeline(repo, steps, config, gate).await;
+    }
+
+    // Staging first → the message covers the HEAD→workdir diff; otherwise only
+    // what's already staged (index-vs-HEAD).
     let final_msg = resolve_or_generate_commit_message(
-        repo, message, /*include_workdir=*/ false, config, gate,
+        repo,
+        message,
+        /*include_workdir=*/ stage_first.is_some(),
+        config,
+        gate,
     )
     .await?;
     if final_msg.is_empty() {
@@ -1590,20 +1617,44 @@ async fn commit_push_pipeline(
         return Ok(());
     }
 
-    let branch = current_branch_name(repo);
-    let remote = config.remote.clone();
-
-    let set_upstream = !branch_has_upstream(repo, &branch);
-    let steps = vec![
-        PipelineStep::Commit { message: final_msg },
-        PipelineStep::Push {
-            remote,
-            branch,
-            set_upstream,
-        },
-    ];
-
+    let steps = commit_push_steps(stage_first, final_msg, remote, branch, set_upstream);
     execute_pipeline(repo, steps, config, gate).await
+}
+
+/// [Add] → Commit → Push. `Add { files: [] }` means "add all", as for add_commit;
+/// a `Pattern` (unresolved) also falls back to all.
+fn commit_push_steps(
+    stage_first: Option<crate::commands::FileSelection>,
+    message: String,
+    remote: String,
+    branch: String,
+    set_upstream: bool,
+) -> Vec<PipelineStep> {
+    use crate::commands::FileSelection;
+    let mut steps = Vec::new();
+    if let Some(sel) = stage_first {
+        let files = match sel {
+            FileSelection::Explicit(fs) => fs,
+            FileSelection::All | FileSelection::Pattern(_) => vec![],
+        };
+        steps.push(PipelineStep::Add { files });
+    }
+    steps.push(PipelineStep::Commit { message });
+    steps.push(PipelineStep::Push {
+        remote,
+        branch,
+        set_upstream,
+    });
+    steps
+}
+
+/// Any modified, staged or untracked (non-ignored) file in the working tree.
+fn has_uncommitted_changes(repo: &git2::Repository) -> bool {
+    let mut opts = git2::StatusOptions::new();
+    opts.include_untracked(true).include_ignored(false);
+    repo.statuses(Some(&mut opts))
+        .map(|s| !s.is_empty())
+        .unwrap_or(true)
 }
 
 // =============================================================================
@@ -2742,6 +2793,7 @@ pub fn fallback_interactive_intent() -> anyhow::Result<crate::commands::IntentRe
         }
         "git push" => IntentType::FeaturePipeline(FeaturePipelineOp::CommitPush {
             message: CommitMessage::Draft("update".to_string()),
+            stage_first: None,
         }),
         "git pull" => IntentType::ScopedWrite(ScopedWriteOp::Pull {
             remote: "origin".to_string(),
@@ -5620,6 +5672,53 @@ mod kev_layer1_tests {
             }
             other => panic!("got {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn commit_and_push_split_in_half_offers_commit_push() {
+        // eval_set_v2 S07: the fine-tune routed "commit n push" to plain push (0.92),
+        // which would push old commits and leave the changes uncommitted.
+        let k = Fixed::main(&[("push", 0.92), ("add_commit", 0.05), ("commit_push", 0.01)]);
+        assert!(classify(&k, &ctx(), "commit n push", &AutoConfirmGate)
+            .await
+            .is_err());
+        let gate = ScriptedGate::new(0);
+        let r = classify(&k, &ctx(), "commit n push", &gate).await.unwrap();
+        assert_eq!(r.engine, Engine::User);
+        assert!(
+            matches!(
+                r.intent,
+                IntentType::FeaturePipeline(FeaturePipelineOp::CommitPush {
+                    stage_first: Some(_),
+                    ..
+                })
+            ),
+            "{:?}",
+            r.intent
+        );
+    }
+
+    #[test]
+    fn commit_push_steps_stage_only_when_asked() {
+        use crate::commands::FileSelection;
+        let steps =
+            |stage| commit_push_steps(stage, "m".into(), "origin".into(), "main".into(), false);
+        let all = steps(Some(FileSelection::All));
+        assert!(matches!(&all[..], [
+            PipelineStep::Add { files },
+            PipelineStep::Commit { .. },
+            PipelineStep::Push { .. }
+        ] if files.is_empty()));
+        let named = steps(Some(FileSelection::Explicit(vec!["a.rs".into()])));
+        assert!(
+            matches!(&named[0], PipelineStep::Add { files } if files == &vec!["a.rs".to_string()])
+        );
+        // The manual-menu path (stage_first: None) still commits only what's staged.
+        let staged = steps(None);
+        assert!(matches!(
+            &staged[..],
+            [PipelineStep::Commit { .. }, PipelineStep::Push { .. }]
+        ));
     }
 
     #[tokio::test]

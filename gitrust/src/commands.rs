@@ -238,8 +238,14 @@ pub enum ScopedWriteOp {
 pub enum FeaturePipelineOp {
     /// "push login changes" — requires file resolution + commit + push
     AddCommitPush { feature_hint: String },
-    /// "commit and push staged" — commit staged files then push
-    CommitPush { message: CommitMessage },
+    /// "commit and push" — optionally stage files first, then commit and push.
+    /// `stage_first: None` commits only what's already staged (the manual menu);
+    /// `Some(sel)` stages `sel` first (Kev's `commit_push`: "commit everything
+    /// and push").
+    CommitPush {
+        message: CommitMessage,
+        stage_first: Option<FileSelection>,
+    },
     /// "sync with main" — pull from upstream branch
     Sync { strategy: SyncStrategy },
 }
