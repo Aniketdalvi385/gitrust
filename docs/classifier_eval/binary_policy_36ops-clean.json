@@ -1,0 +1,180 @@
+{
+ "run": "runs/gitrust-v1",
+ "dirty": false,
+ "rows": [
+  {
+   "q": "ship the auth stuff",
+   "gold": "scoped_push",
+   "situation": "normal",
+   "kev_top": "scoped_push",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "collapse my last few commits",
+   "gold": "squash",
+   "situation": "normal",
+   "kev_top": "squash",
+   "outcome": "other",
+   "exit": 1
+  },
+  {
+   "q": "rename that commit",
+   "gold": "amend",
+   "situation": "normal",
+   "kev_top": "amend",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "get the latest from origin",
+   "gold": "pull",
+   "situation": "normal",
+   "kev_top": "pull",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "jump over to the dev branch",
+   "gold": "checkout",
+   "situation": "normal",
+   "kev_top": "checkout",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "spin up a branch called hotfix",
+   "gold": "branch",
+   "situation": "normal",
+   "kev_top": "branch",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "where am i right now",
+   "gold": "branches",
+   "situation": "normal",
+   "kev_top": "status",
+   "outcome": "menu: I'm not sure which operation you meant. ",
+   "exit": 1
+  },
+  {
+   "q": "roll back that last commit i just made",
+   "gold": "undo",
+   "situation": "normal",
+   "kev_top": "undo",
+   "outcome": "menu: That could rewrite or discard work, and ",
+   "exit": 1
+  },
+  {
+   "q": "put my work up on github",
+   "gold": "push",
+   "situation": "normal",
+   "kev_top": "scoped_push",
+   "outcome": "menu: I'm not sure which operation you meant. ",
+   "exit": 1
+  },
+  {
+   "q": "make an inverse commit for the bad one",
+   "gold": "revert",
+   "situation": "normal",
+   "kev_top": "revert",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "take the readme out of staging",
+   "gold": "unstage",
+   "situation": "normal",
+   "kev_top": "unstage",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "show me the history",
+   "gold": "log",
+   "situation": "normal",
+   "kev_top": "log",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "will pulling cause conflicts",
+   "gold": "merge_preview",
+   "situation": "normal",
+   "kev_top": "merge_preview",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "am i up to date with the remote",
+   "gold": "fetch",
+   "situation": "normal",
+   "kev_top": "fetch",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "undo the last three commits",
+   "gold": "undo",
+   "situation": "normal",
+   "kev_top": "undo",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "discard my local commits",
+   "gold": "discard_local",
+   "situation": "normal",
+   "kev_top": "discard_local",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "force push overwriting the remote",
+   "gold": "force_push",
+   "situation": "normal",
+   "kev_top": "force_push",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "what's the weather",
+   "gold": "__reject__",
+   "situation": "normal",
+   "kev_top": "__reject__",
+   "outcome": "rejected-right",
+   "exit": 1
+  },
+  {
+   "q": "make me a sandwich",
+   "gold": "__reject__",
+   "situation": "normal",
+   "kev_top": "__reject__",
+   "outcome": "menu: That may not be a Git request. If it is,",
+   "exit": 1
+  },
+  {
+   "q": "write me a poem about git",
+   "gold": "__reject__",
+   "situation": "normal",
+   "kev_top": "__reject__",
+   "outcome": "menu: That may not be a Git request. If it is,",
+   "exit": 1
+  },
+  {
+   "q": "what time is it",
+   "gold": "__reject__",
+   "situation": "normal",
+   "kev_top": "__reject__",
+   "outcome": "menu: That may not be a Git request. If it is,",
+   "exit": 1
+  }
+ ],
+ "tally": {
+  "acted-right": 13,
+  "other": 1,
+  "menu": 6,
+  "rejected-right": 1
+ }
+}

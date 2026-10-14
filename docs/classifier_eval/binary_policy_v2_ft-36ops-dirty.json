@@ -1,0 +1,556 @@
+{
+ "run": "runs/gitrust-v1",
+ "dirty": true,
+ "rows": [
+  {
+   "q": "whats goin on",
+   "gold": "status",
+   "situation": "normal",
+   "kev_top": "status",
+   "outcome": "menu: I'm not sure which operation you meant. ",
+   "exit": 1
+  },
+  {
+   "q": "What's the current state of the repo, and do I have anything uncommitted?",
+   "gold": "status",
+   "situation": "normal",
+   "kev_top": "status",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "which branch",
+   "gold": "branches/status",
+   "situation": "normal",
+   "kev_top": "branches",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "Which branch am I currently on?",
+   "gold": "branches/status",
+   "situation": "normal",
+   "kev_top": "branches",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "branches?",
+   "gold": "branches",
+   "situation": "normal",
+   "kev_top": "branches",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "List all local and remote branches.",
+   "gold": "branches",
+   "situation": "normal",
+   "kev_top": "branches",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "what did i do this week",
+   "gold": "log",
+   "situation": "normal",
+   "kev_top": "__reject__",
+   "outcome": "menu: That may not be a Git request. If it is,",
+   "exit": 1
+  },
+  {
+   "q": "Show my commits from the last three days.",
+   "gold": "log",
+   "situation": "normal",
+   "kev_top": "log",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "diff",
+   "gold": "diff",
+   "situation": "normal",
+   "kev_top": "ReadOnly(Diff { path: None })",
+   "outcome": "fast",
+   "exit": 0
+  },
+  {
+   "q": "Show me line by line what I changed in each modified file.",
+   "gold": "diff",
+   "situation": "normal",
+   "kev_top": "diff",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "commit \"fix login bug\"",
+   "gold": "add_commit/commit",
+   "situation": "normal",
+   "kev_top": "add_commit",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "Commit all my changes with the message \"Add search filter\".",
+   "gold": "add_commit",
+   "situation": "normal",
+   "kev_top": "add_commit",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "commit n push",
+   "gold": "commit_push",
+   "situation": "normal",
+   "kev_top": "commit_push",
+   "outcome": "menu: I'm not sure which operation you meant. ",
+   "exit": 1
+  },
+  {
+   "q": "Commit everything with the message \"Update header\" and push it to origin.",
+   "gold": "commit_push",
+   "situation": "normal",
+   "kev_top": "commit_push",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "only push the search stuff not the docs",
+   "gold": "scoped_push",
+   "situation": "normal",
+   "kev_top": "scoped_push",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "Commit and push only the search feature files, and leave the docs typo fix uncommitted.",
+   "gold": "scoped_push",
+   "situation": "normal",
+   "kev_top": "scoped_push",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "psuh",
+   "gold": "push",
+   "situation": "normal",
+   "kev_top": "scoped_push",
+   "outcome": "menu: I'm not sure which operation you meant. ",
+   "exit": 1
+  },
+  {
+   "q": "Push my local commits up to the remote.",
+   "gold": "push",
+   "situation": "normal",
+   "kev_top": "push",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "pull",
+   "gold": "pull",
+   "situation": "normal",
+   "kev_top": "ScopedWrite(Pull { remote: \"origin\" })",
+   "outcome": "fast",
+   "exit": 1
+  },
+  {
+   "q": "Get the latest changes from the remote into my branch.",
+   "gold": "pull",
+   "situation": "normal",
+   "kev_top": "pull",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "pull rebase",
+   "gold": "pull_rebase",
+   "situation": "normal",
+   "kev_top": "ScopedWrite(PullRebase { remote: \"origin\" })",
+   "outcome": "fast",
+   "exit": 1
+  },
+  {
+   "q": "Pull the latest changes and replay my local commits on top instead of making a merge commit.",
+   "gold": "pull_rebase",
+   "situation": "normal",
+   "kev_top": "pull_rebase",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "will feature-x clash w mine",
+   "gold": "merge_preview",
+   "situation": "normal",
+   "kev_top": "merge_preview",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "Before I merge origin/feature-x, check whether it would conflict with my branch.",
+   "gold": "merge_preview",
+   "situation": "normal",
+   "kev_top": "merge_preview",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "stash",
+   "gold": "stash",
+   "situation": "normal",
+   "kev_top": "ScopedWrite(Stash)",
+   "outcome": "fast",
+   "exit": 0
+  },
+  {
+   "q": "Put my unfinished changes aside without committing so I can work on something else.",
+   "gold": "stash",
+   "situation": "normal",
+   "kev_top": "stash",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "unstash",
+   "gold": "stash_pop",
+   "situation": "normal",
+   "kev_top": "stash_pop",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "Bring back the changes I stashed earlier.",
+   "gold": "stash_pop",
+   "situation": "normal",
+   "kev_top": "stash_pop",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "undo last commit",
+   "gold": "undo",
+   "situation": "normal",
+   "kev_top": "ScopedWrite(UndoIntent)",
+   "outcome": "fast",
+   "exit": 1
+  },
+  {
+   "q": "Undo my last commit but keep the changes in my files.",
+   "gold": "undo",
+   "situation": "normal",
+   "kev_top": "undo",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "revert the commit that broke checkout",
+   "gold": "revert",
+   "situation": "normal",
+   "kev_top": "revert",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "Revert last week's commit that introduced the bug, without rewriting history.",
+   "gold": "revert",
+   "situation": "normal",
+   "kev_top": "revert",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "fix last commit msg",
+   "gold": "amend",
+   "situation": "normal",
+   "kev_top": "amend",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "Change my last commit message to \"Fix typo in README\".",
+   "gold": "amend",
+   "situation": "normal",
+   "kev_top": "ScopedWrite(Amend { message: Some(\"Fix typo in README\"), include_stage",
+   "outcome": "fast",
+   "exit": 0
+  },
+  {
+   "q": "squash last 5",
+   "gold": "squash",
+   "situation": "normal",
+   "kev_top": "ScopedWrite(SquashLastN { n: 5 })",
+   "outcome": "fast",
+   "exit": 1
+  },
+  {
+   "q": "Combine my last five commits into a single commit.",
+   "gold": "squash",
+   "situation": "normal",
+   "kev_top": "ScopedWrite(SquashLastN { n: 5 })",
+   "outcome": "fast",
+   "exit": 1
+  },
+  {
+   "q": "throw away all changes",
+   "gold": "cleanup",
+   "situation": "normal",
+   "kev_top": "cleanup",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "Discard all my uncommitted changes and put the files back to the last commit.",
+   "gold": "cleanup",
+   "situation": "normal",
+   "kev_top": "cleanup",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "i lost a commit help",
+   "gold": "find_lost_work",
+   "situation": "normal",
+   "kev_top": "find_lost_work",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "I'm sure I committed some work that's gone now. Help me find it.",
+   "gold": "find_lost_work",
+   "situation": "normal",
+   "kev_top": "find_lost_work",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "remotes",
+   "gold": "remotes",
+   "situation": "normal",
+   "kev_top": "ReadOnly(Remotes)",
+   "outcome": "fast",
+   "exit": 0
+  },
+  {
+   "q": "Which remote servers is this repo connected to?",
+   "gold": "remotes",
+   "situation": "normal",
+   "kev_top": "remotes",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "change origin to git@github.com:org/new-repo.git",
+   "gold": "add_remote",
+   "situation": "normal",
+   "kev_top": "add_remote",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "The repo moved, so update origin's URL to git@github.com:org/new-repo.git.",
+   "gold": "add_remote",
+   "situation": "normal",
+   "kev_top": "add_remote",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "rm remote legacy",
+   "gold": "remove_remote",
+   "situation": "normal",
+   "kev_top": "remove_remote",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "Remove the old remote called \"legacy\" from this repo.",
+   "gold": "remove_remote",
+   "situation": "normal",
+   "kev_top": "remove_remote",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "set upstream",
+   "gold": "set_upstream",
+   "situation": "normal",
+   "kev_top": "set_upstream",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "Push my new local branch and set it to track the same branch on origin.",
+   "gold": "set_upstream",
+   "situation": "normal",
+   "kev_top": "set_upstream",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "clean junk files",
+   "gold": "cleanup",
+   "situation": "normal",
+   "kev_top": "cleanup",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "Delete all untracked generated files, but show me what will go first.",
+   "gold": "cleanup",
+   "situation": "normal",
+   "kev_top": "cleanup",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "nuke the history",
+   "gold": "delete_repo",
+   "situation": "normal",
+   "kev_top": "cleanup",
+   "outcome": "menu: I'm not sure which operation you meant. ",
+   "exit": 1
+  },
+  {
+   "q": "Wipe this project's entire Git history and start over with one fresh commit.",
+   "gold": "delete_repo",
+   "situation": "normal",
+   "kev_top": "cleanup",
+   "outcome": "menu: I'm not sure which operation you meant. ",
+   "exit": 1
+  },
+  {
+   "q": "force push",
+   "gold": "force_push",
+   "situation": "normal",
+   "kev_top": "ScopedWrite(ForcePush { remote: \"origin\" })",
+   "outcome": "fast",
+   "exit": 1
+  },
+  {
+   "q": "The remote is wrong and mine is right, so overwrite the remote with my branch.",
+   "gold": "force_push",
+   "situation": "normal",
+   "kev_top": "force_push",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "continue",
+   "gold": "rebase_continue",
+   "situation": "rebase",
+   "kev_top": "rebase_continue",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "I've fixed the conflicts, so carry on with the rebase.",
+   "gold": "rebase_continue",
+   "situation": "rebase",
+   "kev_top": "rebase_continue",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "skip",
+   "gold": "rebase_skip",
+   "situation": "rebase",
+   "kev_top": "rebase_skip",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "Skip this commit and keep going.",
+   "gold": "rebase_skip",
+   "situation": "rebase",
+   "kev_top": "rebase_skip",
+   "outcome": "acted-right",
+   "exit": 1
+  },
+  {
+   "q": "abort",
+   "gold": "rebase_abort",
+   "situation": "rebase",
+   "kev_top": "rebase_abort",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "Give up and put everything back the way it was before I started.",
+   "gold": "rebase_abort",
+   "situation": "rebase",
+   "kev_top": "rebase_abort",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "whats conflicting",
+   "gold": "something_else",
+   "situation": "rebase",
+   "kev_top": "merge_preview",
+   "outcome": "acted-WRONG",
+   "exit": 0
+  },
+  {
+   "q": "Before I continue or abort, show me which files have conflicts.",
+   "gold": "something_else",
+   "situation": "rebase",
+   "kev_top": "status",
+   "outcome": "menu: I'm not sure which operation you meant. ",
+   "exit": 1
+  },
+  {
+   "q": "cancel cherry pick",
+   "gold": "cherry_pick_abort",
+   "situation": "cherry_pick",
+   "kev_top": "cherry_pick_abort",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "Stop the cherry-pick that's in progress and go back.",
+   "gold": "cherry_pick_abort",
+   "situation": "cherry_pick",
+   "kev_top": "cherry_pick_abort",
+   "outcome": "acted-right",
+   "exit": 0
+  },
+  {
+   "q": "how many stars does my repo have",
+   "gold": "__reject__",
+   "situation": "normal",
+   "kev_top": "__reject__",
+   "outcome": "menu: That may not be a Git request. If it is,",
+   "exit": 1
+  },
+  {
+   "q": "open a PR for this branch",
+   "gold": "__reject__",
+   "situation": "normal",
+   "kev_top": "__reject__",
+   "outcome": "menu: That may not be a Git request. If it is,",
+   "exit": 1
+  },
+  {
+   "q": "write a python function that parses dates",
+   "gold": "__reject__",
+   "situation": "normal",
+   "kev_top": "__reject__",
+   "outcome": "menu: That may not be a Git request. If it is,",
+   "exit": 1
+  },
+  {
+   "q": "deploy to vercel",
+   "gold": "__reject__",
+   "situation": "normal",
+   "kev_top": "__reject__",
+   "outcome": "menu: That may not be a Git request. If it is,",
+   "exit": 1
+  }
+ ],
+ "tally": {
+  "menu": 11,
+  "acted-right": 46,
+  "fast": 10,
+  "acted-WRONG": 1
+ }
+}

@@ -654,6 +654,65 @@ branch", "deploy to vercel") land in the menu, not a refusal: Kev scores them be
 - Open — typo tolerance ("psuh") and "what did i do this week" as history: training round 2.
 - Open — a "show conflicts" request mid-operation has no op; `status` would serve.
 
+### 12.9 Round-2 preparation: `commit_push`, and what a new option does to an old model
+
+**The op.** §12.8 found no way to say "commit everything and push". The executor's existing
+`CommitPush` pipeline gained `stage_first: Option<FileSelection>` (`None` = the manual menu's
+commit-what's-staged; `Some(All | Explicit)` = stage first) and became Kev option **36,
+`commit_push`** ("Stage all changes (or the named files), commit them and push to the remote, in one
+go."), inserted before `__reject__`. Reusing the variant keeps it governed: it was already push-like
+in the situation gate and its steps (Add/Commit/Push) are graded individually. On a clean tree it
+pushes the existing commits ("Nothing to commit — pushing the commits you already have"). Exact
+phrases "commit and push", "commit & push", "commit and push everything/all", "commit everything and
+push", "add commit and push" are ⚡ canonicals ("commit n push" deliberately is not — it is an
+eval_set_v2 item). Verified end to end against a bare remote: clean tree → push only; dirty tree,
+`--yes`, no message → nothing committed; "commit everything with message 'ship it' and push" → Kev
+`commit_push` 0.89 → staged both files (one untracked), committed, pushed.
+
+**Adding an option to a model that never saw it** (gitrust-v1 asked over 36 options):
+
+| | v1, 35 ops | v1, 36 ops |
+|---|---|---|
+| 44-case clean / dirty | 40 / 41 | **38 / 39** |
+| eval_set_v2 clean / dirty (56) | 54 / 52 | 54 / 52 |
+| "Commit everything … and push it to origin" | `push` 0.70 / 0.57 | **`commit_push` 0.88 / 0.87** |
+| "commit n push" | `push` 0.92 / 0.83 | `push` 0.49 / 0.47 (→ menu) |
+
+The new option was picked zero-shot where it is right — and also where it is wrong: "push all
+schema changes" → `commit_push` **0.89** (35 ops: `scoped_push` 0.42), "push all docs/api changes"
+→ `commit_push` 0.55–0.59, "commit everything" → `commit_push` 0.51. Wrongly routed, `commit_push`
+would publish every changed file, unrelated ones included. All four are ⚡ canonicals in the binary,
+but their non-canonical cousins would reach Kev, so the topic/verb cross-check was extended
+(test-first): `commit_push` with a named topic → menu with `scoped_push`; `commit_push` when the
+request has no push verb (push/upload/send/ship/publish) → menu with `add_commit`; `push` /
+`commit` / `add_commit` when the request says both "commit" and "push" → menu with `commit_push`.
+Each has its own question copy.
+
+Whole system through the binary, v1, 36 ops: the 21 non-fast-path v1 queries 13 / 12 acted right,
+0 wrong (clean / dirty); eval_set_v2 (after relabelling S07 to `commit_push`, see below) **46 right,
+1 wrong (the read-only `merge_preview`), 0 harmful** in both states.
+
+S07 relabel: when eval_set_v2 was written, "commit everything and push" had no op, so its accept
+list was {add_commit, push}. With `commit_push` added it is the only right answer; the case is
+relabelled (noted in the file) and still reported separately from the 56.
+
+**Round-2 data** (`make_kev_train.py --round 2` → `kev_train_r2.jsonl` 1,481 records,
+`kev_dev_r2.jsonl` 259; round-1 files regenerate byte-identically from the same script):
+`commit_push` (16 templates), one-swap typo variants of ≤3-word commands, casual history ("what
+have i been working on"), conflict-listing as `status`, "push all {topic} changes" / "only push the
+{topic} work" vs "push all my commits", history-wiping `delete_repo` vs "nuke my uncommitted edits"
+`cleanup`, extra `pull_rebase`, and ten Git-adjacent non-Git requests (tests, lint, dev server…).
+Hold-out: eval_set_v2 joins eval_set in the exact/Jaccard ≥ 0.6 filter (33 phrasings dropped,
+including "commit and push" itself, too close to "commit n push"), and its slot values are banned
+(topic "search", branch "feature-x", count 5/five, its commit messages). PR / deploy / stars
+requests were deliberately *not* added as rejects, so S31 stays a test of generalisation.
+
+**Notebook** `kev_finetune_colab_r2.ipynb`: same recipe and flags as round 1, from the stock
+checkpoint (so v1 vs v2 differ only in data) → `runs/gitrust-v2`; refuses to proceed unless the
+uploaded data is the 36-op set and no eval file was uploaded; step 4 scores stock vs fine-tuned on
+`kev_dev_r2.jsonl` **and fits the temperature itself**, writing it into `head.pt` with provenance
+(round 1 shipped at T = 1). Expected ~2 h on a T4.
+
 ## 13. What this changes in the write-up (`writing/`)
 
 - The spine holds and gets sharper: *the intelligence belongs in deterministic layers around the
@@ -688,6 +747,7 @@ branch", "deploy to vercel") land in the menu, not a refusal: Kev scores them be
   new held-out phrasings, since these eval items cannot be trained on. Add from §12.8: a
   `commit_push` op (commit everything and push — currently routed to plain `push`), typos, and
   "what did i do …" as history. `eval_set_v2.json` is the yardstick and must never be trained on.
+  **Prepared (§12.9):** op wired, data generated, `kev_finetune_colab_r2.ipynb` ready to run.
 - **Manual acceptance suite** (`GiTrust-test`) needs a v0.4.0 pass. Ollama-specific cases (e.g.
   M-01 "Ollama OFF", `T_OLLAMA` fields, M-02 "LLM-path classification") must be rewritten for Kev,
   and commit tests now require the user to type the message.
@@ -726,6 +786,9 @@ python3 run_binary_policy.py --expect-run runs/gitrust-v1 --dirty
 python3 run_kev_eval_v2.py --expect-run runs/gitrust-v1 --tag ft       # §12.8 (and --tag stock on stock)
 python3 run_binary_policy.py --expect-run runs/gitrust-v1 --v2 --tag ft-clean
 python3 run_binary_policy.py --expect-run runs/gitrust-v1 --v2 --dirty --tag ft-dirty
+python3 make_kev_train.py --round 2                                 # §12.9 → kev_{train,dev}_r2.jsonl
+# after Colab (kev_finetune_colab_r2.ipynb): unzip gitrust-v2 into <kev>/runs/, then
+kevctl.sh start runs/gitrust-v2 && python3 run_kev_eval_v2.py --expect-run runs/gitrust-v2 --tag ft2
 ```
 
 Known-good baselines (35 ops): stock **31/44 clean, 30/44 dirty**; `gitrust-v1` at T 3.564

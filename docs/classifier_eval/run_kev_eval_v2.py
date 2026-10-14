@@ -108,7 +108,7 @@ def main():
     ip = [r for r in rows if r["bucket"] == "in_progress"]
     print(f"in-progress   top-1 {score(ip)}  (unseen-only {score([r for r in ip if not r['seen_in_training']])})")
     gap = [r for r in rows if r["bucket"] == "gap"]
-    print("gap (commit+push, no single op): " + ", ".join(f"{r['state'][7:]}:{r['top']} {r['p']}" for r in gap))
+    print("commit-and-push (S07, commit_push op added 2026-10-14): " + ", ".join(f"{r['state'][7:]}:{r['top']} {r['p']}" for r in gap))
 
     tag = arg("--tag", "v2")
     out = os.path.join(HERE, f"kev_results_v2_{tag}.json")

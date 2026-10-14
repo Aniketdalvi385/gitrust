@@ -14,15 +14,28 @@ HOLD-OUT DISCIPLINE — eval_set.json is never trained on:
     one is >= 0.6, is dropped and reported
   * the dev split is grouped by source phrasing (no phrasing in both splits)
 
-Usage:  python3 make_kev_train.py   → prints counts + every dropped near-duplicate
+ROUND 2 (`--round 2` → kev_train_r2.jsonl / kev_dev_r2.jsonl; round-1 files are
+left as they were for reproducibility): adds the `commit_push` op, typo variants
+of short commands, casual history phrasings, "push all <topic> changes" scoped
+pushes, history-wiping `delete_repo` phrasings and Git-adjacent non-Git
+requests. eval_set_v2.json (the owner's phrasings) joins the hold-out: same
+exact/Jaccard filter, and its slot values are banned too (search · feature-x ·
+5/five · legacy · its commit messages).
+
+Usage:  python3 make_kev_train.py [--round 2]   → prints counts + every dropped near-duplicate
 """
-import json, os, random, re
+import json, os, random, re, sys
 
 from kev_ops import OPS, INSTRUCTIONS, IN_PROGRESS
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+ROUND = int(sys.argv[sys.argv.index("--round") + 1]) if "--round" in sys.argv else 1
 EVAL_Q = [c["q"] for c in json.load(open(os.path.join(HERE, "eval_set.json")))["cases"]]
-rng = random.Random(7)
+if ROUND >= 2:
+    EVAL_Q += [c["q"] for c in json.load(open(os.path.join(HERE, "eval_set_v2.json")))["cases"]]
+rng = random.Random(7 if ROUND == 1 else 2026)
+if ROUND == 1:  # round 1 (gitrust-v1) was trained on the 35-op list, before commit_push
+    OPS = {k: v for k, v in OPS.items() if k != "commit_push"}
 
 TOPICS = ["payments", "billing", "search", "checkout page", "profile", "settings", "export",
           "onboarding", "notifications", "dashboard", "cart", "invoice", "upload", "analytics",
@@ -35,6 +48,11 @@ FILES = ["app.py", "main.rs", "index.html", "package.json", "config.yaml", "styl
 URLS = ["git@github.com:me/proj.git", "https://github.com/acme/site.git",
         "https://gitlab.com/team/tool.git"]
 MSGS = ["fix typo", "add search", "wip", "bump version", "refactor parser"]
+if ROUND >= 2:  # eval_set_v2 slot values are held out
+    TOPICS.remove("search")
+    BRANCHES.remove("feature-x")
+    COUNTS[:] = [c for c in COUNTS if c not in ("5", "five")]
+    MSGS[:] = ["wip", "bump version", "refactor parser", "tidy imports", "update deps"]
 SHAS = ["abc123", "9f2e7d1", "HEAD~2", "4c1a0be"]
 REMOTE_BRANCHES = ["origin/develop", "origin/release-2.1", "upstream/main"]
 REMOTES = ["upstream", "fork", "backup"]
@@ -132,6 +150,47 @@ P = {
                 "how do i bake bread", "recommend a movie", "what's the stock price of apple",
                 "is it going to rain tomorrow", "hello there", "how are you doing today"],
 }
+if ROUND >= 2:
+    P["commit_push"] = [
+        "commit and push", "commit everything and push it", "commit all my work and push to origin",
+        "save and push my changes", "commit + push", "commit then push", "add, commit and push",
+        "commit my changes and send them up", "commit with message '{msg}' and push",
+        "commit {file} and push it", "stage, commit and push everything", "check in and push my edits",
+        "commit it all and upload", "make a commit and push it", "commit and push to the remote",
+        "commit everything then push to origin"]
+    P["log"] += ["what have i been working on", "what did i commit yesterday",
+                 "show what i've done lately", "my recent commits", "what got committed this month",
+                 "show me the work from the past few days"]
+    P["status"] += ["which files have conflicts", "show me the conflicted files", "what's the state of things",
+                    "where do things stand", "anything i forgot to commit?"]
+    P["scoped_push"] += ["push all {topic} changes", "push all the {topic} files", "only push the {topic} work",
+                         "push the {topic} stuff but not the rest", "commit and push just the {topic} updates"]
+    P["push"] += ["push all my commits", "push everything", "push all of it", "push all commits to origin"]
+    P["delete_repo"] += ["erase the whole git history", "wipe out all version history",
+                         "throw away the git history and start fresh", "start this repo over from scratch",
+                         "get rid of every commit and begin again"]
+    P["pull_rebase"] += ["fetch and rebase onto origin", "update my branch by rebasing, not merging",
+                         "get the remote commits and rebase mine on top", "rebase on the latest upstream",
+                         "bring in origin's work without a merge commit"]
+    P["cleanup"] += ["nuke my uncommitted edits", "wipe the working tree", "blow away my local edits"]
+    P["__reject__"] += ["run the unit tests", "format my code", "install the dependencies",
+                        "open this project in vscode", "what does this function do",
+                        "fix the bug in my python script", "how many forks does this project have",
+                        "write a readme for me", "lint this file", "start the dev server"]
+
+def typo(q):
+    """One adjacent-letter swap in the longest word (short commands only)."""
+    words = q.split()
+    if len(words) > 3:
+        return None
+    i = max(range(len(words)), key=lambda k: len(words[k]))
+    w = words[i]
+    if len(w) < 4 or not w.isalpha():
+        return None
+    j = rng.randrange(1, len(w) - 2)
+    words[i] = w[:j] + w[j + 1] + w[j] + w[j + 2:]
+    return " ".join(words)
+
 STATES = ["clean repo, on branch main", "on branch feature-x, 2 files modified",
           "on branch main, 1 commit ahead of origin", "on branch develop, 3 untracked files",
           "on branch main, behind origin by 4 commits", "on branch qa, 1 staged file"]
@@ -199,7 +258,12 @@ def main():
                 near = max(EVAL_Q, key=lambda e: jacc(q, e))
                 if q.lower() in {e.lower() for e in EVAL_Q} or jacc(q, near) >= 0.6:
                     dropped.append((q, near, round(jacc(q, near), 2))); continue
-                groups.append((op, sorted(variants(q))))
+                vs = sorted(variants(q))
+                ty = typo(q) if ROUND >= 2 else None
+                if ty and ty.lower() not in {e.lower() for e in EVAL_Q} \
+                        and jacc(ty, max(EVAL_Q, key=lambda e: jacc(ty, e))) < 0.6:
+                    vs.append(ty)
+                groups.append((op, vs))
     rng.shuffle(groups)
     n_dev = len(groups) * 15 // 100
     def records(gs):
@@ -210,8 +274,9 @@ def main():
                                             "criteria": OPS, "label": op}}}
     ip = in_progress_records(); rng.shuffle(ip)
     n_ip_dev = len(ip) * 15 // 100
-    for name, gs, extra in (("kev_dev.jsonl", groups[:n_dev], ip[:n_ip_dev]),
-                            ("kev_train.jsonl", groups[n_dev:], ip[n_ip_dev:])):
+    sfx = "" if ROUND == 1 else f"_r{ROUND}"
+    for name, gs, extra in ((f"kev_dev{sfx}.jsonl", groups[:n_dev], ip[:n_ip_dev]),
+                            (f"kev_train{sfx}.jsonl", groups[n_dev:], ip[n_ip_dev:])):
         rows = list(records(gs)) + extra
         rng.shuffle(rows)
         with open(os.path.join(HERE, name), "w") as f:

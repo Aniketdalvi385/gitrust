@@ -130,23 +130,21 @@
    "id": "S07",
    "q": "commit n push",
    "accept": [
-    "add_commit",
-    "push"
+    "commit_push"
    ],
    "bucket": "gap",
    "situation": "normal",
-   "note": "no single op commits everything AND pushes; scored separately"
+   "note": "2026-10-14: relabelled from add_commit/push (no op existed) to commit_push when that op was added; still reported separately as 'gap' since round 1 never saw it"
   },
   {
    "id": "S07",
    "q": "Commit everything with the message \"Update header\" and push it to origin.",
    "accept": [
-    "add_commit",
-    "push"
+    "commit_push"
    ],
    "bucket": "gap",
    "situation": "normal",
-   "note": "no single op commits everything AND pushes; scored separately"
+   "note": "2026-10-14: relabelled from add_commit/push (no op existed) to commit_push when that op was added; still reported separately as 'gap' since round 1 never saw it"
   },
   {
    "id": "S08",
