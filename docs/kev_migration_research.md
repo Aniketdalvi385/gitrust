@@ -49,6 +49,11 @@ repo; where a number is a single run on a small set, it is marked as such.
   an idle shutdown that hands the ~3 GB back. Measured through the release binary on the 21
   non-fast-path queries: **0 wrong actions and 0 wrong refusals** in both repo states (before: 1
   wrong refusal dirty), at the cost of 3 more menus per state.
+- **A second held-out set (§12.8)** — 68 phrasings the owner wrote from situation prompts: fine-tune
+  **54/56 (96%) clean, 52/56 (93%) dirty** (stock 47 / 46), acting alone on 47 with 47 right; every
+  rebase/cherry-pick control phrasing routed correctly in a real conflicted repo. It exposed a
+  vocabulary gap — no "commit everything and push" op (routed to plain `push`) — and a topic-capture
+  gap (fixed).
 - The architecture thesis survives and sharpens: the model still only *ranks*; deterministic code
   decides, captures every argument, and gates everything destructive. What changed is that the
   thing doing the ranking is now good at ranking.
@@ -587,6 +592,68 @@ Two small bugs surfaced by the live probe and fixed (test-first): a trailing des
 topic capture ("push only the login stuff **to github**" → no topic), and the missing-argument
 error read "No the feature/topic to push given" (now "Couldn't find … in your request").
 
+### 12.8 A second held-out set, written by the owner (`eval_set_v2.json`)
+
+The 44-case set is spent (every miss has been looked at). A new set was written on 2026-10-14 by
+the project owner from **situation prompts** that avoid op names and option wording ("you set your
+half-done work aside earlier; now you want it back"), two phrasings per situation (quick and full
+sentence): **68 phrasings, 31 situations**, covering the 6 ops added in v0.4.0, mid-rebase and
+mid-cherry-pick requests, near-miss pairs and Git-adjacent out-of-scope requests. It is
+held out from training for good. Four one-word phrasings ("pull", "force push", "continue",
+"abort") occur verbatim in the training data; scores are also given without them. Caveat: the
+owner is also the author of the training data, so this is less independent than a stranger's
+phrasings — but these were written blind to the training templates.
+
+**Model level** (`run_kev_eval_v2.py`; the 58 normal-state phrasings minus the 2 commit-and-push
+ones, which are scored separately below = 56, incl. the 4 out-of-scope; in-progress phrasings are
+asked the in-progress question in the family's state line):
+
+| | stock clean | stock dirty | **FT clean** | **FT dirty** |
+|---|---|---|---|---|
+| top-1 (56) | 47 (84%) | 46 (82%) | **54 (96%)** | **52 (93%)** |
+| top-1, unseen phrasings only (54) | 45 | 44 | **52** | **50** |
+| would act alone under the policy | 13 (13 right) | 6 (6 right) | **47 (47 right)** | **47 (47 right)** |
+| in-progress (10) | 7 | — | **8** | — |
+
+Stock does far better here (84%) than on the 44-case set (70%): the owner's phrasings are more
+direct than the deliberately tricky v1 variants. The fine-tune's misses: "what did i do this week"
+(→ not-Git, 0.32/0.53), "psuh" (typo → not-Git, 0.20/0.26), and on a dirty repo "nuke the history"
+/ "wipe … entire history" → `cleanup` (0.36/0.54, below the destructive bar → menu). In-progress:
+both misses are the follow-up to a correct `something_else` ("whats conflicting" → main question →
+`merge_preview`) — there is no "show me the conflicts" op, so this is vocabulary, not routing.
+
+**Whole system through the binary** (`run_binary_policy.py --v2`, fine-tuned; normal cases in a
+scratch repo, in-progress cases in a real repo stopped on a rebase / cherry-pick conflict; clean
+and dirty gave identical tallies):
+
+| outcome (68) | count |
+|---|---|
+| ⚡ fast-path | 10 |
+| Kev acts alone, right | 43 |
+| Kev acts alone, **half the request** (commit-and-push → plain `push`) | 2 |
+| Kev acts alone, wrong (read-only: "whats conflicting" mid-rebase → `merge_preview`) | 1 |
+| menu | 9 |
+| refused, right | 1 |
+| routed right, topic not captured → asked (fixed, below) | 2 |
+| **wrong destructive action** | **0** |
+
+Every rebase/cherry-pick control phrasing — "continue", "skip", "abort", "give up and put
+everything back", "cancel cherry pick" — routed correctly in a real conflicted repo. Three of the
+four Git-adjacent out-of-scope requests ("how many stars does my repo have", "open a PR for this
+branch", "deploy to vercel") land in the menu, not a refusal: Kev scores them below the 0.9 bar.
+
+**Findings acted on / open:**
+- *Fixed (test-first):* topic capture missed both owner phrasings for "push only the search work"
+  ("only push the search stuff not the docs"; "… only the search feature files, and leave …")
+  although Kev picked `scoped_push` at 0.98–1.00. Now handles a leading "only push", a "not …"
+  exclusion, clause punctuation and stacked filter nouns ("search feature files").
+- **Open — a vocabulary gap:** there is no op for "commit everything and push". Kev routes it to
+  `push` (0.57–0.92), which on a dirty tree pushes the old commits and leaves the changes
+  uncommitted. Not destructive, but it does half of what was asked. The executor already has a
+  `CommitPush` pipeline; it needs an op (and training phrasings) to reach it — round 2.
+- Open — typo tolerance ("psuh") and "what did i do this week" as history: training round 2.
+- Open — a "show conflicts" request mid-operation has no op; `status` would serve.
+
 ## 13. What this changes in the write-up (`writing/`)
 
 - The spine holds and gets sharper: *the intelligence belongs in deterministic layers around the
@@ -618,7 +685,9 @@ error read "No the feature/topic to push given" (now "Couldn't find … in your 
   confident miss at 0.96, so raising them buys nothing on this set. Re-check on a larger eval before
   changing them. The same goes for the 0.9 refusal bar (§12.7), set from four out-of-scope items.
 - A training round 2 for `push all <topic> changes` vs `push` (the remaining confident miss) — with
-  new held-out phrasings, since these eval items cannot be trained on.
+  new held-out phrasings, since these eval items cannot be trained on. Add from §12.8: a
+  `commit_push` op (commit everything and push — currently routed to plain `push`), typos, and
+  "what did i do …" as history. `eval_set_v2.json` is the yardstick and must never be trained on.
 - **Manual acceptance suite** (`GiTrust-test`) needs a v0.4.0 pass. Ollama-specific cases (e.g.
   M-01 "Ollama OFF", `T_OLLAMA` fields, M-02 "LLM-path classification") must be rewritten for Kev,
   and commit tests now require the user to type the message.
@@ -654,6 +723,9 @@ python3 run_kev_scope_eval.py --expect-run runs/gitrust-v1
 (cd ../../gitrust && cargo build --release)   # §12.7: whole system, through the binary
 python3 run_binary_policy.py --expect-run runs/gitrust-v1
 python3 run_binary_policy.py --expect-run runs/gitrust-v1 --dirty
+python3 run_kev_eval_v2.py --expect-run runs/gitrust-v1 --tag ft       # §12.8 (and --tag stock on stock)
+python3 run_binary_policy.py --expect-run runs/gitrust-v1 --v2 --tag ft-clean
+python3 run_binary_policy.py --expect-run runs/gitrust-v1 --v2 --dirty --tag ft-dirty
 ```
 
 Known-good baselines (35 ops): stock **31/44 clean, 30/44 dirty**; `gitrust-v1` at T 3.564

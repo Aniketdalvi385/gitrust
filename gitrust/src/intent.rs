@@ -491,16 +491,23 @@ fn capture_scoped_push(q: &str) -> Option<String> {
     // Need "<topic> <filter-noun>" — the topic is the word immediately BEFORE a
     // trailing filter noun. Extra leading words (adjectives) are ignored; we key
     // off the last two tokens so "push all the new login changes" → topic=login.
-    let words: Vec<&str> = rest.split_whitespace().collect();
+    let filter_nouns = [
+        "changes", "change", "files", "file", "work", "fixes", "fix", "edits", "edit", "stuff",
+        "feature", "updates", "code",
+    ];
+    let mut words: Vec<&str> = rest.split_whitespace().collect();
+    // "search feature files": stacked filter nouns — the topic precedes them all.
+    while words.len() >= 3
+        && filter_nouns.contains(&words[words.len() - 1])
+        && filter_nouns.contains(&words[words.len() - 2])
+    {
+        words.pop();
+    }
     if words.len() < 2 {
         return None;
     }
     let topic = words[words.len() - 2];
     let noun = words[words.len() - 1];
-    let filter_nouns = [
-        "changes", "change", "files", "file", "work", "fixes", "fix", "edits", "edit", "stuff",
-        "feature", "updates", "code",
-    ];
     // The topic must itself be a plain word (not a filter noun or a determiner).
     let topic_is_word = topic
         .chars()
@@ -955,6 +962,7 @@ fn capture_topic(q: &str) -> Option<String> {
     for verb in [
         "commit and push only ",
         "commit and push ",
+        "only push ",
         "push only ",
         "ship ",
         "send up just ",
@@ -965,12 +973,22 @@ fn capture_topic(q: &str) -> Option<String> {
     ] {
         if let Some(rest) = q.strip_prefix(verb) {
             // Re-use the "<topic> <filter-noun>" shape of capture_scoped_push.
-            let rest: Vec<&str> = rest
-                .split_whitespace()
-                .take_while(|w| !matches!(*w, "but" | "and"))
-                .filter(|w| !FILLER.contains(w))
-                .collect();
-            if let Some(t) = capture_scoped_push(&format!("push {}", rest.join(" "))) {
+            // Stop at a clause boundary: "but"/"and"/"not", or a word ending a
+            // clause ("files, and leave the docs …").
+            let mut words: Vec<&str> = Vec::new();
+            for w in rest.split_whitespace() {
+                if matches!(w, "but" | "and" | "not") {
+                    break;
+                }
+                let bare = w.trim_end_matches([',', ';', '.']);
+                if !FILLER.contains(&bare) {
+                    words.push(bare);
+                }
+                if bare.len() != w.len() {
+                    break;
+                }
+            }
+            if let Some(t) = capture_scoped_push(&format!("push {}", words.join(" "))) {
                 return Some(t);
             }
         }
@@ -1694,6 +1712,18 @@ mod tests {
         }
         // "to" that isn't a destination is left alone.
         assert_eq!(capture_topic("push the changes to login"), None);
+    }
+
+    #[test]
+    fn test_topic_from_owner_v2_phrasings() {
+        // eval_set_v2 S08: Kev routed scoped_push at 0.98–1.00, capture missed the topic.
+        for q in [
+            "only push the search stuff not the docs",
+            "commit and push only the search feature files, and leave the docs typo fix uncommitted.",
+            "push the search feature files",
+        ] {
+            assert_eq!(capture_topic(q).as_deref(), Some("search"), "{}", q);
+        }
     }
 
     #[test]

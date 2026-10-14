@@ -1,0 +1,642 @@
+{
+ "about": "Held-out eval v2 (2026-10-14): phrasings written by the project owner from situation prompts that avoid op names/descriptions. NEVER train on these.",
+ "states": {
+  "normal_clean": "clean repo, on branch main",
+  "normal_dirty": "on branch main, 2 files modified, 1 untracked file",
+  "rebase": "detached HEAD, 1 file modified, rebase in progress (2/3, conflicts in 1 file(s))",
+  "cherry_pick": "on branch main, 1 file modified, cherry-pick in progress"
+ },
+ "followup_accept": {
+  "S29": [
+   "status",
+   "diff"
+  ]
+ },
+ "cases": [
+  {
+   "id": "S01",
+   "q": "whats goin on",
+   "accept": [
+    "status"
+   ],
+   "bucket": "everyday",
+   "situation": "normal"
+  },
+  {
+   "id": "S01",
+   "q": "What's the current state of the repo, and do I have anything uncommitted?",
+   "accept": [
+    "status"
+   ],
+   "bucket": "everyday",
+   "situation": "normal"
+  },
+  {
+   "id": "S02",
+   "q": "which branch",
+   "accept": [
+    "branches",
+    "status"
+   ],
+   "bucket": "everyday",
+   "situation": "normal",
+   "note": "branches' description covers 'which branch is checked out'; status also shows it"
+  },
+  {
+   "id": "S02",
+   "q": "Which branch am I currently on?",
+   "accept": [
+    "branches",
+    "status"
+   ],
+   "bucket": "everyday",
+   "situation": "normal",
+   "note": "branches' description covers 'which branch is checked out'; status also shows it"
+  },
+  {
+   "id": "S03",
+   "q": "branches?",
+   "accept": [
+    "branches"
+   ],
+   "bucket": "everyday",
+   "situation": "normal"
+  },
+  {
+   "id": "S03",
+   "q": "List all local and remote branches.",
+   "accept": [
+    "branches"
+   ],
+   "bucket": "everyday",
+   "situation": "normal"
+  },
+  {
+   "id": "S04",
+   "q": "what did i do this week",
+   "accept": [
+    "log"
+   ],
+   "bucket": "everyday",
+   "situation": "normal"
+  },
+  {
+   "id": "S04",
+   "q": "Show my commits from the last three days.",
+   "accept": [
+    "log"
+   ],
+   "bucket": "everyday",
+   "situation": "normal"
+  },
+  {
+   "id": "S05",
+   "q": "diff",
+   "accept": [
+    "diff"
+   ],
+   "bucket": "everyday",
+   "situation": "normal"
+  },
+  {
+   "id": "S05",
+   "q": "Show me line by line what I changed in each modified file.",
+   "accept": [
+    "diff"
+   ],
+   "bucket": "everyday",
+   "situation": "normal"
+  },
+  {
+   "id": "S06",
+   "q": "commit \"fix login bug\"",
+   "accept": [
+    "add_commit",
+    "commit"
+   ],
+   "bucket": "saving",
+   "situation": "normal"
+  },
+  {
+   "id": "S06",
+   "q": "Commit all my changes with the message \"Add search filter\".",
+   "accept": [
+    "add_commit"
+   ],
+   "bucket": "saving",
+   "situation": "normal"
+  },
+  {
+   "id": "S07",
+   "q": "commit n push",
+   "accept": [
+    "add_commit",
+    "push"
+   ],
+   "bucket": "gap",
+   "situation": "normal",
+   "note": "no single op commits everything AND pushes; scored separately"
+  },
+  {
+   "id": "S07",
+   "q": "Commit everything with the message \"Update header\" and push it to origin.",
+   "accept": [
+    "add_commit",
+    "push"
+   ],
+   "bucket": "gap",
+   "situation": "normal",
+   "note": "no single op commits everything AND pushes; scored separately"
+  },
+  {
+   "id": "S08",
+   "q": "only push the search stuff not the docs",
+   "accept": [
+    "scoped_push"
+   ],
+   "bucket": "saving",
+   "situation": "normal"
+  },
+  {
+   "id": "S08",
+   "q": "Commit and push only the search feature files, and leave the docs typo fix uncommitted.",
+   "accept": [
+    "scoped_push"
+   ],
+   "bucket": "saving",
+   "situation": "normal"
+  },
+  {
+   "id": "S09",
+   "q": "psuh",
+   "accept": [
+    "push"
+   ],
+   "bucket": "saving",
+   "situation": "normal"
+  },
+  {
+   "id": "S09",
+   "q": "Push my local commits up to the remote.",
+   "accept": [
+    "push"
+   ],
+   "bucket": "saving",
+   "situation": "normal"
+  },
+  {
+   "id": "S10",
+   "q": "pull",
+   "accept": [
+    "pull"
+   ],
+   "bucket": "getting",
+   "situation": "normal"
+  },
+  {
+   "id": "S10",
+   "q": "Get the latest changes from the remote into my branch.",
+   "accept": [
+    "pull"
+   ],
+   "bucket": "getting",
+   "situation": "normal"
+  },
+  {
+   "id": "S11",
+   "q": "pull rebase",
+   "accept": [
+    "pull_rebase"
+   ],
+   "bucket": "new_op",
+   "situation": "normal"
+  },
+  {
+   "id": "S11",
+   "q": "Pull the latest changes and replay my local commits on top instead of making a merge commit.",
+   "accept": [
+    "pull_rebase"
+   ],
+   "bucket": "new_op",
+   "situation": "normal"
+  },
+  {
+   "id": "S12",
+   "q": "will feature-x clash w mine",
+   "accept": [
+    "merge_preview"
+   ],
+   "bucket": "getting",
+   "situation": "normal"
+  },
+  {
+   "id": "S12",
+   "q": "Before I merge origin/feature-x, check whether it would conflict with my branch.",
+   "accept": [
+    "merge_preview"
+   ],
+   "bucket": "getting",
+   "situation": "normal"
+  },
+  {
+   "id": "S13",
+   "q": "stash",
+   "accept": [
+    "stash"
+   ],
+   "bucket": "aside",
+   "situation": "normal"
+  },
+  {
+   "id": "S13",
+   "q": "Put my unfinished changes aside without committing so I can work on something else.",
+   "accept": [
+    "stash"
+   ],
+   "bucket": "aside",
+   "situation": "normal"
+  },
+  {
+   "id": "S14",
+   "q": "unstash",
+   "accept": [
+    "stash_pop"
+   ],
+   "bucket": "new_op",
+   "situation": "normal"
+  },
+  {
+   "id": "S14",
+   "q": "Bring back the changes I stashed earlier.",
+   "accept": [
+    "stash_pop"
+   ],
+   "bucket": "new_op",
+   "situation": "normal"
+  },
+  {
+   "id": "S15",
+   "q": "undo last commit",
+   "accept": [
+    "undo"
+   ],
+   "bucket": "mistakes",
+   "situation": "normal"
+  },
+  {
+   "id": "S15",
+   "q": "Undo my last commit but keep the changes in my files.",
+   "accept": [
+    "undo"
+   ],
+   "bucket": "mistakes",
+   "situation": "normal"
+  },
+  {
+   "id": "S16",
+   "q": "revert the commit that broke checkout",
+   "accept": [
+    "revert"
+   ],
+   "bucket": "mistakes",
+   "situation": "normal"
+  },
+  {
+   "id": "S16",
+   "q": "Revert last week's commit that introduced the bug, without rewriting history.",
+   "accept": [
+    "revert"
+   ],
+   "bucket": "mistakes",
+   "situation": "normal"
+  },
+  {
+   "id": "S17",
+   "q": "fix last commit msg",
+   "accept": [
+    "amend"
+   ],
+   "bucket": "mistakes",
+   "situation": "normal"
+  },
+  {
+   "id": "S17",
+   "q": "Change my last commit message to \"Fix typo in README\".",
+   "accept": [
+    "amend"
+   ],
+   "bucket": "mistakes",
+   "situation": "normal"
+  },
+  {
+   "id": "S18",
+   "q": "squash last 5",
+   "accept": [
+    "squash"
+   ],
+   "bucket": "mistakes",
+   "situation": "normal"
+  },
+  {
+   "id": "S18",
+   "q": "Combine my last five commits into a single commit.",
+   "accept": [
+    "squash"
+   ],
+   "bucket": "mistakes",
+   "situation": "normal"
+  },
+  {
+   "id": "S19",
+   "q": "throw away all changes",
+   "accept": [
+    "cleanup"
+   ],
+   "bucket": "mistakes",
+   "situation": "normal",
+   "note": "near-miss: discard_local throws away COMMITS"
+  },
+  {
+   "id": "S19",
+   "q": "Discard all my uncommitted changes and put the files back to the last commit.",
+   "accept": [
+    "cleanup"
+   ],
+   "bucket": "mistakes",
+   "situation": "normal",
+   "note": "near-miss: discard_local throws away COMMITS"
+  },
+  {
+   "id": "S20",
+   "q": "i lost a commit help",
+   "accept": [
+    "find_lost_work"
+   ],
+   "bucket": "mistakes",
+   "situation": "normal"
+  },
+  {
+   "id": "S20",
+   "q": "I'm sure I committed some work that's gone now. Help me find it.",
+   "accept": [
+    "find_lost_work"
+   ],
+   "bucket": "mistakes",
+   "situation": "normal"
+  },
+  {
+   "id": "S21",
+   "q": "remotes",
+   "accept": [
+    "remotes"
+   ],
+   "bucket": "new_op",
+   "situation": "normal"
+  },
+  {
+   "id": "S21",
+   "q": "Which remote servers is this repo connected to?",
+   "accept": [
+    "remotes"
+   ],
+   "bucket": "new_op",
+   "situation": "normal"
+  },
+  {
+   "id": "S22",
+   "q": "change origin to git@github.com:org/new-repo.git",
+   "accept": [
+    "add_remote"
+   ],
+   "bucket": "remotes",
+   "situation": "normal"
+  },
+  {
+   "id": "S22",
+   "q": "The repo moved, so update origin's URL to git@github.com:org/new-repo.git.",
+   "accept": [
+    "add_remote"
+   ],
+   "bucket": "remotes",
+   "situation": "normal"
+  },
+  {
+   "id": "S23",
+   "q": "rm remote legacy",
+   "accept": [
+    "remove_remote"
+   ],
+   "bucket": "new_op",
+   "situation": "normal"
+  },
+  {
+   "id": "S23",
+   "q": "Remove the old remote called \"legacy\" from this repo.",
+   "accept": [
+    "remove_remote"
+   ],
+   "bucket": "new_op",
+   "situation": "normal"
+  },
+  {
+   "id": "S24",
+   "q": "set upstream",
+   "accept": [
+    "set_upstream"
+   ],
+   "bucket": "new_op",
+   "situation": "normal"
+  },
+  {
+   "id": "S24",
+   "q": "Push my new local branch and set it to track the same branch on origin.",
+   "accept": [
+    "set_upstream"
+   ],
+   "bucket": "new_op",
+   "situation": "normal"
+  },
+  {
+   "id": "S25",
+   "q": "clean junk files",
+   "accept": [
+    "cleanup"
+   ],
+   "bucket": "danger",
+   "situation": "normal"
+  },
+  {
+   "id": "S25",
+   "q": "Delete all untracked generated files, but show me what will go first.",
+   "accept": [
+    "cleanup"
+   ],
+   "bucket": "danger",
+   "situation": "normal"
+  },
+  {
+   "id": "S26",
+   "q": "nuke the history",
+   "accept": [
+    "delete_repo"
+   ],
+   "bucket": "new_op",
+   "situation": "normal"
+  },
+  {
+   "id": "S26",
+   "q": "Wipe this project's entire Git history and start over with one fresh commit.",
+   "accept": [
+    "delete_repo"
+   ],
+   "bucket": "new_op",
+   "situation": "normal"
+  },
+  {
+   "id": "S27",
+   "q": "force push",
+   "accept": [
+    "force_push"
+   ],
+   "bucket": "danger",
+   "situation": "normal"
+  },
+  {
+   "id": "S27",
+   "q": "The remote is wrong and mine is right, so overwrite the remote with my branch.",
+   "accept": [
+    "force_push"
+   ],
+   "bucket": "danger",
+   "situation": "normal"
+  },
+  {
+   "id": "S28",
+   "q": "continue",
+   "accept": [
+    "rebase_continue"
+   ],
+   "bucket": "in_progress",
+   "situation": "rebase"
+  },
+  {
+   "id": "S28",
+   "q": "I've fixed the conflicts, so carry on with the rebase.",
+   "accept": [
+    "rebase_continue"
+   ],
+   "bucket": "in_progress",
+   "situation": "rebase"
+  },
+  {
+   "id": "S28",
+   "q": "skip",
+   "accept": [
+    "rebase_skip"
+   ],
+   "bucket": "in_progress",
+   "situation": "rebase"
+  },
+  {
+   "id": "S28",
+   "q": "Skip this commit and keep going.",
+   "accept": [
+    "rebase_skip"
+   ],
+   "bucket": "in_progress",
+   "situation": "rebase"
+  },
+  {
+   "id": "S28",
+   "q": "abort",
+   "accept": [
+    "rebase_abort"
+   ],
+   "bucket": "in_progress",
+   "situation": "rebase"
+  },
+  {
+   "id": "S28",
+   "q": "Give up and put everything back the way it was before I started.",
+   "accept": [
+    "rebase_abort"
+   ],
+   "bucket": "in_progress",
+   "situation": "rebase"
+  },
+  {
+   "id": "S29",
+   "q": "whats conflicting",
+   "accept": [
+    "something_else"
+   ],
+   "bucket": "in_progress",
+   "situation": "rebase",
+   "note": "then the main question: status/diff are both fine"
+  },
+  {
+   "id": "S29",
+   "q": "Before I continue or abort, show me which files have conflicts.",
+   "accept": [
+    "something_else"
+   ],
+   "bucket": "in_progress",
+   "situation": "rebase",
+   "note": "then the main question: status/diff are both fine"
+  },
+  {
+   "id": "S30",
+   "q": "cancel cherry pick",
+   "accept": [
+    "cherry_pick_abort"
+   ],
+   "bucket": "in_progress",
+   "situation": "cherry_pick"
+  },
+  {
+   "id": "S30",
+   "q": "Stop the cherry-pick that's in progress and go back.",
+   "accept": [
+    "cherry_pick_abort"
+   ],
+   "bucket": "in_progress",
+   "situation": "cherry_pick"
+  },
+  {
+   "id": "S31",
+   "q": "how many stars does my repo have",
+   "accept": [
+    "__reject__"
+   ],
+   "bucket": "oos",
+   "situation": "normal"
+  },
+  {
+   "id": "S31",
+   "q": "open a PR for this branch",
+   "accept": [
+    "__reject__"
+   ],
+   "bucket": "oos",
+   "situation": "normal"
+  },
+  {
+   "id": "S31",
+   "q": "write a python function that parses dates",
+   "accept": [
+    "__reject__"
+   ],
+   "bucket": "oos",
+   "situation": "normal"
+  },
+  {
+   "id": "S31",
+   "q": "deploy to vercel",
+   "accept": [
+    "__reject__"
+   ],
+   "bucket": "oos",
+   "situation": "normal"
+  }
+ ]
+}

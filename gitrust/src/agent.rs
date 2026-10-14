@@ -259,6 +259,9 @@ async fn classify_query(
     use crate::kev::KevDecision;
 
     if let Some(intent) = crate::intent::try_canonical(query) {
+        if std::env::var("GITRUST_DEBUG").is_ok() {
+            eprintln!("  (fast-path: {:?})", intent);
+        }
         return Ok(IntentResult {
             intent,
             confidence: 1.0,

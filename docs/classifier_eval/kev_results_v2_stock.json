@@ -1,0 +1,2158 @@
+{
+ "run": "jaredpalmer/kev-0.8b@v1.0",
+ "temperature": 2.3510958125672174,
+ "rows": [
+  {
+   "id": "S01",
+   "q": "whats goin on",
+   "state": "normal_clean",
+   "bucket": "everyday",
+   "accept": [
+    "status"
+   ],
+   "top": "__reject__",
+   "p": 0.139,
+   "top2": "stash",
+   "p2": 0.086,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S01",
+   "q": "whats goin on",
+   "state": "normal_dirty",
+   "bucket": "everyday",
+   "accept": [
+    "status"
+   ],
+   "top": "__reject__",
+   "p": 0.111,
+   "top2": "scoped_push",
+   "p2": 0.081,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S01",
+   "q": "What's the current state of the repo, and do I have anything uncommitted?",
+   "state": "normal_clean",
+   "bucket": "everyday",
+   "accept": [
+    "status"
+   ],
+   "top": "status",
+   "p": 0.199,
+   "top2": "__reject__",
+   "p2": 0.149,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S01",
+   "q": "What's the current state of the repo, and do I have anything uncommitted?",
+   "state": "normal_dirty",
+   "bucket": "everyday",
+   "accept": [
+    "status"
+   ],
+   "top": "status",
+   "p": 0.177,
+   "top2": "__reject__",
+   "p2": 0.144,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S02",
+   "q": "which branch",
+   "state": "normal_clean",
+   "bucket": "everyday",
+   "accept": [
+    "branches",
+    "status"
+   ],
+   "top": "branches",
+   "p": 0.641,
+   "top2": "checkout",
+   "p2": 0.071,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S02",
+   "q": "which branch",
+   "state": "normal_dirty",
+   "bucket": "everyday",
+   "accept": [
+    "branches",
+    "status"
+   ],
+   "top": "branches",
+   "p": 0.459,
+   "top2": "checkout",
+   "p2": 0.101,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S02",
+   "q": "Which branch am I currently on?",
+   "state": "normal_clean",
+   "bucket": "everyday",
+   "accept": [
+    "branches",
+    "status"
+   ],
+   "top": "branches",
+   "p": 0.762,
+   "top2": "checkout",
+   "p2": 0.054,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S02",
+   "q": "Which branch am I currently on?",
+   "state": "normal_dirty",
+   "bucket": "everyday",
+   "accept": [
+    "branches",
+    "status"
+   ],
+   "top": "branches",
+   "p": 0.757,
+   "top2": "checkout",
+   "p2": 0.054,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S03",
+   "q": "branches?",
+   "state": "normal_clean",
+   "bucket": "everyday",
+   "accept": [
+    "branches"
+   ],
+   "top": "branches",
+   "p": 0.362,
+   "top2": "__reject__",
+   "p2": 0.116,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S03",
+   "q": "branches?",
+   "state": "normal_dirty",
+   "bucket": "everyday",
+   "accept": [
+    "branches"
+   ],
+   "top": "branches",
+   "p": 0.319,
+   "top2": "__reject__",
+   "p2": 0.092,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S03",
+   "q": "List all local and remote branches.",
+   "state": "normal_clean",
+   "bucket": "everyday",
+   "accept": [
+    "branches"
+   ],
+   "top": "branches",
+   "p": 0.234,
+   "top2": "__reject__",
+   "p2": 0.202,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S03",
+   "q": "List all local and remote branches.",
+   "state": "normal_dirty",
+   "bucket": "everyday",
+   "accept": [
+    "branches"
+   ],
+   "top": "branches",
+   "p": 0.24,
+   "top2": "__reject__",
+   "p2": 0.187,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S04",
+   "q": "what did i do this week",
+   "state": "normal_clean",
+   "bucket": "everyday",
+   "accept": [
+    "log"
+   ],
+   "top": "__reject__",
+   "p": 0.119,
+   "top2": "cleanup",
+   "p2": 0.115,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S04",
+   "q": "what did i do this week",
+   "state": "normal_dirty",
+   "bucket": "everyday",
+   "accept": [
+    "log"
+   ],
+   "top": "__reject__",
+   "p": 0.114,
+   "top2": "scoped_push",
+   "p2": 0.089,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S04",
+   "q": "Show my commits from the last three days.",
+   "state": "normal_clean",
+   "bucket": "everyday",
+   "accept": [
+    "log"
+   ],
+   "top": "log",
+   "p": 0.5,
+   "top2": "__reject__",
+   "p2": 0.098,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S04",
+   "q": "Show my commits from the last three days.",
+   "state": "normal_dirty",
+   "bucket": "everyday",
+   "accept": [
+    "log"
+   ],
+   "top": "log",
+   "p": 0.429,
+   "top2": "__reject__",
+   "p2": 0.095,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S05",
+   "q": "diff",
+   "state": "normal_clean",
+   "bucket": "everyday",
+   "accept": [
+    "diff"
+   ],
+   "top": "diff",
+   "p": 0.299,
+   "top2": "__reject__",
+   "p2": 0.094,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S05",
+   "q": "diff",
+   "state": "normal_dirty",
+   "bucket": "everyday",
+   "accept": [
+    "diff"
+   ],
+   "top": "diff",
+   "p": 0.284,
+   "top2": "__reject__",
+   "p2": 0.094,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S05",
+   "q": "Show me line by line what I changed in each modified file.",
+   "state": "normal_clean",
+   "bucket": "everyday",
+   "accept": [
+    "diff"
+   ],
+   "top": "diff",
+   "p": 0.69,
+   "top2": "__reject__",
+   "p2": 0.055,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S05",
+   "q": "Show me line by line what I changed in each modified file.",
+   "state": "normal_dirty",
+   "bucket": "everyday",
+   "accept": [
+    "diff"
+   ],
+   "top": "diff",
+   "p": 0.665,
+   "top2": "__reject__",
+   "p2": 0.063,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S06",
+   "q": "commit \"fix login bug\"",
+   "state": "normal_clean",
+   "bucket": "saving",
+   "accept": [
+    "add_commit",
+    "commit"
+   ],
+   "top": "add_commit",
+   "p": 0.176,
+   "top2": "show",
+   "p2": 0.118,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S06",
+   "q": "commit \"fix login bug\"",
+   "state": "normal_dirty",
+   "bucket": "saving",
+   "accept": [
+    "add_commit",
+    "commit"
+   ],
+   "top": "add_commit",
+   "p": 0.184,
+   "top2": "show",
+   "p2": 0.157,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S06",
+   "q": "Commit all my changes with the message \"Add search filter\".",
+   "state": "normal_clean",
+   "bucket": "saving",
+   "accept": [
+    "add_commit"
+   ],
+   "top": "add_commit",
+   "p": 0.225,
+   "top2": "squash",
+   "p2": 0.11,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S06",
+   "q": "Commit all my changes with the message \"Add search filter\".",
+   "state": "normal_dirty",
+   "bucket": "saving",
+   "accept": [
+    "add_commit"
+   ],
+   "top": "add_commit",
+   "p": 0.198,
+   "top2": "push",
+   "p2": 0.087,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S07",
+   "q": "commit n push",
+   "state": "normal_clean",
+   "bucket": "gap",
+   "accept": [
+    "add_commit",
+    "push"
+   ],
+   "top": "push",
+   "p": 0.167,
+   "top2": "__reject__",
+   "p2": 0.107,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S07",
+   "q": "commit n push",
+   "state": "normal_dirty",
+   "bucket": "gap",
+   "accept": [
+    "add_commit",
+    "push"
+   ],
+   "top": "add_commit",
+   "p": 0.134,
+   "top2": "push",
+   "p2": 0.11,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S07",
+   "q": "Commit everything with the message \"Update header\" and push it to origin.",
+   "state": "normal_clean",
+   "bucket": "gap",
+   "accept": [
+    "add_commit",
+    "push"
+   ],
+   "top": "push",
+   "p": 0.194,
+   "top2": "pull",
+   "p2": 0.131,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S07",
+   "q": "Commit everything with the message \"Update header\" and push it to origin.",
+   "state": "normal_dirty",
+   "bucket": "gap",
+   "accept": [
+    "add_commit",
+    "push"
+   ],
+   "top": "add_commit",
+   "p": 0.194,
+   "top2": "push",
+   "p2": 0.166,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S08",
+   "q": "only push the search stuff not the docs",
+   "state": "normal_clean",
+   "bucket": "saving",
+   "accept": [
+    "scoped_push"
+   ],
+   "top": "scoped_push",
+   "p": 0.265,
+   "top2": "__reject__",
+   "p2": 0.126,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S08",
+   "q": "only push the search stuff not the docs",
+   "state": "normal_dirty",
+   "bucket": "saving",
+   "accept": [
+    "scoped_push"
+   ],
+   "top": "scoped_push",
+   "p": 0.321,
+   "top2": "__reject__",
+   "p2": 0.085,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S08",
+   "q": "Commit and push only the search feature files, and leave the docs typo fix uncommitted.",
+   "state": "normal_clean",
+   "bucket": "saving",
+   "accept": [
+    "scoped_push"
+   ],
+   "top": "scoped_push",
+   "p": 0.326,
+   "top2": "commit",
+   "p2": 0.103,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S08",
+   "q": "Commit and push only the search feature files, and leave the docs typo fix uncommitted.",
+   "state": "normal_dirty",
+   "bucket": "saving",
+   "accept": [
+    "scoped_push"
+   ],
+   "top": "scoped_push",
+   "p": 0.253,
+   "top2": "commit",
+   "p2": 0.128,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S09",
+   "q": "psuh",
+   "state": "normal_clean",
+   "bucket": "saving",
+   "accept": [
+    "push"
+   ],
+   "top": "__reject__",
+   "p": 0.127,
+   "top2": "cleanup",
+   "p2": 0.098,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S09",
+   "q": "psuh",
+   "state": "normal_dirty",
+   "bucket": "saving",
+   "accept": [
+    "push"
+   ],
+   "top": "scoped_push",
+   "p": 0.109,
+   "top2": "__reject__",
+   "p2": 0.106,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S09",
+   "q": "Push my local commits up to the remote.",
+   "state": "normal_clean",
+   "bucket": "saving",
+   "accept": [
+    "push"
+   ],
+   "top": "push",
+   "p": 0.216,
+   "top2": "pull",
+   "p2": 0.101,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S09",
+   "q": "Push my local commits up to the remote.",
+   "state": "normal_dirty",
+   "bucket": "saving",
+   "accept": [
+    "push"
+   ],
+   "top": "push",
+   "p": 0.124,
+   "top2": "pull",
+   "p2": 0.093,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S10",
+   "q": "pull",
+   "state": "normal_clean",
+   "bucket": "getting",
+   "accept": [
+    "pull"
+   ],
+   "top": "pull",
+   "p": 0.484,
+   "top2": "__reject__",
+   "p2": 0.096,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": true
+  },
+  {
+   "id": "S10",
+   "q": "pull",
+   "state": "normal_dirty",
+   "bucket": "getting",
+   "accept": [
+    "pull"
+   ],
+   "top": "pull",
+   "p": 0.228,
+   "top2": "__reject__",
+   "p2": 0.107,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": true
+  },
+  {
+   "id": "S10",
+   "q": "Get the latest changes from the remote into my branch.",
+   "state": "normal_clean",
+   "bucket": "getting",
+   "accept": [
+    "pull"
+   ],
+   "top": "pull",
+   "p": 0.604,
+   "top2": "sync",
+   "p2": 0.087,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S10",
+   "q": "Get the latest changes from the remote into my branch.",
+   "state": "normal_dirty",
+   "bucket": "getting",
+   "accept": [
+    "pull"
+   ],
+   "top": "pull",
+   "p": 0.546,
+   "top2": "sync",
+   "p2": 0.096,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S11",
+   "q": "pull rebase",
+   "state": "normal_clean",
+   "bucket": "new_op",
+   "accept": [
+    "pull_rebase"
+   ],
+   "top": "pull_rebase",
+   "p": 0.586,
+   "top2": "pull",
+   "p2": 0.172,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S11",
+   "q": "pull rebase",
+   "state": "normal_dirty",
+   "bucket": "new_op",
+   "accept": [
+    "pull_rebase"
+   ],
+   "top": "pull_rebase",
+   "p": 0.614,
+   "top2": "pull",
+   "p2": 0.107,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S11",
+   "q": "Pull the latest changes and replay my local commits on top instead of making a merge commit.",
+   "state": "normal_clean",
+   "bucket": "new_op",
+   "accept": [
+    "pull_rebase"
+   ],
+   "top": "pull_rebase",
+   "p": 0.502,
+   "top2": "squash",
+   "p2": 0.217,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S11",
+   "q": "Pull the latest changes and replay my local commits on top instead of making a merge commit.",
+   "state": "normal_dirty",
+   "bucket": "new_op",
+   "accept": [
+    "pull_rebase"
+   ],
+   "top": "pull_rebase",
+   "p": 0.48,
+   "top2": "squash",
+   "p2": 0.216,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S12",
+   "q": "will feature-x clash w mine",
+   "state": "normal_clean",
+   "bucket": "getting",
+   "accept": [
+    "merge_preview"
+   ],
+   "top": "__reject__",
+   "p": 0.197,
+   "top2": "merge_preview",
+   "p2": 0.094,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S12",
+   "q": "will feature-x clash w mine",
+   "state": "normal_dirty",
+   "bucket": "getting",
+   "accept": [
+    "merge_preview"
+   ],
+   "top": "__reject__",
+   "p": 0.149,
+   "top2": "scoped_push",
+   "p2": 0.077,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S12",
+   "q": "Before I merge origin/feature-x, check whether it would conflict with my branch.",
+   "state": "normal_clean",
+   "bucket": "getting",
+   "accept": [
+    "merge_preview"
+   ],
+   "top": "merge_preview",
+   "p": 0.481,
+   "top2": "__reject__",
+   "p2": 0.076,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S12",
+   "q": "Before I merge origin/feature-x, check whether it would conflict with my branch.",
+   "state": "normal_dirty",
+   "bucket": "getting",
+   "accept": [
+    "merge_preview"
+   ],
+   "top": "merge_preview",
+   "p": 0.482,
+   "top2": "__reject__",
+   "p2": 0.065,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S13",
+   "q": "stash",
+   "state": "normal_clean",
+   "bucket": "aside",
+   "accept": [
+    "stash"
+   ],
+   "top": "stash",
+   "p": 0.433,
+   "top2": "cleanup",
+   "p2": 0.131,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S13",
+   "q": "stash",
+   "state": "normal_dirty",
+   "bucket": "aside",
+   "accept": [
+    "stash"
+   ],
+   "top": "stash",
+   "p": 0.338,
+   "top2": "cleanup",
+   "p2": 0.11,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S13",
+   "q": "Put my unfinished changes aside without committing so I can work on something else.",
+   "state": "normal_clean",
+   "bucket": "aside",
+   "accept": [
+    "stash"
+   ],
+   "top": "stash",
+   "p": 0.422,
+   "top2": "cleanup",
+   "p2": 0.173,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S13",
+   "q": "Put my unfinished changes aside without committing so I can work on something else.",
+   "state": "normal_dirty",
+   "bucket": "aside",
+   "accept": [
+    "stash"
+   ],
+   "top": "stash",
+   "p": 0.346,
+   "top2": "cleanup",
+   "p2": 0.282,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S14",
+   "q": "unstash",
+   "state": "normal_clean",
+   "bucket": "new_op",
+   "accept": [
+    "stash_pop"
+   ],
+   "top": "stash",
+   "p": 0.361,
+   "top2": "cleanup",
+   "p2": 0.116,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S14",
+   "q": "unstash",
+   "state": "normal_dirty",
+   "bucket": "new_op",
+   "accept": [
+    "stash_pop"
+   ],
+   "top": "stash",
+   "p": 0.239,
+   "top2": "cleanup",
+   "p2": 0.2,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S14",
+   "q": "Bring back the changes I stashed earlier.",
+   "state": "normal_clean",
+   "bucket": "new_op",
+   "accept": [
+    "stash_pop"
+   ],
+   "top": "stash_pop",
+   "p": 0.256,
+   "top2": "undo",
+   "p2": 0.206,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S14",
+   "q": "Bring back the changes I stashed earlier.",
+   "state": "normal_dirty",
+   "bucket": "new_op",
+   "accept": [
+    "stash_pop"
+   ],
+   "top": "stash_pop",
+   "p": 0.245,
+   "top2": "undo",
+   "p2": 0.145,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S15",
+   "q": "undo last commit",
+   "state": "normal_clean",
+   "bucket": "mistakes",
+   "accept": [
+    "undo"
+   ],
+   "top": "undo",
+   "p": 0.439,
+   "top2": "revert",
+   "p2": 0.237,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S15",
+   "q": "undo last commit",
+   "state": "normal_dirty",
+   "bucket": "mistakes",
+   "accept": [
+    "undo"
+   ],
+   "top": "undo",
+   "p": 0.388,
+   "top2": "revert",
+   "p2": 0.242,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S15",
+   "q": "Undo my last commit but keep the changes in my files.",
+   "state": "normal_clean",
+   "bucket": "mistakes",
+   "accept": [
+    "undo"
+   ],
+   "top": "revert",
+   "p": 0.36,
+   "top2": "undo",
+   "p2": 0.288,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S15",
+   "q": "Undo my last commit but keep the changes in my files.",
+   "state": "normal_dirty",
+   "bucket": "mistakes",
+   "accept": [
+    "undo"
+   ],
+   "top": "revert",
+   "p": 0.358,
+   "top2": "undo",
+   "p2": 0.223,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S16",
+   "q": "revert the commit that broke checkout",
+   "state": "normal_clean",
+   "bucket": "mistakes",
+   "accept": [
+    "revert"
+   ],
+   "top": "revert",
+   "p": 0.391,
+   "top2": "undo",
+   "p2": 0.323,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S16",
+   "q": "revert the commit that broke checkout",
+   "state": "normal_dirty",
+   "bucket": "mistakes",
+   "accept": [
+    "revert"
+   ],
+   "top": "revert",
+   "p": 0.365,
+   "top2": "undo",
+   "p2": 0.291,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S16",
+   "q": "Revert last week's commit that introduced the bug, without rewriting history.",
+   "state": "normal_clean",
+   "bucket": "mistakes",
+   "accept": [
+    "revert"
+   ],
+   "top": "revert",
+   "p": 0.545,
+   "top2": "undo",
+   "p2": 0.216,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S16",
+   "q": "Revert last week's commit that introduced the bug, without rewriting history.",
+   "state": "normal_dirty",
+   "bucket": "mistakes",
+   "accept": [
+    "revert"
+   ],
+   "top": "revert",
+   "p": 0.511,
+   "top2": "undo",
+   "p2": 0.199,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S17",
+   "q": "fix last commit msg",
+   "state": "normal_clean",
+   "bucket": "mistakes",
+   "accept": [
+    "amend"
+   ],
+   "top": "amend",
+   "p": 0.399,
+   "top2": "show",
+   "p2": 0.133,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S17",
+   "q": "fix last commit msg",
+   "state": "normal_dirty",
+   "bucket": "mistakes",
+   "accept": [
+    "amend"
+   ],
+   "top": "amend",
+   "p": 0.374,
+   "top2": "show",
+   "p2": 0.159,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S17",
+   "q": "Change my last commit message to \"Fix typo in README\".",
+   "state": "normal_clean",
+   "bucket": "mistakes",
+   "accept": [
+    "amend"
+   ],
+   "top": "amend",
+   "p": 0.637,
+   "top2": "__reject__",
+   "p2": 0.051,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S17",
+   "q": "Change my last commit message to \"Fix typo in README\".",
+   "state": "normal_dirty",
+   "bucket": "mistakes",
+   "accept": [
+    "amend"
+   ],
+   "top": "amend",
+   "p": 0.536,
+   "top2": "commit",
+   "p2": 0.057,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S18",
+   "q": "squash last 5",
+   "state": "normal_clean",
+   "bucket": "mistakes",
+   "accept": [
+    "squash"
+   ],
+   "top": "squash",
+   "p": 0.654,
+   "top2": "__reject__",
+   "p2": 0.054,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S18",
+   "q": "squash last 5",
+   "state": "normal_dirty",
+   "bucket": "mistakes",
+   "accept": [
+    "squash"
+   ],
+   "top": "squash",
+   "p": 0.374,
+   "top2": "cleanup",
+   "p2": 0.086,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S18",
+   "q": "Combine my last five commits into a single commit.",
+   "state": "normal_clean",
+   "bucket": "mistakes",
+   "accept": [
+    "squash"
+   ],
+   "top": "squash",
+   "p": 0.719,
+   "top2": "log",
+   "p2": 0.058,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S18",
+   "q": "Combine my last five commits into a single commit.",
+   "state": "normal_dirty",
+   "bucket": "mistakes",
+   "accept": [
+    "squash"
+   ],
+   "top": "squash",
+   "p": 0.634,
+   "top2": "log",
+   "p2": 0.065,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S19",
+   "q": "throw away all changes",
+   "state": "normal_clean",
+   "bucket": "mistakes",
+   "accept": [
+    "cleanup"
+   ],
+   "top": "cleanup",
+   "p": 0.341,
+   "top2": "undo",
+   "p2": 0.175,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S19",
+   "q": "throw away all changes",
+   "state": "normal_dirty",
+   "bucket": "mistakes",
+   "accept": [
+    "cleanup"
+   ],
+   "top": "cleanup",
+   "p": 0.523,
+   "top2": "undo",
+   "p2": 0.09,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S19",
+   "q": "Discard all my uncommitted changes and put the files back to the last commit.",
+   "state": "normal_clean",
+   "bucket": "mistakes",
+   "accept": [
+    "cleanup"
+   ],
+   "top": "cleanup",
+   "p": 0.421,
+   "top2": "undo",
+   "p2": 0.184,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S19",
+   "q": "Discard all my uncommitted changes and put the files back to the last commit.",
+   "state": "normal_dirty",
+   "bucket": "mistakes",
+   "accept": [
+    "cleanup"
+   ],
+   "top": "cleanup",
+   "p": 0.515,
+   "top2": "undo",
+   "p2": 0.126,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S20",
+   "q": "i lost a commit help",
+   "state": "normal_clean",
+   "bucket": "mistakes",
+   "accept": [
+    "find_lost_work"
+   ],
+   "top": "find_lost_work",
+   "p": 0.502,
+   "top2": "__reject__",
+   "p2": 0.069,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S20",
+   "q": "i lost a commit help",
+   "state": "normal_dirty",
+   "bucket": "mistakes",
+   "accept": [
+    "find_lost_work"
+   ],
+   "top": "find_lost_work",
+   "p": 0.432,
+   "top2": "cleanup",
+   "p2": 0.08,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S20",
+   "q": "I'm sure I committed some work that's gone now. Help me find it.",
+   "state": "normal_clean",
+   "bucket": "mistakes",
+   "accept": [
+    "find_lost_work"
+   ],
+   "top": "find_lost_work",
+   "p": 0.177,
+   "top2": "show",
+   "p2": 0.115,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S20",
+   "q": "I'm sure I committed some work that's gone now. Help me find it.",
+   "state": "normal_dirty",
+   "bucket": "mistakes",
+   "accept": [
+    "find_lost_work"
+   ],
+   "top": "cleanup",
+   "p": 0.141,
+   "top2": "find_lost_work",
+   "p2": 0.13,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S21",
+   "q": "remotes",
+   "state": "normal_clean",
+   "bucket": "new_op",
+   "accept": [
+    "remotes"
+   ],
+   "top": "__reject__",
+   "p": 0.179,
+   "top2": "remotes",
+   "p2": 0.076,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S21",
+   "q": "remotes",
+   "state": "normal_dirty",
+   "bucket": "new_op",
+   "accept": [
+    "remotes"
+   ],
+   "top": "__reject__",
+   "p": 0.127,
+   "top2": "scoped_push",
+   "p2": 0.106,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S21",
+   "q": "Which remote servers is this repo connected to?",
+   "state": "normal_clean",
+   "bucket": "new_op",
+   "accept": [
+    "remotes"
+   ],
+   "top": "remotes",
+   "p": 0.483,
+   "top2": "add_remote",
+   "p2": 0.123,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S21",
+   "q": "Which remote servers is this repo connected to?",
+   "state": "normal_dirty",
+   "bucket": "new_op",
+   "accept": [
+    "remotes"
+   ],
+   "top": "remotes",
+   "p": 0.392,
+   "top2": "add_remote",
+   "p2": 0.144,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S22",
+   "q": "change origin to git@github.com:org/new-repo.git",
+   "state": "normal_clean",
+   "bucket": "remotes",
+   "accept": [
+    "add_remote"
+   ],
+   "top": "add_remote",
+   "p": 0.361,
+   "top2": "remotes",
+   "p2": 0.086,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S22",
+   "q": "change origin to git@github.com:org/new-repo.git",
+   "state": "normal_dirty",
+   "bucket": "remotes",
+   "accept": [
+    "add_remote"
+   ],
+   "top": "add_remote",
+   "p": 0.35,
+   "top2": "remotes",
+   "p2": 0.072,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S22",
+   "q": "The repo moved, so update origin's URL to git@github.com:org/new-repo.git.",
+   "state": "normal_clean",
+   "bucket": "remotes",
+   "accept": [
+    "add_remote"
+   ],
+   "top": "add_remote",
+   "p": 0.345,
+   "top2": "set_upstream",
+   "p2": 0.09,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S22",
+   "q": "The repo moved, so update origin's URL to git@github.com:org/new-repo.git.",
+   "state": "normal_dirty",
+   "bucket": "remotes",
+   "accept": [
+    "add_remote"
+   ],
+   "top": "add_remote",
+   "p": 0.329,
+   "top2": "set_upstream",
+   "p2": 0.085,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S23",
+   "q": "rm remote legacy",
+   "state": "normal_clean",
+   "bucket": "new_op",
+   "accept": [
+    "remove_remote"
+   ],
+   "top": "remove_remote",
+   "p": 0.464,
+   "top2": "__reject__",
+   "p2": 0.09,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S23",
+   "q": "rm remote legacy",
+   "state": "normal_dirty",
+   "bucket": "new_op",
+   "accept": [
+    "remove_remote"
+   ],
+   "top": "remove_remote",
+   "p": 0.261,
+   "top2": "cleanup",
+   "p2": 0.125,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S23",
+   "q": "Remove the old remote called \"legacy\" from this repo.",
+   "state": "normal_clean",
+   "bucket": "new_op",
+   "accept": [
+    "remove_remote"
+   ],
+   "top": "remove_remote",
+   "p": 0.749,
+   "top2": "__reject__",
+   "p2": 0.037,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S23",
+   "q": "Remove the old remote called \"legacy\" from this repo.",
+   "state": "normal_dirty",
+   "bucket": "new_op",
+   "accept": [
+    "remove_remote"
+   ],
+   "top": "remove_remote",
+   "p": 0.647,
+   "top2": "cleanup",
+   "p2": 0.044,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S24",
+   "q": "set upstream",
+   "state": "normal_clean",
+   "bucket": "new_op",
+   "accept": [
+    "set_upstream"
+   ],
+   "top": "set_upstream",
+   "p": 0.515,
+   "top2": "sync",
+   "p2": 0.083,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S24",
+   "q": "set upstream",
+   "state": "normal_dirty",
+   "bucket": "new_op",
+   "accept": [
+    "set_upstream"
+   ],
+   "top": "set_upstream",
+   "p": 0.335,
+   "top2": "__reject__",
+   "p2": 0.085,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S24",
+   "q": "Push my new local branch and set it to track the same branch on origin.",
+   "state": "normal_clean",
+   "bucket": "new_op",
+   "accept": [
+    "set_upstream"
+   ],
+   "top": "set_upstream",
+   "p": 0.489,
+   "top2": "sync",
+   "p2": 0.092,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S24",
+   "q": "Push my new local branch and set it to track the same branch on origin.",
+   "state": "normal_dirty",
+   "bucket": "new_op",
+   "accept": [
+    "set_upstream"
+   ],
+   "top": "set_upstream",
+   "p": 0.411,
+   "top2": "sync",
+   "p2": 0.114,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S25",
+   "q": "clean junk files",
+   "state": "normal_clean",
+   "bucket": "danger",
+   "accept": [
+    "cleanup"
+   ],
+   "top": "cleanup",
+   "p": 0.266,
+   "top2": "__reject__",
+   "p2": 0.131,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S25",
+   "q": "clean junk files",
+   "state": "normal_dirty",
+   "bucket": "danger",
+   "accept": [
+    "cleanup"
+   ],
+   "top": "cleanup",
+   "p": 0.318,
+   "top2": "__reject__",
+   "p2": 0.094,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S25",
+   "q": "Delete all untracked generated files, but show me what will go first.",
+   "state": "normal_clean",
+   "bucket": "danger",
+   "accept": [
+    "cleanup"
+   ],
+   "top": "cleanup",
+   "p": 0.307,
+   "top2": "__reject__",
+   "p2": 0.125,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S25",
+   "q": "Delete all untracked generated files, but show me what will go first.",
+   "state": "normal_dirty",
+   "bucket": "danger",
+   "accept": [
+    "cleanup"
+   ],
+   "top": "cleanup",
+   "p": 0.336,
+   "top2": "unstage",
+   "p2": 0.124,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S26",
+   "q": "nuke the history",
+   "state": "normal_clean",
+   "bucket": "new_op",
+   "accept": [
+    "delete_repo"
+   ],
+   "top": "cleanup",
+   "p": 0.13,
+   "top2": "undo",
+   "p2": 0.125,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S26",
+   "q": "nuke the history",
+   "state": "normal_dirty",
+   "bucket": "new_op",
+   "accept": [
+    "delete_repo"
+   ],
+   "top": "cleanup",
+   "p": 0.268,
+   "top2": "delete_repo",
+   "p2": 0.09,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S26",
+   "q": "Wipe this project's entire Git history and start over with one fresh commit.",
+   "state": "normal_clean",
+   "bucket": "new_op",
+   "accept": [
+    "delete_repo"
+   ],
+   "top": "cleanup",
+   "p": 0.104,
+   "top2": "__reject__",
+   "p2": 0.103,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S26",
+   "q": "Wipe this project's entire Git history and start over with one fresh commit.",
+   "state": "normal_dirty",
+   "bucket": "new_op",
+   "accept": [
+    "delete_repo"
+   ],
+   "top": "cleanup",
+   "p": 0.23,
+   "top2": "__reject__",
+   "p2": 0.086,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S27",
+   "q": "force push",
+   "state": "normal_clean",
+   "bucket": "danger",
+   "accept": [
+    "force_push"
+   ],
+   "top": "force_push",
+   "p": 0.389,
+   "top2": "push",
+   "p2": 0.172,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": true
+  },
+  {
+   "id": "S27",
+   "q": "force push",
+   "state": "normal_dirty",
+   "bucket": "danger",
+   "accept": [
+    "force_push"
+   ],
+   "top": "force_push",
+   "p": 0.326,
+   "top2": "push",
+   "p2": 0.115,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": true
+  },
+  {
+   "id": "S27",
+   "q": "The remote is wrong and mine is right, so overwrite the remote with my branch.",
+   "state": "normal_clean",
+   "bucket": "danger",
+   "accept": [
+    "force_push"
+   ],
+   "top": "force_push",
+   "p": 0.458,
+   "top2": "discard_local",
+   "p2": 0.081,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S27",
+   "q": "The remote is wrong and mine is right, so overwrite the remote with my branch.",
+   "state": "normal_dirty",
+   "bucket": "danger",
+   "accept": [
+    "force_push"
+   ],
+   "top": "force_push",
+   "p": 0.406,
+   "top2": "sync",
+   "p2": 0.072,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S28",
+   "q": "continue",
+   "state": "rebase",
+   "bucket": "in_progress",
+   "accept": [
+    "rebase_continue"
+   ],
+   "top": "rebase_continue",
+   "p": 0.38,
+   "top2": "something_else",
+   "p2": 0.355,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": true
+  },
+  {
+   "id": "S28",
+   "q": "I've fixed the conflicts, so carry on with the rebase.",
+   "state": "rebase",
+   "bucket": "in_progress",
+   "accept": [
+    "rebase_continue"
+   ],
+   "top": "rebase_continue",
+   "p": 0.455,
+   "top2": "something_else",
+   "p2": 0.271,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S28",
+   "q": "skip",
+   "state": "rebase",
+   "bucket": "in_progress",
+   "accept": [
+    "rebase_skip"
+   ],
+   "top": "something_else",
+   "p": 0.419,
+   "top2": "rebase_abort",
+   "p2": 0.241,
+   "ok": false,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S28",
+   "q": "Skip this commit and keep going.",
+   "state": "rebase",
+   "bucket": "in_progress",
+   "accept": [
+    "rebase_skip"
+   ],
+   "top": "rebase_skip",
+   "p": 0.404,
+   "top2": "something_else",
+   "p2": 0.227,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S28",
+   "q": "abort",
+   "state": "rebase",
+   "bucket": "in_progress",
+   "accept": [
+    "rebase_abort"
+   ],
+   "top": "rebase_abort",
+   "p": 0.464,
+   "top2": "something_else",
+   "p2": 0.329,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": true
+  },
+  {
+   "id": "S28",
+   "q": "Give up and put everything back the way it was before I started.",
+   "state": "rebase",
+   "bucket": "in_progress",
+   "accept": [
+    "rebase_abort"
+   ],
+   "top": "rebase_abort",
+   "p": 0.651,
+   "top2": "something_else",
+   "p2": 0.233,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S29",
+   "q": "whats conflicting",
+   "state": "rebase",
+   "bucket": "in_progress",
+   "accept": [
+    "something_else"
+   ],
+   "top": "something_else",
+   "p": 0.414,
+   "top2": "rebase_abort",
+   "p2": 0.297,
+   "ok": false,
+   "policy": "ask",
+   "follow": "pull_rebase",
+   "seen_in_training": false
+  },
+  {
+   "id": "S29",
+   "q": "Before I continue or abort, show me which files have conflicts.",
+   "state": "rebase",
+   "bucket": "in_progress",
+   "accept": [
+    "something_else"
+   ],
+   "top": "something_else",
+   "p": 0.339,
+   "top2": "rebase_continue",
+   "p2": 0.267,
+   "ok": false,
+   "policy": "ask",
+   "follow": "__reject__",
+   "seen_in_training": false
+  },
+  {
+   "id": "S30",
+   "q": "cancel cherry pick",
+   "state": "cherry_pick",
+   "bucket": "in_progress",
+   "accept": [
+    "cherry_pick_abort"
+   ],
+   "top": "cherry_pick_abort",
+   "p": 0.717,
+   "top2": "something_else",
+   "p2": 0.212,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S30",
+   "q": "Stop the cherry-pick that's in progress and go back.",
+   "state": "cherry_pick",
+   "bucket": "in_progress",
+   "accept": [
+    "cherry_pick_abort"
+   ],
+   "top": "cherry_pick_abort",
+   "p": 0.885,
+   "top2": "something_else",
+   "p2": 0.096,
+   "ok": true,
+   "policy": "route",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S31",
+   "q": "how many stars does my repo have",
+   "state": "normal_clean",
+   "bucket": "oos",
+   "accept": [
+    "__reject__"
+   ],
+   "top": "__reject__",
+   "p": 0.332,
+   "top2": "status",
+   "p2": 0.075,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S31",
+   "q": "how many stars does my repo have",
+   "state": "normal_dirty",
+   "bucket": "oos",
+   "accept": [
+    "__reject__"
+   ],
+   "top": "__reject__",
+   "p": 0.312,
+   "top2": "status",
+   "p2": 0.076,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S31",
+   "q": "open a PR for this branch",
+   "state": "normal_clean",
+   "bucket": "oos",
+   "accept": [
+    "__reject__"
+   ],
+   "top": "__reject__",
+   "p": 0.154,
+   "top2": "sync",
+   "p2": 0.08,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S31",
+   "q": "open a PR for this branch",
+   "state": "normal_dirty",
+   "bucket": "oos",
+   "accept": [
+    "__reject__"
+   ],
+   "top": "__reject__",
+   "p": 0.13,
+   "top2": "scoped_push",
+   "p2": 0.094,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S31",
+   "q": "write a python function that parses dates",
+   "state": "normal_clean",
+   "bucket": "oos",
+   "accept": [
+    "__reject__"
+   ],
+   "top": "__reject__",
+   "p": 0.298,
+   "top2": "status",
+   "p2": 0.062,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S31",
+   "q": "write a python function that parses dates",
+   "state": "normal_dirty",
+   "bucket": "oos",
+   "accept": [
+    "__reject__"
+   ],
+   "top": "__reject__",
+   "p": 0.177,
+   "top2": "status",
+   "p2": 0.081,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S31",
+   "q": "deploy to vercel",
+   "state": "normal_clean",
+   "bucket": "oos",
+   "accept": [
+    "__reject__"
+   ],
+   "top": "__reject__",
+   "p": 0.179,
+   "top2": "push",
+   "p2": 0.146,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  },
+  {
+   "id": "S31",
+   "q": "deploy to vercel",
+   "state": "normal_dirty",
+   "bucket": "oos",
+   "accept": [
+    "__reject__"
+   ],
+   "top": "__reject__",
+   "p": 0.122,
+   "top2": "scoped_push",
+   "p2": 0.099,
+   "ok": true,
+   "policy": "ask",
+   "follow": null,
+   "seen_in_training": false
+  }
+ ]
+}
