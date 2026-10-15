@@ -39,6 +39,7 @@ pub fn prompt_result<T>(r: Result<T, inquire::InquireError>, what: &str) -> anyh
         Ok(v) => Ok(v),
         Err(inquire::InquireError::OperationCanceled)
         | Err(inquire::InquireError::OperationInterrupted) => canceled(),
+        Err(inquire::InquireError::NotTTY) => Err(anyhow::anyhow!(crate::copy::NO_TERMINAL)),
         Err(e) => Err(anyhow::Error::new(e).context(format!("{} failed", what))),
     }
 }
@@ -854,10 +855,27 @@ mod tests {
             "Choice prompt",
         );
         assert!(is_canceled(&r.unwrap_err()));
-        let r: anyhow::Result<()> =
-            prompt_result(Err(inquire::InquireError::NotTTY), "Choice prompt");
+        let r: anyhow::Result<()> = prompt_result(
+            Err(inquire::InquireError::IO(std::io::Error::other("boom"))),
+            "Choice prompt",
+        );
         let e = r.unwrap_err();
         assert!(!is_canceled(&e));
         assert!(e.to_string().contains("Choice prompt failed"));
+    }
+
+    #[test]
+    fn no_terminal_is_a_plain_explanation_not_an_error_chain() {
+        // Run from a script or a pipe without --yes: say why nothing happened
+        // and what to do — no "Choice prompt failed / caused by: …not a TTY".
+        let r: anyhow::Result<()> =
+            prompt_result(Err(inquire::InquireError::NotTTY), "Choice prompt");
+        let e = r.unwrap_err();
+        assert!(
+            !is_canceled(&e),
+            "nothing was chosen, but it is not a back-out"
+        );
+        assert_eq!(e.to_string(), crate::copy::NO_TERMINAL);
+        assert!(e.source().is_none(), "no 'caused by' chain");
     }
 }

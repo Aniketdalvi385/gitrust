@@ -495,6 +495,11 @@ pub const CANCELED: &str = "Canceled — nothing was done.";
 pub const CANCELED_GLYPH: &str = "↪";
 
 /// Help line under every pick-one menu (inquire's default omits Esc).
+/// A prompt was needed but stdin/stdout isn't a terminal (a script, a pipe, CI).
+pub const NO_TERMINAL: &str = "This needs an answer, and there's no terminal to ask in \
+(input or output is redirected). Run it in a terminal — or, in a script, say it precisely \
+enough to need no choice and add --yes.";
+
 pub const CHOICE_HELP: &str = "↑↓ move · Enter choose · Esc cancel";
 /// Help line under the numbered pick-one menu (ux::pick_one).
 pub const PICKER_HELP: &str = "1–9 or ↑↓ + Enter to choose · Esc cancel";

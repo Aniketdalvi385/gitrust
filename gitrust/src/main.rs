@@ -22,7 +22,6 @@ mod trash;
 mod ux;
 mod validation;
 
-use anyhow::Context;
 use clap::{Parser, Subcommand};
 
 /// GiTrust — say what you want to do in Git, in plain words.
@@ -310,7 +309,7 @@ async fn run_repl(
                 println!("Bye.");
                 break;
             }
-            Err(e) => return Err(e).context("REPL prompt failed"),
+            Err(e) => return ux::prompt_result(Err(e), "REPL prompt"),
         };
 
         let trimmed = query.trim();

@@ -117,10 +117,8 @@ fn run_in(dir: &str, cmd: &str, args: &[&str]) -> anyhow::Result<()> {
 // =============================================================================
 
 fn confirm(question: &str) -> anyhow::Result<bool> {
-    inquire::Confirm::new(question)
-        .with_default(true)
-        .prompt()
-        .map_err(|e| anyhow!("Prompt error: {}", e))
+    let r = inquire::Confirm::new(question).with_default(true).prompt();
+    crate::ux::prompt_result(r, "Prompt")
 }
 
 /// Run a command with inherited stdout/stderr so the user sees output.
