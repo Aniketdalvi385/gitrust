@@ -471,6 +471,8 @@ pub const CANCELED_GLYPH: &str = "↪";
 
 /// Help line under every pick-one menu (inquire's default omits Esc).
 pub const CHOICE_HELP: &str = "↑↓ move · Enter choose · Esc cancel";
+/// Help line under the numbered pick-one menu (ux::pick_one).
+pub const PICKER_HELP: &str = "1–9 or ↑↓ + Enter to choose · Esc cancel";
 /// Help line under the file picker.
 pub const FILE_PICKER_HELP: &str =
     "↑↓ move · Space toggle · → all · ← none · Enter stage · Esc cancel";

@@ -93,6 +93,18 @@ impl ConfirmationGate for InquireGate {
                 if options.is_empty() {
                     return Ok(GateResponse::Aborted);
                 }
+                // Up to 9 options on a terminal: the numbered menu (1–9 choose
+                // directly). Longer lists keep inquire's type-to-filter.
+                if direct_keys_ok(options.len()) {
+                    let opts: Vec<(String, String)> = options
+                        .iter()
+                        .map(|o| (o.label.clone(), o.consequence.clone()))
+                        .collect();
+                    return match crate::ux::pick_one(question, &opts)? {
+                        Some(i) => Ok(GateResponse::Chose(i)),
+                        None => crate::ux::canceled(),
+                    };
+                }
                 // Show each option's one-sentence consequence (dimmed) so the
                 // choice is made with eyes open. The label→index mapping is by
                 // position, so the displayed row stays paired with its option.
@@ -127,6 +139,7 @@ impl ConfirmationGate for InquireGate {
                         .with_starting_cursor(0)
                         .with_help_message(crate::copy::CHOICE_HELP)
                         .with_formatter(&echo)
+                        .with_page_size(12)
                         .prompt(),
                     "Choice prompt",
                 )?;
@@ -144,6 +157,14 @@ impl ConfirmationGate for InquireGate {
                 println!();
                 println!("{}", crate::copy::FORENSIC_BROWSER_HEADER);
                 let labels: Vec<String> = candidates.iter().map(format_lost_commit).collect();
+                if direct_keys_ok(labels.len()) {
+                    let opts: Vec<(String, String)> =
+                        labels.iter().map(|l| (l.clone(), String::new())).collect();
+                    return match crate::ux::pick_one("Recover which commit?", &opts)? {
+                        Some(i) => Ok(GateResponse::Chose(i)),
+                        None => crate::ux::canceled(),
+                    };
+                }
                 let selected = prompt_result(
                     Select::new("Recover which commit?", labels.clone())
                         .with_starting_cursor(0)
@@ -158,6 +179,13 @@ impl ConfirmationGate for InquireGate {
             }
         }
     }
+}
+
+/// The numbered menu needs a real terminal (it reads raw keys) and at most 9
+/// rows (one digit each).
+fn direct_keys_ok(n: usize) -> bool {
+    use std::io::IsTerminal;
+    n <= 9 && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 
 /// One recovery-browser row: "2 hours ago — 'feat: export csv' — 3 files [stash]".

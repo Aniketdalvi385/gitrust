@@ -372,6 +372,154 @@ pub fn spinner_relabel(label: &str) -> bool {
     }
 }
 
+// =============================================================================
+// Pick-one menu with direct keys (design handoff: "[a][b][c] — not just arrow
+// keys"). Rows are numbered; 1–9 choose immediately, ↑↓/j/k move, Enter
+// chooses, Esc/q/Ctrl-C cancel. Used for menus of up to 9 options; longer
+// lists keep inquire's type-to-filter.
+// =============================================================================
+
+/// What a key does in the pick-one menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerAction {
+    Focus(usize),
+    Choose(usize),
+    Cancel,
+    Ignore,
+}
+
+pub fn picker_key(
+    code: crossterm::event::KeyCode,
+    ctrl: bool,
+    n: usize,
+    focus: usize,
+) -> PickerAction {
+    use crossterm::event::KeyCode as K;
+    if n == 0 {
+        return PickerAction::Cancel;
+    }
+    match code {
+        K::Char('c') | K::Char('d') if ctrl => PickerAction::Cancel,
+        K::Esc | K::Char('q') => PickerAction::Cancel,
+        K::Enter => PickerAction::Choose(focus),
+        K::Down | K::Char('j') | K::Tab => PickerAction::Focus((focus + 1) % n),
+        K::Up | K::Char('k') | K::BackTab => PickerAction::Focus((focus + n - 1) % n),
+        K::Char(c) if c.is_ascii_digit() => match c.to_digit(10) {
+            Some(d) if d >= 1 && (d as usize) <= n => PickerAction::Choose(d as usize - 1),
+            _ => PickerAction::Ignore,
+        },
+        _ => PickerAction::Ignore,
+    }
+}
+
+/// The rows of the menu: "> [2] Push  — upload all your commits", each cut to
+/// `width` columns (a long hint ends in "…"; never wraps, so redraws stay
+/// exact). `opts` = (label, hint); labels may carry ANSI-colored markers.
+pub fn picker_rows(
+    opts: &[(String, String)],
+    focus: usize,
+    width: usize,
+    color: bool,
+) -> Vec<String> {
+    opts.iter()
+        .enumerate()
+        .map(|(i, (label, hint))| {
+            let cursor = if i == focus { ">" } else { " " };
+            let head = format!("{} [{}] {}", cursor, i + 1, label);
+            let head_w = display_width(&head);
+            let mut row = head.clone();
+            if !hint.is_empty() && head_w + 4 < width {
+                let room = width - head_w - 4; // "  — "
+                let mut h: String = hint.clone();
+                if h.chars().count() > room {
+                    h = h.chars().take(room.saturating_sub(1)).collect::<String>();
+                    h = h.trim_end().to_string();
+                    h.push('…');
+                }
+                if color {
+                    row.push_str(&format!("  \x1b[2m— {}\x1b[0m", h));
+                } else {
+                    row.push_str(&format!("  — {}", h));
+                }
+            } else if head_w > width {
+                let plain: String = strip_ansi(&head)
+                    .chars()
+                    .take(width.saturating_sub(1))
+                    .collect();
+                row = format!("{}…", plain);
+            }
+            if color && i == focus {
+                row = format!("\x1b[36m{}\x1b[0m{}", cursor, &row[cursor.len()..]);
+            }
+            row
+        })
+        .collect()
+}
+
+/// Show the menu and wait for a decision: `Some(index)`, or `None` if the
+/// user backed out. Errors only if the terminal can't be driven.
+pub fn pick_one(question: &str, opts: &[(String, String)]) -> anyhow::Result<Option<usize>> {
+    use crossterm::event::{read, Event, KeyEventKind, KeyModifiers};
+    use std::io::Write;
+    let width = term_width();
+    let color = crate::danger::use_color();
+    let q_lines = wrap_hanging("? ", question, width);
+    let help = crate::copy::PICKER_HELP;
+    let mut out = std::io::stdout();
+    let draw = |out: &mut std::io::Stdout, focus: usize| -> std::io::Result<()> {
+        for r in picker_rows(opts, focus, width, color) {
+            write!(out, "{}\r\n", r)?;
+        }
+        if color {
+            write!(out, "\x1b[2m[{}]\x1b[0m", help)?;
+        } else {
+            write!(out, "[{}]", help)?;
+        }
+        out.flush()
+    };
+    // Lines below the question that a redraw replaces: the rows + the help line.
+    let block = opts.len() + 1;
+    let mut focus = 0usize;
+    let result = {
+        let _raw = RawMode::on()?;
+        for l in &q_lines {
+            write!(out, "{}\r\n", l)?;
+        }
+        draw(&mut out, focus)?;
+        loop {
+            let Event::Key(k) = read()? else { continue };
+            if k.kind != KeyEventKind::Press {
+                continue;
+            }
+            match picker_key(
+                k.code,
+                k.modifiers.contains(KeyModifiers::CONTROL),
+                opts.len(),
+                focus,
+            ) {
+                PickerAction::Focus(f) => {
+                    focus = f;
+                    // Back to the first row, clear to the end, draw again.
+                    write!(out, "\r\x1b[{}A\x1b[J", block - 1)?;
+                    draw(&mut out, focus)?;
+                }
+                PickerAction::Choose(i) => break Some(i),
+                PickerAction::Cancel => break None,
+                PickerAction::Ignore => {}
+            }
+        }
+    };
+    // Replace the whole menu with a one-line echo, like inquire does.
+    let up = q_lines.len() + block - 1;
+    write!(out, "\r\x1b[{}A\x1b[J", up)?;
+    match result {
+        Some(i) => println!("> {} {}", question, strip_ansi(&opts[i].0)),
+        None => println!("? {} <canceled>", question),
+    }
+    out.flush()?;
+    Ok(result)
+}
+
 /// Wrap `text` to `width` columns: the first line starts with `lead`, the rest
 /// are indented to line up under the text. Words longer than the width are
 /// kept whole.
@@ -563,6 +711,67 @@ mod tests {
         assert!(long
             .iter()
             .any(|l| l.contains("~/.gitrust/trash/20261015-123839/some/very/long/path")));
+    }
+
+    #[test]
+    fn picker_keys_choose_directly() {
+        use crossterm::event::KeyCode as K;
+        // 3 options, focus on row 0.
+        assert_eq!(
+            picker_key(K::Char('2'), false, 3, 0),
+            PickerAction::Choose(1)
+        );
+        assert_eq!(
+            picker_key(K::Char('4'), false, 3, 0),
+            PickerAction::Ignore,
+            "no row 4"
+        );
+        assert_eq!(picker_key(K::Down, false, 3, 0), PickerAction::Focus(1));
+        assert_eq!(
+            picker_key(K::Down, false, 3, 2),
+            PickerAction::Focus(0),
+            "wraps"
+        );
+        assert_eq!(
+            picker_key(K::Up, false, 3, 0),
+            PickerAction::Focus(2),
+            "wraps"
+        );
+        assert_eq!(
+            picker_key(K::Char('j'), false, 3, 0),
+            PickerAction::Focus(1)
+        );
+        assert_eq!(picker_key(K::Enter, false, 3, 2), PickerAction::Choose(2));
+        for k in [K::Esc, K::Char('q')] {
+            assert_eq!(picker_key(k, false, 3, 1), PickerAction::Cancel);
+        }
+        assert_eq!(picker_key(K::Char('c'), true, 3, 1), PickerAction::Cancel);
+        assert_eq!(picker_key(K::Char('x'), false, 3, 1), PickerAction::Ignore);
+    }
+
+    #[test]
+    fn picker_rows_number_and_fit_the_width() {
+        let opts = vec![
+            (
+                "Push only some changes".to_string(),
+                "pick one topic's files, commit, push".to_string(),
+            ),
+            ("Push".to_string(), "upload all your commits".to_string()),
+        ];
+        let rows = picker_rows(&opts, 1, 40, false);
+        assert_eq!(rows.len(), 2);
+        assert!(
+            rows[0].starts_with("  [1] Push only some changes"),
+            "{:?}",
+            rows
+        );
+        assert!(rows[1].starts_with("> [2] Push"), "{:?}", rows);
+        assert!(rows.iter().all(|r| display_width(r) <= 40), "{:?}", rows);
+        assert!(
+            rows[0].ends_with('…'),
+            "a long hint is trimmed, not wrapped: {:?}",
+            rows
+        );
     }
 
     #[test]

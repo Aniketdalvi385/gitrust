@@ -203,6 +203,12 @@ def _(): return [BIN, "show me the history"], [("Understanding", None, "while Ke
 @scenario("unsure_menu")
 def _(): return [BIN, "put my work up on github"], [("?", None, "menu shown"), (None, ESC, "after Esc")]
 
+@scenario("menu_digit")
+def _(): return [BIN, "put my work up on github"], [("Esc cancel", b"2", "menu"), (None, None, "after pressing 2")]
+
+@scenario("menu_arrows", repo="clean")
+def _(): return [BIN, "undo"], [("Esc cancel", DOWN, "menu"), (None, DOWN, "after ↓"), (None, ESC, "after ↓↓"), (None, None, "after Esc")]
+
 @scenario("maybe_not_git")
 def _(): return [BIN, "where am i right now"], [("?", None, "menu shown"), (None, DOWN + ENTER, "pick 2nd")]
 
