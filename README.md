@@ -18,9 +18,11 @@ and (for anything that deletes content Git can't recover) backed up first.
 > this repo.
 >
 > **Update (2026-10):** the local LLM (`qwen2.5:3b` via Ollama) and the embedding
-> router were replaced by **Kev-0.8B**, a local decision model that only ranks a
-> closed option list with calibrated probabilities (70% vs the LLM's 41% on the
-> same 44-case set; see `docs/classifier_eval/run_kev_eval.py`). The history
+> router were replaced by **Kev-0.8B** fine-tuned for GiTrust
+> ([`AniketDalvi385/gitrust-kev-0.8b`](https://huggingface.co/AniketDalvi385/gitrust-kev-0.8b)),
+> a local decision model that only ranks a closed option list with calibrated
+> probabilities (41/44 fine-tuned, 70% stock, vs the LLM's 41% on the same
+> 44-case set; see `docs/kev_migration_research.md`). The history
 > below describes the original design.
 
 ---
@@ -59,7 +61,7 @@ These are facts backed by the test suite, not aspirations:
   objects (the only way to surface a dropped stash) and restores anything you
   pick to a fresh `rescue/*` branch — **without touching your current state.**
 - **Fully local.** Intent classification runs on
-  [Kev](https://github.com/jaredpalmer/kev) (Kev-0.8B) served on 127.0.0.1.
+  [Kev](https://github.com/jaredpalmer/kev) (Kev-0.8B, fine-tuned for GiTrust) served on 127.0.0.1.
   No diffs, code, or queries leave your machine.
 - **226 unit/integration tests** plus a versioned manual acceptance-test record
   (see the companion `GiTrust-test` suite).
@@ -110,7 +112,7 @@ Full architecture, type vocabulary, and the conventions for extending it are in
 - **Rust** (2021 edition) to build.
 - **[uv](https://docs.astral.sh/uv/)** — `gitrust setup` uses it to install
   [Kev](https://github.com/jaredpalmer/kev) (pinned commit) and download
-  Kev-0.8B (~1.5 GB).
+  the model (~1.5 GB base + a 64 MB GiTrust adapter).
 - Designed and tested on an **Apple M2 with 8 GB RAM**. The Kev server uses
   ~3 GB while running; GiTrust starts it in the background on the first query
   that needs it (~25 s cold start) and it stays up afterwards

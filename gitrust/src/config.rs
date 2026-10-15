@@ -87,7 +87,7 @@ fn default_kev_url() -> String {
     "http://127.0.0.1:8009".to_string()
 }
 fn default_kev_run() -> String {
-    "jaredpalmer/kev-0.8b@v1.0".to_string()
+    "AniketDalvi385/gitrust-kev-0.8b@v2".to_string()
 }
 fn default_kev_autostart() -> bool {
     true
@@ -172,7 +172,7 @@ mod tests {
         assert_eq!(config.hooks, "auto");
         assert_eq!(config.trash_retention_days, 7);
         assert_eq!(config.kev_url, "http://127.0.0.1:8009");
-        assert_eq!(config.kev_run, "jaredpalmer/kev-0.8b@v1.0");
+        assert_eq!(config.kev_run, "AniketDalvi385/gitrust-kev-0.8b@v2");
         assert!(config.kev_dir.is_none());
         assert!(config.kev_autostart);
         assert_eq!(config.kev_min_confidence, 0.5);

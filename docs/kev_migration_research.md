@@ -1,7 +1,8 @@
 # From qwen2.5:3b to Kev — replacing the local LLM with a decision model (v0.3.0 → v0.4.0)
 
-**Status:** v0.4.0 ships **stock Kev-0.8B** by default. A GiTrust fine-tune (`gitrust-v1`, Colab T4)
-is measured in §12 and is a large improvement; it is used by setting `kev_run` (§12.6).
+**Status:** v0.4.0 ships the GiTrust fine-tune **`gitrust-v2`** by default, published as
+[`AniketDalvi385/gitrust-kev-0.8b@v2`](https://huggingface.co/AniketDalvi385/gitrust-kev-0.8b) (§12.10–12.11).
+Stock Kev-0.8B (`kev_run = "jaredpalmer/kev-0.8b@v1.0"`) is what §§1–11 measure.
 **Date:** 2026-10-13. **Machine:** Apple M2, **8 GB RAM** (unchanged binding constraint).
 **Kev:** github.com/jaredpalmer/kev @ `85ccf56`, weights `jaredpalmer/kev-0.8b@v1.0`
 (Hub snapshot `bf75a6a8`), served by `kev.serve` via MLX, bf16, temperature 2.35.
@@ -542,8 +543,8 @@ add_commit 0.97, quoted message captured, committed; "put my work up on github" 
 `~/.gitrust.toml`: `kev_run = "runs/gitrust-v1"` (resolved inside `kev_dir`) — superseded by
 `runs/gitrust-v2` (§12.10). The checkpoint
 carries its fitted temperature, so no environment variable is needed. The weights exist only on
-this machine (and the Colab download); the binary's default stays the public stock checkpoint
-until the fine-tune is published somewhere `gitrust setup` can fetch it.
+this machine (and the Colab download) — until 2026-10-15, when v2 was published to the Hub and made
+the default (§12.11).
 
 ### 12.7 Hardening the harness around the fine-tune (no retraining)
 
@@ -776,7 +777,17 @@ and the repo. "whats goin on" and "where am i right now" become menus, not refus
 **Verdict.** v2 is better than v1 on everything the round targeted (commit-and-push, scoped pushes,
 history-wiping, commit vs commit-and-push) and equal elsewhere on the owner's set, with three new
 soft misses that all land on menus. It replaces v1 as the recommended opt-in: `kev_run =
-"runs/gitrust-v2"`. Still not the shipped default — the weights are unpublished.
+"runs/gitrust-v2"`. Published and made the default the same day (§12.11).
+
+### 12.11 Published, and the default
+
+2026-10-15: `kev.publish --run runs/gitrust-v2 --repo AniketDalvi385/gitrust-kev-0.8b --tag v2` with
+the card in [`docs/model-card/gitrust-kev-0.8b.md`](model-card/gitrust-kev-0.8b.md); `kev_ops.json` is
+uploaded alongside (the option wording and order the model needs), and the `v2` tag covers both.
+Apache-2.0, like Kev and the Qwen3.5 base. Verified from a clean cache: `kev.serve --run
+AniketDalvi385/gitrust-kev-0.8b@v2` downloads, loads at T = 4.00, and scores eval_set_v2 exactly as the
+local run (54 / 52 top-1, policy routes 48 / 47 all right, in-progress 8/10, S07 4/4).
+`config::default_kev_run` is now `AniketDalvi385/gitrust-kev-0.8b@v2`; stock stays one config line away.
 
 ## 13. What this changes in the write-up (`writing/`)
 
@@ -803,8 +814,6 @@ soft misses that all land on menus. It replaces v1 as the recommended opt-in: `k
 
 ## 14. Open items
 
-- **Decide how to ship the fine-tune** (§12.6): publish the weights (e.g. a Hugging Face repo) so
-  `gitrust setup` can fetch them and make it the default, or keep it opt-in via `kev_run`.
 - Thresholds were set for stock; with the fine-tune, 0.5/0.6 already route 37–41 of 44 with the only
   confident miss at 0.96, so raising them buys nothing on this set. Re-check on a larger eval before
   changing them. The same goes for the 0.9 refusal bar (§12.7), set from four out-of-scope items.

@@ -2,13 +2,13 @@ $ gitrust
 
 ----- repl start -----
 GiTrust — say what you want to do in Git.  help lists instant phrases · exit leaves
-Local model: jaredpalmer/kev-0.8b@v1.0 · remote: origin
+Local model: AniketDalvi385/gitrust-kev-0.8b@v2 · remote: origin
 
 ? gitrust>
 
 ----- status -----
 GiTrust — say what you want to do in Git.  help lists instant phrases · exit leaves
-Local model: jaredpalmer/kev-0.8b@v1.0 · remote: origin
+Local model: AniketDalvi385/gitrust-kev-0.8b@v2 · remote: origin
 
 > gitrust> status
 ⚡  Show status
@@ -30,7 +30,7 @@ Untracked:
 
 ----- exit -----
 GiTrust — say what you want to do in Git.  help lists instant phrases · exit leaves
-Local model: jaredpalmer/kev-0.8b@v1.0 · remote: origin
+Local model: AniketDalvi385/gitrust-kev-0.8b@v2 · remote: origin
 
 > gitrust> status
 ⚡  Show status
@@ -53,7 +53,7 @@ Bye.
 
 ----- final (exit=0) -----
 GiTrust — say what you want to do in Git.  help lists instant phrases · exit leaves
-Local model: jaredpalmer/kev-0.8b@v1.0 · remote: origin
+Local model: AniketDalvi385/gitrust-kev-0.8b@v2 · remote: origin
 
 > gitrust> status
 ⚡  Show status

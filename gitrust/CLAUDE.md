@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-GiTrust is an agentic Git CLI: a single Rust binary that turns natural-language queries ("push login changes") into safe, confirmed Git operations. Intent classification runs on **Kev**, a small *local* decision model (github.com/jaredpalmer/kev, Kev-0.8B by default) served on 127.0.0.1 — it never generates text, only returns calibrated probabilities over a closed option list GiTrust supplies. No network calls to hosted models. (Until 2026-10 this was `qwen2.5:3b` via Ollama plus an embedding router; see "History" below.) The binary lives in the `gitrust/` subdirectory of the repo root; the Cargo project root is `gitrust/`.
+GiTrust is an agentic Git CLI: a single Rust binary that turns natural-language queries ("push login changes") into safe, confirmed Git operations. Intent classification runs on **Kev**, a small *local* decision model (github.com/jaredpalmer/kev; by default `AniketDalvi385/gitrust-kev-0.8b@v2`, Kev-0.8B fine-tuned on GiTrust's ops) served on 127.0.0.1 — it never generates text, only returns calibrated probabilities over a closed option list GiTrust supplies. No network calls to hosted models. (Until 2026-10 this was `qwen2.5:3b` via Ollama plus an embedding router; see "History" below.) The binary lives in the `gitrust/` subdirectory of the repo root; the Cargo project root is `gitrust/`.
 
 ## Commands
 
@@ -99,7 +99,7 @@ Through v0.3.0 Layer 1 was ⚡ fast-path → ✦ an embedding router over `qwen2
 
 ## Status
 
-**v0.4.0** — Layer 1/2 moved from qwen2.5:3b (Ollama) + embedding router to stock Kev-0.8B; user-written commit messages; deterministic argument capture. Measurements, design rationale and open items: [../docs/kev_migration_research.md](../docs/kev_migration_research.md). Colab fine-tunes are opt-in via `kev_run`: `runs/gitrust-v2` (round 2, 36 options incl. `commit_push`; 41/44 both states) supersedes `runs/gitrust-v1`; the harness around it adds the second-opinion checks above, the 0.9 refusal bar and the idle shutdown (research doc §12.7).
+**v0.4.0** — Layer 1/2 moved from qwen2.5:3b (Ollama) + embedding router to Kev-0.8B; user-written commit messages; deterministic argument capture. Measurements, design rationale and open items: [../docs/kev_migration_research.md](../docs/kev_migration_research.md). The default model is the round-2 Colab fine-tune `gitrust-v2` (36 options incl. `commit_push`; 41/44 both states), published as `AniketDalvi385/gitrust-kev-0.8b@v2` (card: `../docs/model-card/`); stock is `kev_run = "jaredpalmer/kev-0.8b@v1.0"`; the harness around it adds the second-opinion checks above, the 0.9 refusal bar and the idle shutdown (research doc §12.7).
 
 
 **v0.2 (phases 9–14) complete** — history and rationale in [../docs/Build_phases_v3.md](../docs/Build_phases_v3.md) and [../docs/scenario_map.md](../docs/scenario_map.md). Further work is the Tier-2 backlog in the scenario map (interpretation-echo, RemoteRewritten response flow, SafeSwitch, cross-branch pickaxe, multi-restore RecoveryBrowser).
