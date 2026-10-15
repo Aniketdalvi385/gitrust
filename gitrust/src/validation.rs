@@ -514,9 +514,7 @@ impl Validator for DefaultValidator {
             } = step
             {
                 results.push(PreCheckResult::Warn(
-                    "reset --hard will discard ALL uncommitted changes. \
-                     This cannot be undone (except via git reflog)."
-                        .to_string(),
+                    crate::copy::HARD_RESET_WARNING.to_string(),
                 ));
             }
         }
@@ -602,12 +600,17 @@ impl Validator for DefaultValidator {
 
         let mut out = String::new();
         out.push('\n');
+        let n_steps = format!(
+            "{} step{}",
+            steps.len(),
+            if steps.len() == 1 { "" } else { "s" }
+        );
         if snapshot_sha7.is_empty() {
-            out.push_str(&format!("Plan  · {} steps\n", steps.len()));
+            out.push_str(&format!("Plan  · {}\n", n_steps));
         } else {
             out.push_str(&format!(
-                "Plan  · {} steps · {}\n",
-                steps.len(),
+                "Plan  · {} · {}\n",
+                n_steps,
                 dim(&format!("snapshot taken at {}", snapshot_sha7))
             ));
         }
@@ -627,8 +630,29 @@ impl Validator for DefaultValidator {
             };
             out.push_str(&row);
 
-            // Inline file list for Add steps with explicit paths
-            if let PipelineStep::Add { files } = step {
+            // Inline file list for Add steps. "Stage all" lists what "all" is
+            // right now (Flow 06½: never "(all files)" without the files).
+            let all_files: Vec<String>;
+            let step_files: Option<&Vec<String>> = match step {
+                PipelineStep::Add { files } if files.is_empty() => {
+                    let st = &ctx.status;
+                    all_files = st
+                        .staged
+                        .iter()
+                        .chain(st.modified.iter())
+                        .chain(st.untracked.iter())
+                        .fold(Vec::new(), |mut v, f| {
+                            if !v.contains(f) {
+                                v.push(f.clone());
+                            }
+                            v
+                        });
+                    Some(&all_files)
+                }
+                PipelineStep::Add { files } => Some(files),
+                _ => None,
+            };
+            if let Some(files) = step_files {
                 if !files.is_empty() && files.len() <= 5 {
                     for f in files {
                         out.push_str(&format!(
@@ -668,7 +692,6 @@ impl Validator for DefaultValidator {
         }
 
         out.push('\n');
-        out.push_str(&format!("  {}\n", dim(crate::copy::PLAN_KEYMAP_LEGEND)));
         out
     }
 
@@ -1176,6 +1199,20 @@ mod tests {
         }];
         let results = v.run_pre_checks(&repo, &steps, "auto").unwrap();
         assert!(results.iter().any(|r| matches!(r, PreCheckResult::Warn(_))));
+        // The warning must be true: the trash-net backs the changes up first
+        // (it used to say "cannot be undone (except via git reflog)" — the
+        // reflog never holds uncommitted work, and the backup does exist).
+        let w = results
+            .iter()
+            .find_map(|r| match r {
+                PreCheckResult::Warn(w) => Some(w.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert!(
+            w.contains("backed up") && !w.contains("cannot be undone"),
+            "{w}"
+        );
     }
 
     #[test]
@@ -1208,6 +1245,46 @@ mod tests {
         // Box border must be gone
         assert!(!preview.contains("╔"));
         assert!(!preview.contains("╚"));
+    }
+
+    #[test]
+    fn test_build_preview_shows_what_stage_all_will_stage() {
+        // Flow 06½: "(all files)" without filenames hides what's being staged.
+        let v = DefaultValidator;
+        let mut ctx = crate::context::RepoContext::empty();
+        ctx.branch = "feat/login".into();
+        ctx.status.modified = vec!["src/a.rs".into(), "src/b.rs".into()];
+        ctx.status.untracked = vec!["new.txt".into()];
+        let steps = vec![
+            PipelineStep::Add { files: vec![] },
+            PipelineStep::Commit {
+                message: "m".into(),
+            },
+            PipelineStep::Push {
+                remote: "origin".into(),
+                branch: "feat/login".into(),
+                set_upstream: false,
+            },
+        ];
+        let preview = v.build_preview(&steps, &[], &ctx, "aa44620");
+        assert!(preview.contains("3 steps"), "{preview}");
+        for f in ["src/a.rs", "src/b.rs", "new.txt"] {
+            assert!(preview.contains(f), "{f} missing:\n{preview}");
+        }
+        let stage_line = preview.lines().find(|l| l.contains("stage")).unwrap();
+        assert!(
+            !stage_line.contains('⚠'),
+            "staging carries no marker: {stage_line}"
+        );
+        let push_line = preview.lines().find(|l| l.contains("push")).unwrap();
+        assert!(
+            !push_line.contains('⚠'),
+            "own-branch push carries no marker: {push_line}"
+        );
+        // The key legend belongs to the prompt that actually reads the keys.
+        assert!(!preview.contains("[Enter]"), "{preview}");
+        let one = v.build_preview(&[PipelineStep::Stash], &[], &ctx, "");
+        assert!(one.contains("1 step") && !one.contains("1 steps"), "{one}");
     }
 
     #[test]

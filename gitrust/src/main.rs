@@ -18,21 +18,24 @@ mod recovery;
 mod resolver;
 mod setup;
 mod trash;
+mod ux;
 mod validation;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
 
-/// GiTrust — Agentic Git CLI.
-/// Natural language interface for Git. Powered by a local decision model (Kev).
+/// GiTrust — say what you want to do in Git, in plain words.
+/// A small local model (Kev) picks from a fixed list of Git operations — it
+/// never invents a command — and GiTrust asks you whenever it isn't sure.
 ///
 /// Examples:
-///   gitrust setup
-///   gitrust "push login changes"
-///   gitrust "commit and push with message feat: add auth"
-///   gitrust "show status"
-///   gitrust --recover
-///   gitrust              # opens interactive REPL
+///   gitrust "status"
+///   gitrust "commit and push"
+///   gitrust "push only the login changes"
+///   gitrust "undo"
+///   gitrust                    # interactive mode
+///   gitrust help               # phrases that work instantly
+///   gitrust setup              # install the local model
 #[derive(Parser, Debug)]
 // `disable_help_subcommand`: we define an explicit `Help` subcommand (canonical
 // phrases), which collides with clap's auto-generated `help` and trips a
@@ -40,9 +43,10 @@ use clap::{Parser, Subcommand};
 // debug binary at startup. Disabling clap's generated one leaves ours.
 #[command(
     name = "gitrust",
-    about = "Agentic Git CLI",
+    about = "Say what you want to do in Git, in plain words.",
     version,
-    disable_help_subcommand = true
+    disable_help_subcommand = true,
+    verbatim_doc_comment
 )]
 struct Cli {
     #[command(subcommand)]
@@ -101,6 +105,12 @@ enum Command {
 #[tokio::main]
 async fn main() {
     if let Err(e) = run().await {
+        if ux::is_canceled(&e) {
+            // A backed-out run: calm, no error chain — but still exit 1, because
+            // nothing was done (see ux.rs "Cancel semantics").
+            eprintln!("{}  {}", copy::CANCELED_GLYPH, copy::CANCELED);
+            std::process::exit(1);
+        }
         eprintln!("✗  {}", e);
         let mut source = e.source();
         while let Some(cause) = source {
@@ -241,7 +251,7 @@ async fn run_repl(
 ) -> anyhow::Result<()> {
     use inquire::Text;
 
-    println!("GiTrust — Agentic Git CLI  (Ctrl-C or empty input to exit)");
+    println!("GiTrust — say what you want to do in Git.  (exit, Ctrl-C or an empty line to leave)");
     println!(
         "Model: kev ({})  |  Remote: {}",
         config.kev_run, config.remote
@@ -260,13 +270,17 @@ async fn run_repl(
         };
 
         let trimmed = query.trim();
-        if trimmed.is_empty() {
+        if trimmed.is_empty() || ux::is_repl_exit(trimmed) {
             println!("Bye.");
             break;
         }
 
         if let Err(e) = agent::run_agent(trimmed, config, auto_confirm, show_all).await {
-            eprintln!("✗  {}", e);
+            if ux::is_canceled(&e) {
+                eprintln!("{}  {}", copy::CANCELED_GLYPH, copy::CANCELED);
+            } else {
+                eprintln!("✗  {}", e);
+            }
         }
 
         println!();

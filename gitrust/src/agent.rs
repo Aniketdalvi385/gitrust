@@ -272,6 +272,19 @@ async fn classify_query(
 
     let state = crate::intent::kev_state(context, query);
 
+    // Mid-operation, "which files are conflicting?" is answered by status (it
+    // lists them, plus the way forward/back) — deterministic, no model call.
+    if crate::intent::in_progress_family(context).is_some()
+        && crate::intent::is_conflict_question(query)
+    {
+        return Ok(IntentResult {
+            intent: IntentType::ReadOnly(ReadOnlyOp::Status),
+            confidence: 1.0,
+            raw_query: query.to_string(),
+            engine: Engine::Fast,
+        });
+    }
+
     // Mid-operation: first ask whether the request controls that operation
     // (continue / skip / abort). A confident control op routes (skip/abort need
     // the destructive bar); an unsure one whose best guess is still a control
@@ -559,6 +572,12 @@ fn handle_read_only(
         ReadOnlyOp::Status => {
             // Rich header: branch · upstream · ahead/behind
             println!("{}", ctx.render_status_header());
+            // Stopped mid-operation: say so first, with the way forward and back.
+            if let Some(lines) = ctx.in_progress_lines() {
+                for l in lines {
+                    println!("{}", l);
+                }
+            }
             if !ctx.last_commit.is_empty() && ctx.last_commit != "(no commits yet)" {
                 println!("Last commit: {}", ctx.last_commit);
             }
@@ -1019,8 +1038,7 @@ async fn handle_merge_preview(
     let chosen_idx = match resp {
         GateResponse::Chose(i) => i,
         _ => {
-            println!("  Aborted.");
-            return Ok(());
+            return crate::ux::canceled();
         }
     };
 
@@ -1126,13 +1144,25 @@ async fn build_scoped_steps(
         }
 
         ScopedWriteOp::Commit { message } => {
+            // Say "nothing to commit" BEFORE asking for a message. A merge
+            // commit is the exception: it may legitimately change nothing.
+            if repo.state() != git2::RepositoryState::Merge && staged_change_count(repo) == 0 {
+                return Err(anyhow::anyhow!(
+                    "{}",
+                    if has_uncommitted_changes(repo) {
+                        crate::copy::NOTHING_STAGED
+                    } else {
+                        crate::copy::NOTHING_TO_COMMIT
+                    }
+                ));
+            }
             // Plain commit = only staged → generate message from index-vs-HEAD diff.
             let final_msg = resolve_or_generate_commit_message(
                 repo, message, /*include_workdir=*/ false, config, gate,
             )
             .await?;
             if final_msg.is_empty() {
-                return Ok(vec![]);
+                return crate::ux::canceled();
             }
             Ok(vec![PipelineStep::Commit { message: final_msg }])
         }
@@ -1154,32 +1184,39 @@ async fn build_scoped_steps(
             // Validate the name. If invalid, offer a sanitized suggestion and ask.
             let final_name = match validate_branch_name(&name) {
                 Ok(()) => name,
-                Err(reason) => {
-                    let suggestion = sanitize_branch_name(&name);
-                    println!("  Branch name '{}' is not valid: {}", name, reason);
-                    let resp = gate.prompt(&GateType::Choose {
-                        message: "Choose what to do:".to_string(),
-                        options: vec![
-                            format!("Use suggested name: '{}'", suggestion),
-                            "Enter a different name".to_string(),
-                            "Cancel".to_string(),
-                        ],
-                    })?;
-                    match resp {
-                        GateResponse::Chose(0) => suggestion,
-                        GateResponse::Chose(1) => {
-                            let new = Text::new("Branch name:")
-                                .prompt()
-                                .map_err(|e| anyhow::anyhow!("Aborted: {}", e))?;
-                            let new = new.trim().to_string();
-                            if let Err(r) = validate_branch_name(&new) {
-                                return Err(anyhow::anyhow!("Still invalid: {}", r));
+                Err(_) => {
+                    // Flow 05: one line naming what this input broke, then the
+                    // name prompt pre-filled with a fixed-up suggestion — Enter
+                    // accepts it, editing changes it, Esc cancels.
+                    println!("  {}", crate::copy::branch_invalid_intro(&name));
+                    let mut proposal = sanitize_branch_name(&name);
+                    let mut accepted = None;
+                    for _ in 0..3 {
+                        let resp = gate.prompt(&GateType::EditableText {
+                            initial: proposal.clone(),
+                            label: crate::copy::BRANCH_NAME_SUGGESTED.to_string(),
+                        })?;
+                        let typed = match resp {
+                            GateResponse::TextProvided(t) => t.trim().to_string(),
+                            _ => return crate::ux::canceled(),
+                        };
+                        match validate_branch_name(&typed) {
+                            Ok(()) => {
+                                accepted = Some(typed);
+                                break;
                             }
-                            new
+                            Err(_) => {
+                                println!("  {}", crate::copy::branch_invalid_intro(&typed));
+                                proposal = sanitize_branch_name(&typed);
+                            }
                         }
-                        _ => {
-                            println!("  Aborted.");
-                            return Ok(vec![]);
+                    }
+                    match accepted {
+                        Some(n) => n,
+                        None => {
+                            return Err(anyhow::anyhow!(
+                                "No valid branch name was given — nothing was created."
+                            ))
                         }
                     }
                 }
@@ -1251,8 +1288,7 @@ async fn build_scoped_steps(
                 ),
             })?;
             if !matches!(resp, GateResponse::Confirmed) {
-                println!("  Aborted.");
-                return Ok(vec![]);
+                return crate::ux::canceled();
             }
             Ok(vec![PipelineStep::PullRebase { remote, branch }])
         }
@@ -1278,8 +1314,7 @@ async fn build_scoped_steps(
                 danger: crate::danger::intent_danger(&op_for_explain, &ctx_for_danger),
             })?;
             if !matches!(resp, GateResponse::Confirmed) {
-                println!("  Aborted.");
-                return Ok(vec![]);
+                return crate::ux::canceled();
             }
             Ok(vec![PipelineStep::ForcePush {
                 remote,
@@ -1312,8 +1347,7 @@ async fn build_scoped_steps(
                 danger: crate::danger::intent_danger(&op_for_explain, &ctx_for_danger),
             })?;
             if !matches!(resp, GateResponse::Confirmed) {
-                println!("  Aborted.");
-                return Ok(vec![]);
+                return crate::ux::canceled();
             }
             Ok(vec![PipelineStep::DiscardLocal { remote, branch }])
         }
@@ -1346,14 +1380,19 @@ async fn build_scoped_steps(
                 message: format!("Add remote '{}' → {}?", name, url),
             })?;
             if !matches!(resp, GateResponse::Confirmed) {
-                println!("  Aborted.");
-                return Ok(vec![]);
+                return crate::ux::canceled();
             }
             Ok(vec![PipelineStep::AddRemote { name, url }])
         }
 
         ScopedWriteOp::AddAndCommit { message, files } => {
             use crate::commands::FileSelection;
+            if matches!(files, FileSelection::All)
+                && repo.state() != git2::RepositoryState::Merge
+                && !has_uncommitted_changes(repo)
+            {
+                return Err(anyhow::anyhow!("{}", crate::copy::NOTHING_TO_COMMIT));
+            }
             let add_files: Vec<String> = match files {
                 FileSelection::All => vec![], // empty = add_all
                 FileSelection::Explicit(fs) => fs,
@@ -1365,7 +1404,7 @@ async fn build_scoped_steps(
             )
             .await?;
             if final_msg.is_empty() {
-                return Ok(vec![]);
+                return crate::ux::canceled();
             }
             Ok(vec![
                 PipelineStep::Add { files: add_files },
@@ -1378,8 +1417,7 @@ async fn build_scoped_steps(
                 message: format!("Remove remote '{}'?", name),
             })?;
             if !matches!(resp, GateResponse::Confirmed) {
-                println!("  Aborted.");
-                return Ok(vec![]);
+                return crate::ux::canceled();
             }
             Ok(vec![PipelineStep::RemoveRemote { name }])
         }
@@ -1414,8 +1452,7 @@ async fn build_scoped_steps(
             };
             let resp = gate.prompt(&GateType::SimpleConfirm { message: label })?;
             if !matches!(resp, GateResponse::Confirmed) {
-                println!("  Aborted.");
-                return Ok(vec![]);
+                return crate::ux::canceled();
             }
             Ok(vec![PipelineStep::Push {
                 remote,
@@ -1441,8 +1478,7 @@ async fn build_scoped_steps(
                     danger: crate::danger::intent_danger(&op_for_explain, &ctx_for_danger),
                 })?;
                 if !matches!(response, GateResponse::Confirmed) {
-                    println!("  Aborted.");
-                    return Ok(vec![]);
+                    return crate::ux::canceled();
                 }
             }
             // A plain "reset" intent discards the working-tree delta and keeps
@@ -1513,8 +1549,7 @@ async fn add_commit_push_pipeline(
             match resp {
                 GateResponse::FilesSelected(fs) => fs,
                 GateResponse::Aborted => {
-                    println!("  Aborted.");
-                    return Ok(());
+                    return crate::ux::canceled();
                 }
                 _ => return Ok(()),
             }
@@ -1557,8 +1592,7 @@ async fn add_commit_push_pipeline(
     )
     .await?;
     if final_msg.is_empty() {
-        println!("  Aborted.");
-        return Ok(());
+        return crate::ux::canceled();
     }
 
     let branch = current_branch_name(repo);
@@ -1613,8 +1647,7 @@ async fn commit_push_pipeline(
     )
     .await?;
     if final_msg.is_empty() {
-        println!("  Aborted.");
-        return Ok(());
+        return crate::ux::canceled();
     }
 
     let steps = commit_push_steps(stage_first, final_msg, remote, branch, set_upstream);
@@ -1646,6 +1679,14 @@ fn commit_push_steps(
         set_upstream,
     });
     steps
+}
+
+/// Files whose staged (index) version differs from HEAD.
+fn staged_change_count(repo: &git2::Repository) -> usize {
+    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+    repo.diff_tree_to_index(head_tree.as_ref(), None, None)
+        .map(|d| d.deltas().len())
+        .unwrap_or(1) // unreadable → don't block; the commit step reports it
 }
 
 /// Any modified, staged or untracked (non-ignored) file in the working tree.
@@ -1799,8 +1840,7 @@ async fn reconcile_flow(
     let choice = match gate.prompt(&GateType::ChoiceGate { question, options })? {
         GateResponse::Chose(i) => i,
         _ => {
-            println!("  Nothing changed.");
-            return Ok(());
+            return crate::ux::canceled();
         }
     };
 
@@ -1863,8 +1903,7 @@ async fn reconcile_flow(
             }
         }
         _ => {
-            println!("  Nothing changed.");
-            return Ok(());
+            return crate::ux::canceled();
         }
     };
 
@@ -2279,20 +2318,17 @@ async fn execute_pipeline(
     let preview = validator.build_preview(&steps, &warnings, &ctx_for_preview, sha7);
     println!("{}", preview);
 
-    // Confirmation gate. Variant C from prototype.jsx specs Enter=run-all,
-    // ↑↓=focus, e=edit, s=skip, q=cancel. First-pass implementation keeps the
-    // SimpleConfirm gate; the keymap legend was printed inside the plan box.
-    let proceed = gate.prompt(&GateType::SimpleConfirm {
-        message: "Execute this plan? [Y/n]".to_string(),
-    })?;
+    // Confirmation gate: one keypress, exactly as the legend says (Enter runs,
+    // q/Esc cancels). Variant C's focus/edit/skip keys are not wired, so they
+    // are not advertised.
+    let proceed = gate.prompt(&GateType::RunPlan)?;
     if !matches!(proceed, GateResponse::Confirmed) {
         // The snapshot was captured before the gate — clean it up since
         // nothing changed.
         if let Some(s) = &snapshot {
             let _ = recovery_mgr.delete_snapshot(s);
         }
-        println!("  Aborted.");
-        return Ok(());
+        return crate::ux::canceled();
     }
 
     let executor = DefaultExecutor {
@@ -2314,6 +2350,11 @@ async fn execute_pipeline(
     let gitrust_debug = std::env::var("GITRUST_DEBUG").is_ok();
 
     let use_color = crate::danger::use_color();
+    let glyph_running = if use_color {
+        crate::copy::TIMELINE_PENDING
+    } else {
+        crate::copy::TIMELINE_PENDING_ASCII
+    };
     let glyph_done = if use_color {
         crate::copy::TIMELINE_DONE
     } else {
@@ -2360,11 +2401,17 @@ async fn execute_pipeline(
         let level = crate::danger::step_danger(step, &ctx_for_preview);
         let marker = crate::danger::colored_marker(level);
 
-        // "Running" placeholder — printed with carriage return so we can
-        // overwrite it cleanly with the final state.
-        print!("  {}  {:<10}{}", dim("●"), verb, detail);
-        use std::io::Write;
-        let _ = std::io::stdout().flush();
+        // "Running" placeholder, overwritten in place with the result — only on
+        // a terminal: piped output would keep both copies of the line.
+        let live = {
+            use std::io::IsTerminal;
+            std::io::stdout().is_terminal()
+        };
+        if live {
+            print!("  {}  {:<10}{}", dim(glyph_running), verb, detail);
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+        }
 
         match executor.execute(repo, step) {
             Ok(()) => {
@@ -2381,14 +2428,14 @@ async fn execute_pipeline(
                     ),
                 };
 
-                // Rewrite the line with final glyph + marker at the end.
-                let trailing = if marker.is_empty() {
-                    format!("  {}", final_glyph)
-                } else {
-                    format!("  {}  {}", marker, final_glyph)
-                };
-                print!("\r  {}  {:<10}{}{}", final_glyph, verb, detail, trailing);
-                println!();
+                // The result replaces the running line: ✓ verb detail. The
+                // severity marker was shown in the plan; repeating it on a
+                // finished step only adds noise.
+                let _ = &marker;
+                if live {
+                    print!("\r\x1b[2K");
+                }
+                println!("  {}  {:<10}{}", final_glyph, verb, detail);
 
                 if let Some(w) = post_warning {
                     println!("  {}  {}", dim("│"), dim(&format!("⚠ {}", w)));
@@ -2432,15 +2479,11 @@ async fn execute_pipeline(
                 }
             }
             Err(e) => {
-                // Rewrite the line in place with the failed glyph.
-                print!(
-                    "\r  {}  {:<10}{}  {}",
-                    red(glyph_fail),
-                    verb,
-                    detail,
-                    red(glyph_fail)
-                );
-                println!();
+                // Replace the running line with the failure.
+                if live {
+                    print!("\r\x1b[2K");
+                }
+                println!("  {}  {:<10}{}", red(glyph_fail), verb, detail);
 
                 // Reconcile pause (Phase 12): a Merge/Rebase step left an
                 // in-progress op (conflict). This is a calm handoff into the
@@ -2598,7 +2641,15 @@ async fn execute_pipeline(
             done_line.push_str(&format!(", ↑{} ↓{}", post_ctx.ahead, post_ctx.behind));
         }
         println!("  {} {}", green("✓"), green(&done_line));
-        println!("  {}", dim(crate::copy::PLAN_NEXT_HINT));
+        let pushed = steps.iter().any(|s| matches!(s, PipelineStep::Push { .. }));
+        println!(
+            "  {}",
+            dim(&crate::copy::plan_next_hint(
+                commits_made,
+                pushed,
+                post_ctx.ahead
+            ))
+        );
     } else if no_local_change || failed_push.is_some() {
         // Push that fails non-FF leaves the local repo in a fine state — the
         // earlier commit is intact, only the network step refused. No snapshot
@@ -2869,8 +2920,7 @@ fn delete_repo(repo: &git2::Repository, gate: &dyn ConfirmationGate) -> anyhow::
     })?;
 
     if !matches!(resp, GateResponse::Confirmed) {
-        println!("  Aborted.");
-        return Ok(());
+        return crate::ux::canceled();
     }
 
     print!("  Removing {} … ", display);
@@ -2887,8 +2937,7 @@ fn init_repo(gate: &dyn ConfirmationGate) -> anyhow::Result<()> {
         message: format!("Initialize a new git repository in '{}'?", cwd.display()),
     })?;
     if !matches!(resp, GateResponse::Confirmed) {
-        println!("  Aborted.");
-        return Ok(());
+        return crate::ux::canceled();
     }
     print!("  [1] git init … ");
     git2::Repository::init(&cwd)
@@ -3042,8 +3091,7 @@ fn build_undo_intent(
     let choice = match gate.prompt(&GateType::ChoiceGate { question, options })? {
         GateResponse::Chose(i) => i,
         _ => {
-            println!("  Nothing changed.");
-            return Ok(vec![]);
+            return crate::ux::canceled();
         }
     };
 
@@ -3081,8 +3129,7 @@ fn build_undo_intent(
                 danger: crate::danger::intent_danger(&op_for_explain, &ctx),
             })?;
             if !matches!(resp, GateResponse::Confirmed) {
-                println!("  Aborted.");
-                return Ok(vec![]);
+                return crate::ux::canceled();
             }
             Ok(vec![PipelineStep::Reset {
                 mode: ResetMode::Hard,
@@ -3159,8 +3206,7 @@ fn build_cleanup_intent(
     })? {
         GateResponse::Chose(i) => i,
         _ => {
-            println!("  Nothing changed.");
-            return Ok(vec![]);
+            return crate::ux::canceled();
         }
     };
 
@@ -3182,10 +3228,7 @@ fn build_cleanup_intent(
             },
             PipelineStep::Clean { trash_net: true },
         ],
-        CleanupChoice::Abort => {
-            println!("  Nothing changed.");
-            vec![]
-        }
+        CleanupChoice::Abort => return crate::ux::canceled(),
     };
     Ok(steps)
 }
@@ -3339,8 +3382,7 @@ fn build_revert_step(
         message: format!("Revert {} with a new inverse commit?", short),
     })?;
     if !matches!(resp, GateResponse::Confirmed) {
-        println!("  Aborted.");
-        return Ok(vec![]);
+        return crate::ux::canceled();
     }
     Ok(vec![PipelineStep::Revert { oid: target }])
 }
@@ -3415,8 +3457,7 @@ async fn build_squash_step(
     })? {
         GateResponse::TextProvided(m) if !m.trim().is_empty() => m,
         _ => {
-            println!("  Aborted.");
-            return Ok(vec![]);
+            return crate::ux::canceled();
         }
     };
 
@@ -3457,8 +3498,7 @@ fn escalate_pushed_rewrite(
         danger: crate::danger::intent_danger(&op_for_explain, &ctx),
     })?;
     if !matches!(resp, GateResponse::Confirmed) {
-        println!("  Aborted — nothing was rewritten.");
-        return Ok(vec![]);
+        return crate::ux::canceled();
     }
     // Pin the lease to the tracking oid we have RIGHT NOW (TOCTOU hardening).
     let expect_oid = repo
@@ -3541,8 +3581,7 @@ async fn handle_detached_head_rescue(
             })? {
                 GateResponse::TextProvided(n) => n,
                 _ => {
-                    println!("  Aborted.");
-                    return Ok(RescueOutcome::Done);
+                    return crate::ux::canceled();
                 }
             };
             let name = name.trim().to_string();
@@ -3599,10 +3638,7 @@ async fn handle_detached_head_rescue(
                 "Could not find 'main' or 'master' to switch back to. Manually: gitrust \"checkout <branch>\""
             ))
         }
-        _ => {
-            println!("  Aborted.");
-            Ok(RescueOutcome::Done)
-        }
+        _ => crate::ux::canceled(),
     }
 }
 
@@ -4677,7 +4713,7 @@ mod phase12_reconcile_tests {
 #[cfg(test)]
 mod phase13_repair_tests {
     use super::*;
-    use crate::commands::{PipelineStep, ResetMode, ScopedWriteOp};
+    use crate::commands::{CommitMessage, PipelineStep, ResetMode, ScopedWriteOp};
     use crate::confirm::ScriptedGate;
     use git2::Repository;
     use std::process::Command;
@@ -4711,6 +4747,106 @@ mod phase13_repair_tests {
         }
         let repo = Repository::open(dir.path()).unwrap();
         (repo, dir)
+    }
+
+    // -- Cancel semantics (ux.rs): backing out is Err(Canceled) → exit 1, never
+    //    a silent Ok (exit 0) for a not-done operation.
+    #[test]
+    fn choosing_abort_at_the_cleanup_gate_is_a_cancel() {
+        let (repo, d) = repo_with_commits(1);
+        std::fs::write(d.path().join("f0.txt"), "edited\n").unwrap();
+        // One tracked change → options [Discard tracked, Abort]; pick Abort.
+        let gate = ScriptedGate::new(1);
+        let err = build_cleanup_intent(&repo, &gate).unwrap_err();
+        assert!(crate::ux::is_canceled(&err), "got: {err}");
+    }
+
+    #[test]
+    fn escaping_the_undo_gate_is_a_cancel() {
+        let (repo, _d) = repo_with_commits(2);
+        let gate = crate::confirm::MockGate {
+            response: GateResponse::Aborted,
+        };
+        let err = build_undo_intent(&repo, "undo", &gate).unwrap_err();
+        assert!(crate::ux::is_canceled(&err), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn declining_the_plan_is_a_cancel_and_changes_nothing() {
+        let (mut repo, d) = repo_with_commits(1);
+        std::fs::write(d.path().join("f0.txt"), "edited\n").unwrap();
+        let gate = crate::confirm::MockGate {
+            response: GateResponse::Aborted,
+        };
+        let steps = vec![PipelineStep::Add { files: vec![] }];
+        let err = execute_pipeline(&mut repo, steps, &Config::default(), &gate)
+            .await
+            .unwrap_err();
+        assert!(crate::ux::is_canceled(&err), "got: {err}");
+        // Nothing was staged.
+        let st = repo.statuses(None).unwrap();
+        assert!(st
+            .iter()
+            .all(|e| !e.status().intersects(git2::Status::INDEX_MODIFIED)));
+    }
+
+    #[tokio::test]
+    async fn nothing_to_commit_is_said_before_asking_for_a_message() {
+        let (mut repo, _d) = repo_with_commits(1);
+        let gate = ScriptedGate::new(0);
+        for op in [
+            ScopedWriteOp::AddAndCommit {
+                message: CommitMessage::Draft(String::new()),
+                files: crate::commands::FileSelection::All,
+            },
+            ScopedWriteOp::Commit {
+                message: CommitMessage::Draft(String::new()),
+            },
+        ] {
+            let err = build_scoped_steps(&mut repo, op, "commit", &Config::default(), &gate, false)
+                .await
+                .unwrap_err()
+                .to_string();
+            // Not "a commit message is required" — the message was never asked.
+            assert!(err.starts_with("Nothing"), "{err}");
+        }
+    }
+
+    #[test]
+    fn invalid_branch_intro_names_only_what_this_input_broke() {
+        assert_eq!(
+            crate::copy::branch_invalid_intro("feat/Login Page (v2)"),
+            "Git won't allow spaces or parentheses in branch names."
+        );
+        assert_eq!(
+            crate::copy::branch_invalid_intro("fix:bug"),
+            "Git won't allow ':' in branch names."
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_branch_name_is_fixed_up_not_rejected() {
+        let (mut repo, _d) = repo_with_commits(1);
+        // ScriptedGate answers an EditableText with its pre-filled text, i.e.
+        // the user pressed Enter on the suggestion.
+        let gate = ScriptedGate::new(0);
+        let steps = build_scoped_steps(
+            &mut repo,
+            ScopedWriteOp::Branch {
+                name: "feat/Login Page (v2)".into(),
+            },
+            "make me a new branch",
+            &Config::default(),
+            &gate,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(&steps[..], [PipelineStep::Branch { name }] if name == "feat/Login-Page-v2"),
+            "{:?}",
+            steps
+        );
     }
 
     // -- #1 (centerpiece): no undo phrase reaches Reset::Hard without the
@@ -5790,6 +5926,62 @@ mod kev_layer1_tests {
             IntentType::ScopedWrite(ScopedWriteOp::RebaseContinue)
         ));
         assert_eq!(k.main_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn a_conflict_question_mid_operation_shows_status() {
+        // eval_set_v2 S29: "whats conflicting" mid-rebase went something_else →
+        // merge_preview (a fetch + "no remote-tracking ref"). Status now lists
+        // the conflicted files and the way out, so that is the answer.
+        let mut c = ctx();
+        c.situation = RepoSituation::MidRebase {
+            current: 1,
+            total: 2,
+            conflicted: vec!["src/login.rs".into()],
+        };
+        let k = Fixed::with(&[("merge_preview", 0.56)], &[("something_else", 0.68)]);
+        for q in [
+            "whats conflicting",
+            "Before I continue or abort, show me which files have conflicts.",
+            "which files have conflicts?",
+        ] {
+            let r = classify(&k, &c, q, &AutoConfirmGate).await.unwrap();
+            assert!(
+                matches!(r.intent, IntentType::ReadOnly(ReadOnlyOp::Status)),
+                "{q}: {:?}",
+                r.intent
+            );
+        }
+        assert_eq!(
+            k.main_calls.load(Ordering::SeqCst) + k.in_progress_calls.load(Ordering::SeqCst),
+            0
+        );
+        // Outside an operation the word is not special.
+        let k2 = Fixed::main(&[("merge_preview", 0.9)]);
+        let r = classify(
+            &k2,
+            &ctx(),
+            "will pulling cause conflicts",
+            &AutoConfirmGate,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            r.intent,
+            IntentType::ReadOnly(ReadOnlyOp::MergePreview { .. })
+        ));
+        // "abort despite the conflicts" is a control request, not a question.
+        let k3 = Fixed::with(
+            &[("status", 0.9)],
+            &[("rebase_abort", 0.95), ("something_else", 0.01)],
+        );
+        let r = classify(&k3, &c, "abort, too many conflicts", &ScriptedGate::new(0))
+            .await
+            .unwrap();
+        assert!(!matches!(
+            r.intent,
+            IntentType::ReadOnly(ReadOnlyOp::Status)
+        ));
     }
 
     #[tokio::test]

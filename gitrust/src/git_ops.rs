@@ -1065,8 +1065,11 @@ impl GitOperations for Git2Operations {
     fn log(&self, repo: &Repository, count: u8) -> anyhow::Result<Vec<String>> {
         let mut revwalk = repo.revwalk().context("Failed to create revwalk")?;
         revwalk.push_head().context("No commits in repository")?;
+        // Parents before children (TOPOLOGICAL), newest first among
+        // unrelated commits (TIME) — like `git log`. TIME alone scrambles
+        // commits made in the same second.
         revwalk
-            .set_sorting(git2::Sort::TIME)
+            .set_sorting(git2::Sort::TOPOLOGICAL | git2::Sort::TIME)
             .context("Failed to set sort order")?;
 
         let mut entries = Vec::new();
@@ -2107,6 +2110,35 @@ hint: Updates were rejected because the tip of your current branch is behind\nhi
 
         let head = repo.head().unwrap();
         assert_eq!(head.shorthand(), Some("feat/checkout-test"));
+    }
+
+    #[test]
+    fn test_log_is_newest_first_even_within_one_second() {
+        // Scripts, rebases and cherry-picks make several commits in the same
+        // second; a time-only sort then listed them in arbitrary order (the UX
+        // audit saw "Initial commit" second from the top). Parentage must win.
+        let dir = TempDir::new().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+        let sig = git2::Signature::new("T", "t@t.com", &git2::Time::new(1_700_000_000, 0)).unwrap();
+        let mut parent: Option<git2::Commit> = None;
+        for msg in ["c1 initial", "c2", "c3", "c4", "c5 newest"] {
+            std::fs::write(dir.path().join("f.txt"), msg).unwrap();
+            let mut index = repo.index().unwrap();
+            index.add_path(std::path::Path::new("f.txt")).unwrap();
+            index.write().unwrap();
+            let tree = repo.find_tree(index.write_tree().unwrap()).unwrap();
+            let parents: Vec<&git2::Commit> = parent.iter().collect();
+            let oid = repo
+                .commit(Some("HEAD"), &sig, &sig, msg, &tree, &parents)
+                .unwrap();
+            parent = Some(repo.find_commit(oid).unwrap());
+        }
+        let entries = Git2Operations.log(&repo, 10).unwrap();
+        let order: Vec<&str> = entries
+            .iter()
+            .map(|e| e.rsplit("  ").next().unwrap())
+            .collect();
+        assert_eq!(order, vec!["c5 newest", "c4", "c3", "c2", "c1 initial"]);
     }
 
     #[test]

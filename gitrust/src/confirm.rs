@@ -1,5 +1,6 @@
-use anyhow::Context;
 use inquire::{Confirm, MultiSelect, Select, Text};
+
+use crate::ux::prompt_result;
 
 use crate::commands::{ClassificationResult, GateResponse, GateType};
 
@@ -17,11 +18,13 @@ impl ConfirmationGate for InquireGate {
         match gate {
             GateType::None => Ok(GateResponse::Confirmed),
 
+            GateType::RunPlan => crate::ux::run_plan_keypress(),
+
             GateType::SimpleConfirm { message } => {
-                let confirmed = Confirm::new(message)
-                    .with_default(true)
-                    .prompt()
-                    .context("Confirmation prompt failed")?;
+                let confirmed = prompt_result(
+                    Confirm::new(message).with_default(true).prompt(),
+                    "Confirmation prompt",
+                )?;
 
                 if confirmed {
                     Ok(GateResponse::Confirmed)
@@ -36,19 +39,22 @@ impl ConfirmationGate for InquireGate {
             } => prompt_file_multiselect(classification, *show_all),
 
             GateType::EditableText { initial, label } => {
-                let result = Text::new(label)
-                    .with_initial_value(initial)
-                    .with_validator(|input: &str| {
-                        if input.trim().is_empty() {
-                            Ok(inquire::validator::Validation::Invalid(
-                                "Commit message cannot be empty.".into(),
-                            ))
-                        } else {
-                            Ok(inquire::validator::Validation::Valid)
-                        }
-                    })
-                    .prompt()
-                    .context("Text prompt failed")?;
+                let result = prompt_result(
+                    Text::new(label)
+                        .with_initial_value(initial)
+                        .with_help_message(crate::copy::TEXT_PROMPT_HELP)
+                        .with_validator(|input: &str| {
+                            if input.trim().is_empty() {
+                                Ok(inquire::validator::Validation::Invalid(
+                                    crate::copy::TEXT_PROMPT_EMPTY.into(),
+                                ))
+                            } else {
+                                Ok(inquire::validator::Validation::Valid)
+                            }
+                        })
+                        .prompt(),
+                    "Text prompt",
+                )?;
 
                 Ok(GateResponse::TextProvided(result))
             }
@@ -70,10 +76,13 @@ impl ConfirmationGate for InquireGate {
                     return Ok(GateResponse::Aborted);
                 }
                 let labels: Vec<String> = options.clone();
-                let selected = Select::new(message, labels.clone())
-                    .with_starting_cursor(0)
-                    .prompt()
-                    .context("Choice prompt failed")?;
+                let selected = prompt_result(
+                    Select::new(message, labels.clone())
+                        .with_starting_cursor(0)
+                        .with_help_message(crate::copy::CHOICE_HELP)
+                        .prompt(),
+                    "Choice prompt",
+                )?;
                 match labels.iter().position(|l| l == &selected) {
                     Some(idx) => Ok(GateResponse::Chose(idx)),
                     None => Ok(GateResponse::Aborted),
@@ -99,10 +108,13 @@ impl ConfirmationGate for InquireGate {
                     .iter()
                     .map(|o| format!("{} — {}", o.label, dim(&o.consequence)))
                     .collect();
-                let selected = Select::new(question, labels.clone())
-                    .with_starting_cursor(0)
-                    .prompt()
-                    .context("Choice prompt failed")?;
+                let selected = prompt_result(
+                    Select::new(question, labels.clone())
+                        .with_starting_cursor(0)
+                        .with_help_message(crate::copy::CHOICE_HELP)
+                        .prompt(),
+                    "Choice prompt",
+                )?;
                 match labels.iter().position(|l| l == &selected) {
                     Some(idx) => Ok(GateResponse::Chose(idx)),
                     None => Ok(GateResponse::Aborted),
@@ -117,10 +129,13 @@ impl ConfirmationGate for InquireGate {
                 println!();
                 println!("{}", crate::copy::FORENSIC_BROWSER_HEADER);
                 let labels: Vec<String> = candidates.iter().map(format_lost_commit).collect();
-                let selected = Select::new("Recover which commit?", labels.clone())
-                    .with_starting_cursor(0)
-                    .prompt()
-                    .context("Recovery browser prompt failed")?;
+                let selected = prompt_result(
+                    Select::new("Recover which commit?", labels.clone())
+                        .with_starting_cursor(0)
+                        .with_help_message(crate::copy::CHOICE_HELP)
+                        .prompt(),
+                    "Recovery browser prompt",
+                )?;
                 match labels.iter().position(|l| l == &selected) {
                     Some(idx) => Ok(GateResponse::Chose(idx)),
                     None => Ok(GateResponse::Aborted),
@@ -240,13 +255,15 @@ fn prompt_file_multiselect(
 
     let display_labels: Vec<String> = options.iter().map(|o| o.label.clone()).collect();
 
-    let selected = MultiSelect::new(
-        "Select files to stage (Space to toggle, Enter to confirm):",
-        display_labels,
-    )
-    .with_default(&default_selected)
-    .prompt()
-    .context("File selection prompt failed")?;
+    let selected = prompt_result(
+        MultiSelect::new(
+            "Select files to stage (Space to toggle, Enter to confirm):",
+            display_labels,
+        )
+        .with_default(&default_selected)
+        .prompt(),
+        "File selection prompt",
+    )?;
 
     let selected_paths: Vec<String> = selected
         .iter()
@@ -313,12 +330,9 @@ fn prompt_type_to_confirm(expected: &str, message: &str) -> anyhow::Result<GateR
         })
         .prompt();
 
-    match result {
-        Ok(input) if input == expected => Ok(GateResponse::Confirmed),
-        Ok(_) => Ok(GateResponse::Aborted),
-        Err(inquire::InquireError::OperationCanceled)
-        | Err(inquire::InquireError::OperationInterrupted) => Ok(GateResponse::Aborted),
-        Err(e) => Err(e).context("TypeToConfirm prompt failed"),
+    match prompt_result(result, "Type-to-confirm prompt")? {
+        input if input == expected => Ok(GateResponse::Confirmed),
+        _ => Ok(GateResponse::Aborted),
     }
 }
 
@@ -335,7 +349,7 @@ pub struct AutoConfirmGate;
 impl ConfirmationGate for AutoConfirmGate {
     fn prompt(&self, gate: &GateType) -> anyhow::Result<GateResponse> {
         match gate {
-            GateType::None => Ok(GateResponse::Confirmed),
+            GateType::None | GateType::RunPlan => Ok(GateResponse::Confirmed),
             GateType::SimpleConfirm { .. } => Ok(GateResponse::Confirmed),
             GateType::FileMultiSelect { classification, .. } => {
                 // Select all related and uncertain files automatically
@@ -438,7 +452,9 @@ impl ScriptedGate {
 impl ConfirmationGate for ScriptedGate {
     fn prompt(&self, gate: &GateType) -> anyhow::Result<GateResponse> {
         match gate {
-            GateType::None | GateType::SimpleConfirm { .. } => Ok(GateResponse::Confirmed),
+            GateType::None | GateType::RunPlan | GateType::SimpleConfirm { .. } => {
+                Ok(GateResponse::Confirmed)
+            }
             GateType::TypeToConfirm { .. } => {
                 self.type_to_confirm_shown.set(true);
                 Ok(GateResponse::Confirmed)

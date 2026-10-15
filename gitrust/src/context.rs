@@ -32,6 +32,9 @@ pub struct RepoContext {
 /// File status grouped by category, truncated to MAX_FILES_PER_CATEGORY.
 #[derive(Debug, Clone)]
 pub struct StatusSummary {
+    /// Unmerged paths (mid-merge/rebase/cherry-pick/revert conflicts). Listed
+    /// first: they block everything else.
+    pub conflicted: Vec<String>,
     pub staged: Vec<String>,
     pub staged_overflow: usize,
     pub modified: Vec<String>,
@@ -340,6 +343,7 @@ impl RepoContext {
             ahead: 0,
             behind: 0,
             status: StatusSummary {
+                conflicted: vec![],
                 staged: vec![],
                 staged_overflow: 0,
                 modified: vec![],
@@ -358,7 +362,8 @@ impl RepoContext {
 
     /// True when the working tree or index has any uncommitted changes.
     pub fn has_uncommitted(&self) -> bool {
-        !self.status.staged.is_empty()
+        !self.status.conflicted.is_empty()
+            || !self.status.staged.is_empty()
             || !self.status.modified.is_empty()
             || !self.status.untracked.is_empty()
             || self.status.staged_overflow > 0
@@ -381,7 +386,13 @@ impl RepoContext {
             return "Empty repository — no commits yet.".to_string();
         }
         if self.is_detached {
-            return format!("HEAD detached at {}", self.branch);
+            // Lead with what it means, not the jargon (design handoff Flow 04).
+            let at = self.last_commit.split_whitespace().next().unwrap_or("");
+            return if at.is_empty() || at.starts_with('(') {
+                "Not on a branch".to_string()
+            } else {
+                format!("Not on a branch · at {}", at)
+            };
         }
         let mut header = format!("On branch {}", self.branch);
         match &self.upstream {
@@ -407,9 +418,61 @@ impl RepoContext {
         header
     }
 
+    /// What's in progress and how to finish or back out — shown at the top of
+    /// `status` whenever git has stopped mid-operation. `None` otherwise.
+    pub fn in_progress_lines(&self) -> Option<Vec<String>> {
+        use crate::copy::{in_progress_conflicts, in_progress_next};
+        let (what, conflicted, family): (String, &[String], &str) = match &self.situation {
+            RepoSituation::MidRebase {
+                current,
+                total,
+                conflicted,
+            } => {
+                let step = if *total > 0 {
+                    format!(" — stopped at commit {} of {}", current, total)
+                } else {
+                    String::new()
+                };
+                (format!("Rebase in progress{}", step), conflicted, "rebase")
+            }
+            RepoSituation::MidMerge { conflicts, .. } => {
+                ("Merge in progress".to_string(), conflicts, "merge")
+            }
+            RepoSituation::MidCherryPick { conflicted } => (
+                "Cherry-pick in progress".to_string(),
+                conflicted,
+                "cherry-pick",
+            ),
+            RepoSituation::MidRevert { conflicted } => {
+                ("Revert in progress".to_string(), conflicted, "revert")
+            }
+            RepoSituation::MidBisect => {
+                return Some(vec![
+                    "⚠ Bisect in progress".to_string(),
+                    "  Finish with `git bisect reset` before making changes.".to_string(),
+                ])
+            }
+            _ => return None,
+        };
+        let mut lines = vec![format!("⚠ {}", what)];
+        if !conflicted.is_empty() {
+            lines.push(in_progress_conflicts(conflicted));
+        }
+        lines.push(in_progress_next(family, !conflicted.is_empty()));
+        Some(lines)
+    }
+
     /// Suggested next action based on current state. Returns `None` when no obvious next step.
     /// Ordering: most-actionable / safety-relevant first.
     pub fn suggestion(&self) -> Option<String> {
+        // Mid-operation, the in-progress block IS the next step; anything else
+        // here (commit, publish…) would be advice that git will refuse.
+        if self.in_progress_lines().is_some() {
+            return None;
+        }
+        if matches!(self.situation, RepoSituation::DetachedHead { .. }) {
+            return Some(crate::copy::DETACHED_SUGGESTION.to_string());
+        }
         if self.has_stash {
             return Some("Stashed changes exist. Try: gitrust \"stash pop\"".to_string());
         }
@@ -481,6 +544,7 @@ fn build_status_summary(repo: &Repository) -> anyhow::Result<StatusSummary> {
         .statuses(None)
         .context("Failed to read repository status")?;
 
+    let mut conflicted = Vec::new();
     let mut staged = Vec::new();
     let mut modified = Vec::new();
     let mut untracked = Vec::new();
@@ -488,6 +552,10 @@ fn build_status_summary(repo: &Repository) -> anyhow::Result<StatusSummary> {
     for entry in statuses.iter() {
         let path = entry.path().unwrap_or("(invalid utf8)").to_string();
         let s = entry.status();
+        if s.contains(git2::Status::CONFLICTED) {
+            conflicted.push(path);
+            continue;
+        }
 
         if s.intersects(
             git2::Status::INDEX_NEW
@@ -520,6 +588,7 @@ fn build_status_summary(repo: &Repository) -> anyhow::Result<StatusSummary> {
     untracked.truncate(MAX_FILES_PER_CATEGORY);
 
     Ok(StatusSummary {
+        conflicted,
         staged,
         staged_overflow,
         modified,
@@ -531,8 +600,18 @@ fn build_status_summary(repo: &Repository) -> anyhow::Result<StatusSummary> {
 
 impl std::fmt::Display for StatusSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.staged.is_empty() && self.modified.is_empty() && self.untracked.is_empty() {
+        if self.conflicted.is_empty()
+            && self.staged.is_empty()
+            && self.modified.is_empty()
+            && self.untracked.is_empty()
+        {
             return writeln!(f, "Nothing to commit, working tree clean.");
+        }
+        if !self.conflicted.is_empty() {
+            writeln!(f, "Conflicted:")?;
+            for p in &self.conflicted {
+                writeln!(f, "  ! {}", p)?;
+            }
         }
         if !self.staged.is_empty() {
             writeln!(f, "Staged:")?;
@@ -714,6 +793,79 @@ mod tests {
             }
             other => panic!("expected MidRebase, got {:?}", other),
         }
+        // The status summary sees the conflict too (it used to report "clean").
+        let ctx = build_context(&repo).unwrap();
+        assert!(ctx.status.conflicted.iter().any(|p| p == "f.txt"));
+    }
+
+    #[test]
+    fn test_status_lists_conflicted_files_and_never_says_clean() {
+        let mut st = RepoContext::empty().status;
+        st.conflicted = vec!["src/login.rs".into()];
+        let out = st.to_string();
+        assert!(
+            out.contains("Conflicted:") && out.contains("src/login.rs"),
+            "{out}"
+        );
+        assert!(!out.contains("working tree clean"), "{out}");
+    }
+
+    #[test]
+    fn test_mid_rebase_status_points_at_continue_and_abort_never_publish() {
+        let mut ctx = RepoContext::empty();
+        ctx.is_empty_repo = false;
+        ctx.is_detached = true;
+        ctx.branch = "HEAD".into();
+        ctx.last_commit = "e6cb6c2 \"Main change\" (just now)".into();
+        ctx.situation = RepoSituation::MidRebase {
+            current: 1,
+            total: 2,
+            conflicted: vec!["src/login.rs".into()],
+        };
+        let lines = ctx
+            .in_progress_lines()
+            .expect("mid-rebase must explain itself")
+            .join("\n");
+        assert!(
+            lines.contains("Rebase in progress") && lines.contains("1 of 2"),
+            "{lines}"
+        );
+        assert!(lines.contains("1 conflicted file"), "{lines}");
+        assert!(
+            lines.contains("gitrust \"continue rebase\"")
+                && lines.contains("gitrust \"abort rebase\""),
+            "{lines}"
+        );
+        assert!(ctx.suggestion().map_or(true, |s| !s.contains("publish")));
+        assert!(!ctx.render_status_header().contains("HEAD detached at HEAD"));
+        // Resolved conflicts → the next step is continue.
+        ctx.situation = RepoSituation::MidRebase {
+            current: 1,
+            total: 2,
+            conflicted: vec![],
+        };
+        let lines = ctx.in_progress_lines().unwrap().join("\n");
+        assert!(lines.contains("continue rebase"), "{lines}");
+        // A normal repo has no in-progress block.
+        ctx.situation = RepoSituation::Normal;
+        assert!(ctx.in_progress_lines().is_none());
+    }
+
+    #[test]
+    fn test_detached_header_leads_with_not_on_a_branch() {
+        let mut ctx = RepoContext::empty();
+        ctx.is_empty_repo = false;
+        ctx.is_detached = true;
+        ctx.branch = "HEAD".into();
+        ctx.last_commit = "a3f9c12 \"Release\" (2 days ago)".into();
+        ctx.situation = RepoSituation::DetachedHead {
+            stranded_commits: 0,
+        };
+        let h = ctx.render_status_header();
+        assert!(
+            h.starts_with("Not on a branch") && h.contains("a3f9c12"),
+            "{h}"
+        );
     }
 
     #[test]

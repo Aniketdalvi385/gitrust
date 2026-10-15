@@ -46,6 +46,27 @@ pub fn in_progress_family(ctx: &RepoContext) -> Option<&'static str> {
     }
 }
 
+/// Mid-operation, a *question about the conflicts* ("whats conflicting",
+/// "which files have conflicts?") is answered by `status`, which lists the
+/// conflicted files and the way forward/back. A control request that merely
+/// mentions conflicts ("abort, too many conflicts") is not a question.
+pub fn is_conflict_question(raw: &str) -> bool {
+    let q = raw.to_lowercase();
+    let words: Vec<&str> = q
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let about_conflicts = words.iter().any(|w| w.starts_with("conflict"));
+    let asks = q.trim_end().ends_with('?')
+        || words.iter().any(|w| {
+            matches!(
+                *w,
+                "show" | "which" | "what" | "whats" | "list" | "where" | "see" | "view" | "tell"
+            )
+        });
+    about_conflicts && asks
+}
+
 /// The intent for an in-progress control op (from the in-progress question).
 pub fn build_in_progress(op: &str) -> Option<IntentType> {
     let w = match op {
@@ -761,9 +782,11 @@ pub fn build_from_op(
             })
         }
         "branch" => {
+            // A typed name is passed through as-is: the Branch step validates
+            // it and offers a fixed-up suggestion (Flow 05) — no dead end here.
             let name = match capture_new_branch_name(&q) {
                 Some(n) => n,
-                None => ref_token(required(ask, ArgKind::BranchName)?)?,
+                None => required(ask, ArgKind::BranchName)?,
             };
             IntentType::ScopedWrite(ScopedWriteOp::Branch { name })
         }
@@ -1609,6 +1632,19 @@ mod tests {
                 q
             );
         }
+    }
+
+    #[test]
+    fn test_typed_branch_name_reaches_the_suggestion_flow() {
+        // An invalid typed name is passed through: the Branch step's validator
+        // offers a fixed-up suggestion instead of a dead-end error here.
+        let it = build_from_op("branch", "make me a new branch", &kctx(), &mut |_| {
+            Ok("feat/Login Page (v2)".into())
+        })
+        .unwrap();
+        assert!(
+            matches!(it, IntentType::ScopedWrite(ScopedWriteOp::Branch { ref name }) if name == "feat/Login Page (v2)")
+        );
     }
 
     #[test]

@@ -475,6 +475,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "clap",
+ "crossterm",
  "dirs",
  "git2",
  "inquire",

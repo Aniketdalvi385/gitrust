@@ -182,9 +182,11 @@ pub fn step_danger(step: &PipelineStep, ctx: &RepoContext) -> DangerLevel {
         // Read-only steps
         P::Status | P::Log { .. } | P::Diff { .. } => DangerLevel::Safe,
 
+        // Staging is fully reversible — no marker (keeps ⚠ meaningful).
+        P::Add { .. } => DangerLevel::Safe,
+
         // Local additions / setup
-        P::Add { .. }
-        | P::Branch { .. }
+        P::Branch { .. }
         | P::Checkout { .. }
         | P::Stash
         | P::StashPop
@@ -201,8 +203,15 @@ pub fn step_danger(step: &PipelineStep, ctx: &RepoContext) -> DangerLevel {
             }
         }
 
-        // Pushes are Caution (own branch) — escalated only for ForcePush below.
-        P::Push { .. } => DangerLevel::Caution,
+        // Severity reflects the branch (design principle 4): pushing your own
+        // feature branch is routine; pushing a shared branch is Caution.
+        P::Push { .. } => {
+            if shared_branch(ctx) {
+                DangerLevel::Caution
+            } else {
+                DangerLevel::Safe
+            }
+        }
 
         // Reset depends on mode.
         P::Reset {
@@ -295,6 +304,7 @@ mod tests {
             ahead: 0,
             behind: 0,
             status: StatusSummary {
+                conflicted: vec![],
                 staged: vec![],
                 staged_overflow: 0,
                 modified: vec![],
@@ -399,9 +409,26 @@ mod tests {
 
     #[test]
     fn add_is_safe_in_pipeline() {
-        // Sanity: add staging step is Caution, not Safe
+        // Staging is fully reversible: no marker, so ⚠ keeps its meaning
+        // (design handoff Flow 06½: "drop ⚠ on git add").
         let step = PipelineStep::Add { files: vec![] };
-        assert_eq!(step_danger(&step, &ctx_clean("x")), DangerLevel::Caution);
+        assert_eq!(step_danger(&step, &ctx_clean("x")), DangerLevel::Safe);
+    }
+
+    #[test]
+    fn push_severity_reflects_the_branch() {
+        // Principle 4: a push to your own feature branch carries no marker; a
+        // push to a shared branch (main/master/develop/trunk) is Caution.
+        let push = PipelineStep::Push {
+            remote: "origin".into(),
+            branch: "x".into(),
+            set_upstream: false,
+        };
+        assert_eq!(
+            step_danger(&push, &ctx_clean("feat/login")),
+            DangerLevel::Safe
+        );
+        assert_eq!(step_danger(&push, &ctx_clean("main")), DangerLevel::Caution);
     }
 
     #[test]

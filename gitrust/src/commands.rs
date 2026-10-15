@@ -547,6 +547,9 @@ pub enum GateType {
     None,
     /// Simple Y/n prompt, default Y.
     SimpleConfirm { message: String },
+    /// "Run this plan?" — one keypress: Enter/y runs, q/n/Esc/Ctrl-C cancels
+    /// (exactly what the plan's legend says). `--yes` confirms it.
+    RunPlan,
     /// File multi-select grouped by confidence.
     /// When `show_all` is false (default), files classified as Unrelated are
     /// hidden from the picker — the user opts in via the `--show-all` CLI flag.

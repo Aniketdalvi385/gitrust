@@ -22,14 +22,14 @@ pub const PLAN_HEADER_FMT: &str = "Plan  · {n} step(s) · snapshot @ {sha7}";
 /// Bullet glyphs for the timeline visual.
 pub const TIMELINE_PENDING: &str = "○";
 pub const TIMELINE_RUNNING: &str = "●";
-pub const TIMELINE_DONE: &str = "●";
+pub const TIMELINE_DONE: &str = "✓";
 pub const TIMELINE_FAILED: &str = "✗";
 pub const TIMELINE_CONNECTOR: &str = "│";
 
 // ASCII fallbacks for non-unicode terminals.
 pub const TIMELINE_PENDING_ASCII: &str = "o";
 pub const TIMELINE_RUNNING_ASCII: &str = "*";
-pub const TIMELINE_DONE_ASCII: &str = "*";
+pub const TIMELINE_DONE_ASCII: &str = "ok";
 pub const TIMELINE_FAILED_ASCII: &str = "X";
 pub const TIMELINE_CONNECTOR_ASCII: &str = "|";
 
@@ -38,8 +38,43 @@ pub const TIMELINE_CONNECTOR_ASCII: &str = "|";
 // the dishonesty of advertising unwired keys.
 pub const PLAN_KEYMAP_LEGEND: &str = "[Enter] run · [q] cancel";
 
+/// Highlight `[key]` labels in a legend (accent yellow, design handoff colour
+/// table) when color is on; plain text otherwise.
+pub fn style_keys(legend: &str) -> String {
+    if !crate::danger::use_color() {
+        return legend.to_string();
+    }
+    let mut out = String::new();
+    let mut rest = legend;
+    while let Some(i) = rest.find('[') {
+        match rest[i..].find(']') {
+            Some(j) => {
+                out.push_str(&rest[..i]);
+                out.push_str(&format!("\x1b[38;5;220m{}\x1b[0m", &rest[i..i + j + 1]));
+                rest = &rest[i + j + 1..];
+            }
+            None => break,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 pub const PLAN_DONE_FOOTER: &str = "Done";
-pub const PLAN_NEXT_HINT: &str = "Next: gitrust \"status\" · undo with `gitrust recover`";
+
+/// The line under "✓ Done". Honest about the way back: `gitrust "undo"` undoes
+/// the last commit (offering a revert when it's already pushed); it is only
+/// suggested when this run made a commit. (`gitrust recover` restores a
+/// *crashed* run's snapshot — after a successful run there is none, so it was
+/// the wrong thing to point at.)
+pub fn plan_next_hint(commits_made: usize, pushed: bool, ahead: usize) -> String {
+    match (commits_made > 0, pushed) {
+        (true, true) => "Next: gitrust \"status\" · changed your mind? gitrust \"undo\" (adds a revert commit, since it's pushed)".to_string(),
+        (true, false) if ahead > 0 => "Next: gitrust \"push\" · changed your mind? gitrust \"undo\"".to_string(),
+        (true, false) => "Next: gitrust \"status\" · changed your mind? gitrust \"undo\"".to_string(),
+        (false, _) => "Next: gitrust \"status\"".to_string(),
+    }
+}
 
 pub const PLAN_CANCELED_FMT: &str = "↪ Canceled · staged work preserved · snapshot @ {sha7}";
 
@@ -242,6 +277,98 @@ pub const PUSHED_REWRITE_WARNING: &str =
 pub const RECOVER_NONE_TRY_FORENSIC: &str =
     "No interrupted GiTrust pipeline found for this repo. If you're looking for lost commits, try `gitrust \"find my lost work\"`.";
 
+// -- Status while git is stopped mid-operation.
+
+/// "  1 conflicted file (listed below) — edit it and remove the markers."
+/// The files themselves are listed once, in the status body.
+pub fn in_progress_conflicts(files: &[String]) -> String {
+    let n = files.len();
+    format!(
+        "  {} conflicted file{} (listed below) — edit {} and remove the <<<<<<< / >>>>>>> markers.",
+        n,
+        if n == 1 { "" } else { "s" },
+        if n == 1 { "it" } else { "them" }
+    )
+}
+
+/// The way forward (and back) for an in-progress operation. `family` is the
+/// git word ("rebase", "merge", "cherry-pick", "revert"); the phrases are
+/// GiTrust fast-path canonicals, so they run instantly.
+pub fn in_progress_next(family: &str, conflicts_left: bool) -> String {
+    let finish = if family == "merge" {
+        "gitrust \"commit\"".to_string()
+    } else {
+        format!("gitrust \"continue {}\"", family)
+    };
+    if conflicts_left {
+        format!(
+            "  Then: {} · or go back to before it started: gitrust \"abort {}\"",
+            finish, family
+        )
+    } else {
+        format!(
+            "  Conflicts resolved — finish with {} · or go back: gitrust \"abort {}\"",
+            finish, family
+        )
+    }
+}
+
+/// Plan warning for a hard reset. True to what happens: the trash-net copies
+/// the uncommitted changes first, and dropped commits stay in git's reflog.
+pub const HARD_RESET_WARNING: &str =
+    "Discards uncommitted changes in tracked files — they're backed up to ~/.gitrust/trash first; any dropped commit stays recoverable from git's reflog.";
+
+/// Flow 05: say only the rules this input broke — "Git won't allow spaces or
+/// parentheses in branch names." No "Error:", nothing has failed yet.
+pub fn branch_invalid_intro(name: &str) -> String {
+    let mut what: Vec<String> = Vec::new();
+    if name.contains(char::is_whitespace) {
+        what.push("spaces".into());
+    }
+    if name.contains('(') || name.contains(')') {
+        what.push("parentheses".into());
+    }
+    if name.contains("..") {
+        what.push("\"..\"".into());
+    }
+    let mut odd: Vec<char> = name
+        .chars()
+        .filter(|c| {
+            !c.is_ascii_alphanumeric()
+                && !c.is_whitespace()
+                && !matches!(c, '-' | '_' | '/' | '.' | '(' | ')')
+        })
+        .collect();
+    odd.dedup();
+    if !odd.is_empty() {
+        what.push(
+            odd.iter()
+                .map(|c| format!("'{}'", c))
+                .collect::<Vec<_>>()
+                .join(" "),
+        );
+    }
+    if what.is_empty() {
+        return format!("Git won't accept \"{}\" as a branch name.", name);
+    }
+    let list = match what.len() {
+        1 => what[0].clone(),
+        _ => format!(
+            "{} or {}",
+            what[..what.len() - 1].join(", "),
+            what[what.len() - 1]
+        ),
+    };
+    format!("Git won't allow {} in branch names.", list)
+}
+
+/// Label of the pre-filled branch-name prompt after an invalid name.
+pub const BRANCH_NAME_SUGGESTED: &str = "Branch name (suggested — Enter to use, or edit):";
+
+/// Status suggestion when HEAD is detached outside any operation.
+pub const DETACHED_SUGGESTION: &str =
+    "You're not on a branch — new commits here are easy to lose. Save your spot: gitrust \"create branch <name>\"";
+
 /// Header shown before the recovery browser lists lost-commit candidates.
 pub const FORENSIC_BROWSER_HEADER: &str =
     "Lost & recoverable commits (restoring creates a rescue branch — your current work is never touched):";
@@ -292,6 +419,21 @@ pub const CLEANUP_NOTHING: &str =
     "Nothing to clean — the working tree has no changes or untracked files.";
 
 // ---------------------------------------------------------------------------
+// Cancel (ux::Canceled) — one calm line for every backed-out run.
+// ---------------------------------------------------------------------------
+
+pub const CANCELED: &str = "Canceled — nothing was done.";
+pub const CANCELED_GLYPH: &str = "↪";
+
+/// Help line under every pick-one menu (inquire's default omits Esc).
+pub const CHOICE_HELP: &str = "↑↓ move · Enter choose · Esc cancel";
+/// Help line under free-text prompts (branch names, commit messages, URLs…).
+pub const TEXT_PROMPT_HELP: &str = "Enter to continue · Esc to cancel";
+/// Validator message for an empty free-text answer — generic on purpose: the
+/// same prompt asks for branch names, counts, URLs and commit messages.
+pub const TEXT_PROMPT_EMPTY: &str = "This can't be empty — type a value, or press Esc to cancel.";
+
+// ---------------------------------------------------------------------------
 // Kev (local decision model) — Layer 1 copy
 // ---------------------------------------------------------------------------
 
@@ -326,6 +468,11 @@ pub const KEV_UNSTABLE_QUESTION: &str =
 /// Header of the in-progress menu (continue / skip / abort / something else).
 pub const KEV_IN_PROGRESS_QUESTION: &str =
     "An operation is in progress. Did you mean to control it?";
+
+/// Said before any message prompt, so nobody types a message for nothing.
+pub const NOTHING_TO_COMMIT: &str = "Nothing to commit — the working tree is clean.";
+pub const NOTHING_STAGED: &str =
+    "Nothing is staged, so there's nothing to commit. Commit everything with: gitrust \"commit all my files\"";
 
 /// Label of the commit-message prompt when GiTrust has nothing to offer.
 pub const COMMIT_MESSAGE_ASK: &str = "Commit message:";
