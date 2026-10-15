@@ -278,6 +278,14 @@ pub fn echo_line(
             },
             " · your choice".to_string(),
         ),
+        Engine::Alias => (
+            if plain {
+                ENGINE_FAST_ASCII
+            } else {
+                ENGINE_FAST_GLYPH
+            },
+            " · learned".to_string(),
+        ),
     };
     let dbg = match confidence {
         Some(p) if debug && engine == Engine::Kev => format!("  (p={:.2})", p),

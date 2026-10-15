@@ -38,6 +38,14 @@ pub const TIMELINE_CONNECTOR_ASCII: &str = "|";
 // the dishonesty of advertising unwired keys.
 pub const PLAN_KEYMAP_LEGEND: &str = "[Enter] run · [q] cancel";
 
+/// Said once when a menu pick is remembered (aliases.rs).
+pub fn learned_note(phrase: &str, title: &str) -> String {
+    format!(
+        "↳ Learned “{}” → {} · instant next time (gitrust aliases)",
+        phrase, title
+    )
+}
+
 /// Said when `s` drops the plan's trailing push.
 pub const PLAN_PUSH_SKIPPED: &str =
     "↳ Not pushing this time — the commit stays local. Push later with gitrust \"push\".";

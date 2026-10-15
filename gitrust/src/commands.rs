@@ -266,6 +266,8 @@ pub enum Engine {
     Kev,
     /// Kev wasn't confident; the user picked the op from its candidates.
     User,
+    /// A phrase learned from an earlier menu pick (`aliases.rs`) — no model.
+    Alias,
 }
 
 /// Result of Layer-1 classification.

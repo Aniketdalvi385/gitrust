@@ -46,9 +46,10 @@ fn print_echo(
         return;
     }
     let ansi = match engine {
-        crate::commands::Engine::Fast => "\x1b[36m", // cyan
-        crate::commands::Engine::Kev => "\x1b[34m",  // blue
-        crate::commands::Engine::User => "\x1b[35m", // magenta
+        crate::commands::Engine::Fast => "\x1b[36m",  // cyan
+        crate::commands::Engine::Kev => "\x1b[34m",   // blue
+        crate::commands::Engine::User => "\x1b[35m",  // magenta
+        crate::commands::Engine::Alias => "\x1b[36m", // cyan, like the fast path
     };
     let (glyph, rest) = line.split_once("  ").unwrap_or((&line, ""));
     let split_at = rest
@@ -105,7 +106,7 @@ pub async fn run_agent(
         let empty_ctx = crate::context::RepoContext::empty();
         let started = std::time::Instant::now();
         let intent_result =
-            classify_query(&KevClassifier, &empty_ctx, query, config, &*gate).await?;
+            classify_query(&KevClassifier, &empty_ctx, query, config, &*gate, None).await?;
         print_engine_marker(&intent_result, started.elapsed());
         return match intent_result.intent {
             IntentType::ScopedWrite(ScopedWriteOp::Init) => init_repo(&*gate),
@@ -150,7 +151,16 @@ pub async fn run_agent(
 
     // Layer 1: classify intent — exact fast-path, else the local Kev model.
     let classify_started = std::time::Instant::now();
-    let intent_result = classify_query(&KevClassifier, &context, query, config, &*gate).await?;
+    let aliases_file = crate::aliases::path_for(repo.path());
+    let intent_result = classify_query(
+        &KevClassifier,
+        &context,
+        query,
+        config,
+        &*gate,
+        Some(&aliases_file),
+    )
+    .await?;
     print_engine_marker(&intent_result, classify_started.elapsed());
 
     // Layer 3 (early): the situation gate. An intent that is invalid for the
@@ -254,6 +264,7 @@ async fn classify_query(
     query: &str,
     config: &Config,
     gate: &dyn ConfirmationGate,
+    aliases: Option<&std::path::Path>,
 ) -> anyhow::Result<crate::commands::IntentResult> {
     use crate::commands::{Engine, IntentResult};
     use crate::kev::KevDecision;
@@ -286,6 +297,23 @@ async fn classify_query(
             engine: Engine::Fast,
             echoed: false,
         });
+    }
+
+    // A phrase learned from an earlier menu pick: no model, same builder (args
+    // re-captured or asked). Paused mid-operation, where the request may be
+    // meant for the operation in progress.
+    if crate::intent::in_progress_family(context).is_none() {
+        if let Some(op) = aliases.and_then(|p| crate::aliases::lookup(p, query)) {
+            let (intent, echoed) =
+                build_with_echo(&op, query, context, gate, Engine::Alias, started)?;
+            return Ok(IntentResult {
+                intent,
+                confidence: 1.0,
+                raw_query: query.to_string(),
+                engine: Engine::Alias,
+                echoed,
+            });
+        }
     }
 
     // Mid-operation: first ask whether the request controls that operation
@@ -364,7 +392,7 @@ async fn classify_query(
         Ok(r) => r,
         Err(e) => {
             eprintln!("⚠  {}", e);
-            return manual_menu(context, query, gate);
+            return manual_menu(context, query, gate, aliases);
         }
     };
     if std::env::var("GITRUST_DEBUG").is_ok() {
@@ -442,6 +470,7 @@ async fn classify_query(
         }
         KevDecision::Ask { candidates } => {
             let op = pick_candidate(&candidates, question, gate)?;
+            learn(aliases, query, &op);
             (op, 1.0, Engine::User)
         }
     };
@@ -454,6 +483,20 @@ async fn classify_query(
         engine,
         echoed,
     })
+}
+
+/// Remember a menu pick for next time (non-destructive ops only — see
+/// aliases.rs) and say so once. Best effort: a write failure only means the
+/// phrase isn't learned.
+fn learn(aliases: Option<&std::path::Path>, query: &str, op: &str) {
+    let Some(path) = aliases else { return };
+    if let Ok(true) = crate::aliases::record(path, query, op) {
+        let title = crate::copy::op_label(op).map_or(op, |(t, _)| t);
+        println!(
+            "  {}",
+            crate::copy::learned_note(&crate::aliases::normalize(query), title)
+        );
+    }
 }
 
 /// Build the intent for a routed or picked op. If an argument has to be asked
@@ -2888,6 +2931,7 @@ fn manual_menu(
     context: &crate::context::RepoContext,
     query: &str,
     gate: &dyn ConfirmationGate,
+    aliases: Option<&std::path::Path>,
 ) -> anyhow::Result<crate::commands::IntentResult> {
     use crate::commands::{ChoiceOption, Engine, IntentResult};
     let mut ops: Vec<&str> = crate::kev::ops()
@@ -2921,6 +2965,7 @@ fn manual_menu(
         GateResponse::Chose(i) if i < ops.len() => ops[i],
         _ => return crate::ux::canceled(),
     };
+    learn(aliases, query, op);
     let (intent, echoed) = build_with_echo(
         op,
         query,
@@ -5850,7 +5895,7 @@ mod kev_layer1_tests {
         q: &str,
         gate: &dyn ConfirmationGate,
     ) -> anyhow::Result<crate::commands::IntentResult> {
-        classify_query(k, c, q, &Config::default(), gate).await
+        classify_query(k, c, q, &Config::default(), gate, None).await
     }
 
     #[tokio::test]
@@ -6134,6 +6179,76 @@ mod kev_layer1_tests {
         assert_eq!(k.main_calls.load(Ordering::SeqCst), 0);
     }
 
+    // -- Learned phrases (aliases.rs) --------------------------------------
+
+    async fn classify_learning(
+        k: &Fixed,
+        c: &crate::context::RepoContext,
+        q: &str,
+        gate: &dyn ConfirmationGate,
+        aliases: &std::path::Path,
+    ) -> anyhow::Result<crate::commands::IntentResult> {
+        classify_query(k, c, q, &Config::default(), gate, Some(aliases)).await
+    }
+
+    #[tokio::test]
+    async fn a_menu_pick_is_learned_and_the_phrase_is_instant_next_time() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = crate::aliases::path_for(d.path());
+        let k = Fixed::main(&[("push", 0.3), ("scoped_push", 0.25), ("add_commit", 0.1)]);
+        // First time: Kev is unsure, the user picks "Push only some changes".
+        let r = classify_learning(
+            &k,
+            &ctx(),
+            "ship the payments fixes",
+            &ScriptedGate::new(1),
+            &p,
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.engine, Engine::User);
+        assert_eq!(k.main_calls.load(Ordering::SeqCst), 1);
+        // Next time: no model call, no menu, same op (args re-captured).
+        let r = classify_learning(&k, &ctx(), "Ship the payments fixes", &AutoConfirmGate, &p)
+            .await
+            .unwrap();
+        assert_eq!(r.engine, Engine::Alias);
+        assert_eq!(
+            k.main_calls.load(Ordering::SeqCst),
+            1,
+            "the model wasn't asked again"
+        );
+        assert!(matches!(
+            r.intent,
+            IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush { ref feature_hint }) if feature_hint == "payments"
+        ));
+    }
+
+    #[tokio::test]
+    async fn destructive_picks_are_not_learned_and_aliases_pause_mid_operation() {
+        let d = tempfile::TempDir::new().unwrap();
+        let p = crate::aliases::path_for(d.path());
+        let k = Fixed::main(&[("cleanup", 0.4), ("stash", 0.3)]);
+        let _ = classify_learning(&k, &ctx(), "tidy my tree", &ScriptedGate::new(0), &p).await;
+        assert!(
+            crate::aliases::list(&p).is_empty(),
+            "cleanup must never be learned"
+        );
+        // A learned phrase is not used while an operation is in progress.
+        crate::aliases::record(&p, "where do things stand", "status").unwrap();
+        let mut c = ctx();
+        c.situation = RepoSituation::MidRebase {
+            current: 1,
+            total: 2,
+            conflicted: vec![],
+        };
+        let k = Fixed::with(&[("status", 0.9)], &[("something_else", 0.9)]);
+        let r = classify_learning(&k, &c, "where do things stand", &AutoConfirmGate, &p)
+            .await
+            .unwrap();
+        assert_ne!(r.engine, Engine::Alias);
+    }
+
     /// A classifier whose server is down.
     struct Down;
     impl IntentClassifier for Down {
@@ -6159,6 +6274,7 @@ mod kev_layer1_tests {
             "show me the history",
             &Config::default(),
             &gate,
+            None,
         )
         .await
         .unwrap();
@@ -6181,6 +6297,7 @@ mod kev_layer1_tests {
             "x",
             &Config::default(),
             &ScriptedGate::new(undo_idx),
+            None,
         )
         .await
         .unwrap();
@@ -6189,11 +6306,16 @@ mod kev_layer1_tests {
             IntentType::ScopedWrite(ScopedWriteOp::UndoIntent)
         ));
         // --yes can't pick for you.
-        assert!(
-            classify_query(&Down, &ctx(), "x", &Config::default(), &AutoConfirmGate)
-                .await
-                .is_err()
-        );
+        assert!(classify_query(
+            &Down,
+            &ctx(),
+            "x",
+            &Config::default(),
+            &AutoConfirmGate,
+            None
+        )
+        .await
+        .is_err());
     }
 
     #[tokio::test]

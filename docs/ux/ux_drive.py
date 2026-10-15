@@ -223,6 +223,13 @@ def _(): return [BIN, "commit everything"], [("Commit message", b"wip" + ENTER, 
                                              ("wip logout flow", ENTER, "plan again"),
                                              ("Done", None, "done")]
 
+@scenario("learn_phrase")
+def _(): return [BIN], [("gitrust>", b"where am i right now" + ENTER, "ask"),
+                        ("Esc cancel", b"1", "menu: pick 1"),
+                        ("gitrust>", b"where am i right now" + ENTER, "after pick"),
+                        ("learned", b"exit" + ENTER, "asked again"),
+                        (None, None, "exit")]
+
 @scenario("maybe_not_git")
 def _(): return [BIN, "where am i right now"], [("?", None, "menu shown"), (None, DOWN + ENTER, "pick 2nd")]
 

@@ -1,4 +1,5 @@
 mod agent;
+mod aliases;
 mod commands;
 mod config;
 mod confirm;
@@ -88,6 +89,15 @@ enum Command {
         #[arg(long)]
         clean: bool,
     },
+    /// List the phrases GiTrust learned from your menu picks in this repo.
+    Aliases {
+        /// Forget one learned phrase.
+        #[arg(long)]
+        forget: Option<String>,
+        /// Forget all learned phrases in this repo.
+        #[arg(long)]
+        clear: bool,
+    },
     /// Internal: owns a background Kev server and stops it when idle.
     #[command(name = "kev-supervise", hide = true)]
     KevSupervise {
@@ -145,6 +155,33 @@ async fn run() -> anyhow::Result<()> {
         return Ok(());
     }
 
+    if let Some(Command::Aliases { forget, clear }) = &cli.command {
+        let repo = git2::Repository::discover(".").map_err(|_| {
+            anyhow::anyhow!("Not inside a git repository — learned phrases are per repo.")
+        })?;
+        let path = aliases::path_for(repo.path());
+        if *clear {
+            let n = aliases::clear(&path)?;
+            println!(
+                "Forgot {} learned phrase{}.",
+                n,
+                if n == 1 { "" } else { "s" }
+            );
+        } else if let Some(phrase) = forget {
+            if aliases::forget(&path, phrase)? {
+                println!("Forgot “{}”.", aliases::normalize(phrase));
+            } else {
+                anyhow::bail!(
+                    "“{}” isn't a learned phrase here.",
+                    aliases::normalize(phrase)
+                );
+            }
+        } else {
+            println!("{}", aliases::report(&path));
+        }
+        return Ok(());
+    }
+
     // Recover subcommand — handle --list / --clean before loading config.
     if let Some(Command::Recover { list, clean }) = cli.command {
         return run_recover_subcommand(list, clean);
@@ -191,7 +228,10 @@ fn print_help() {
     println!("--yes skips prompts, but never picks an option for you and never skips");
     println!("a type-to-confirm.  GITRUST_DEBUG=1 shows the model's scores.");
     println!();
-    println!("More: gitrust setup · gitrust recover --list · gitrust --help");
+    println!("Picks you make from a \"which did you mean?\" menu are remembered per repo");
+    println!("(never for operations that discard or rewrite work): gitrust aliases.");
+    println!();
+    println!("More: gitrust setup · gitrust aliases · gitrust recover --list · gitrust --help");
 }
 
 fn run_recover_subcommand(list: bool, clean: bool) -> anyhow::Result<()> {

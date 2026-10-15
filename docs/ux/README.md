@@ -138,17 +138,26 @@ Select files to stage                               Pick the files for this comm
 - **The model's probability is debug-only.** Users see what GiTrust understood, not how sure the model was.
 - **`init` and `add remote [name] <url>` are now exact phrases** (they were advertised as instant).
 
-## 6. Not done (worth doing next)
+## 6. Follow-ups (done 2026-10-15, after the first pass)
 
-- Direct-key shortcuts (`[a] [b] [c]`) and group toggles in the file picker — inquire's type-to-filter
-  conflicts with letter keys; needs a small custom picker.
-- Per-file `+N −M` in the picker (needs the manifest's line counts plumbed through the classification).
-- When an argument is asked (e.g. a branch name), the prompt appears before the "✦ Create branch …"
-  line, because the line names the argument.
-- Misclassification recovery (`[w]rong?`) + per-repo aliases (handoff M8) — also the natural source of
-  real phrasings for a future training round.
-- Plan focus/edit/skip keys (handoff Variant C); "fetched N min ago" in status; the force-push
-  explanation block is long and wraps at 100 columns.
+| Item | What it does now | Commit |
+|---|---|---|
+| Line counts in the file picker | each row shows `+N −M` (new files: all additions), aligned before the reason | `2a9c7ad` |
+| Echo before an argument question | "✦  Create a branch · 1.0s" is printed before "Name for the new branch:", then not repeated | `2a9c7ad` |
+| How old status's remote view is | "Remote state as of the last fetch, 8 min ago — gitrust "fetch" refreshes it" (yellow when >10 min or never), from FETCH_HEAD / remote-tracking reflogs | `2a9c7ad` |
+| Long explanations | type-to-confirm blocks wrap to the terminal with a hanging indent (⛔ counted as two columns) | `2a9c7ad` |
+| Direct keys in menus | menus of ≤9 options are numbered: a digit chooses at once, ↑↓/j/k + Enter, Esc cancels; rows cut to the terminal width. Longer lists keep type-to-filter | `8a8147e` |
+| Plan keys | `[e]` edits the commit message, `[s]` drops a trailing push; the legend lists only keys that apply | `2ba30f3` |
+| Learning from corrections (handoff M8) | a pick from a Kev or manual menu is saved per repo in `.git/gitrust/aliases.toml` and used next time before the model ("⚡  Show status · learned"); never for ops that discard or rewrite work; paused mid-operation; `gitrust aliases [--forget "<phrase>" \| --clear]` | this commit |
+
+Deliberately narrower than the handoff:
+- **Plan keys** — not Variant C's focus + skip-any-step: skipping an arbitrary step can change what later
+  steps do (skip "stage" and the commit commits something else). Edit-message and don't-push are the
+  two that are always safe.
+- **Corrections** — learned from menu picks only; there is no post-run "[w]rong?" prompt (an extra
+  question after every run is friction, and "that was wrong" is already an undo phrase).
+- **File-picker group toggles** — `→ all` / `← none` cover most of it; per-group toggles would need a
+  custom multi-select.
 
 ## Reproduce
 
