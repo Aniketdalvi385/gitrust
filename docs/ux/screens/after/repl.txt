@@ -1,0 +1,75 @@
+$ gitrust 
+
+----- repl start -----
+GiTrust — say what you want to do in Git.  help lists instant phrases · exit leaves
+Local model: jaredpalmer/kev-0.8b@v1.0 · remote: origin
+
+? gitrust>
+
+----- status -----
+GiTrust — say what you want to do in Git.  help lists instant phrases · exit leaves
+Local model: jaredpalmer/kev-0.8b@v1.0 · remote: origin
+
+> gitrust> status
+⚡  Show status
+On branch main · tracking origin/main · up to date
+Last commit: 5e5ee2f "Update README" (just now)
+
+Modified:
+  M README.md
+  M src/auth.rs
+  M src/login.rs
+Untracked:
+  ? notes.txt
+
+→ 4 file(s) not staged. Try: gitrust "commit all my files"
+
+(Remote state from last fetch — run `gitrust "fetch"` to refresh.)
+
+? gitrust>
+
+----- exit -----
+GiTrust — say what you want to do in Git.  help lists instant phrases · exit leaves
+Local model: jaredpalmer/kev-0.8b@v1.0 · remote: origin
+
+> gitrust> status
+⚡  Show status
+On branch main · tracking origin/main · up to date
+Last commit: 5e5ee2f "Update README" (just now)
+
+Modified:
+  M README.md
+  M src/auth.rs
+  M src/login.rs
+Untracked:
+  ? notes.txt
+
+→ 4 file(s) not staged. Try: gitrust "commit all my files"
+
+(Remote state from last fetch — run `gitrust "fetch"` to refresh.)
+
+> gitrust> exit
+Bye.
+
+----- final (exit=0) -----
+GiTrust — say what you want to do in Git.  help lists instant phrases · exit leaves
+Local model: jaredpalmer/kev-0.8b@v1.0 · remote: origin
+
+> gitrust> status
+⚡  Show status
+On branch main · tracking origin/main · up to date
+Last commit: 5e5ee2f "Update README" (just now)
+
+Modified:
+  M README.md
+  M src/auth.rs
+  M src/login.rs
+Untracked:
+  ? notes.txt
+
+→ 4 file(s) not staged. Try: gitrust "commit all my files"
+
+(Remote state from last fetch — run `gitrust "fetch"` to refresh.)
+
+> gitrust> exit
+Bye.

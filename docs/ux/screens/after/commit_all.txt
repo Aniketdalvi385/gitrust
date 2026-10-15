@@ -1,0 +1,73 @@
+$ gitrust 'commit everything'
+
+----- message prompt -----
+⚡  Commit everything
+? Commit message:
+[Enter to continue · Esc to cancel]
+
+----- plan -----
+⚡  Commit everything
+> Commit message: Add logout
+
+Plan  · 2 steps · snapshot taken at 52f4474
+
+  ●  stage     all modified files
+  │     + README.md
+  │     + src/auth.rs
+  │     + src/login.rs
+  │     + notes.txt
+  │
+  ●  commit    "Add logout"  ⚠
+
+
+  [Enter] run · [q] cancel
+
+----- done -----
+⚡  Commit everything
+> Commit message: Add logout
+
+Plan  · 2 steps · snapshot taken at 52f4474
+
+  ●  stage     all modified files
+  │     + README.md
+  │     + src/auth.rs
+  │     + src/login.rs
+  │     + notes.txt
+  │
+  ●  commit    "Add logout"  ⚠
+
+
+  [Enter] run · [q] cancel
+  ✓  stage     all modified files
+  │  → Staged all changes
+  │
+  ✓  commit    "Add logout"
+  │  → Committed: Add logout (52f4474→9efa0fb)
+
+  ✓ Done · 1 commit on main, ↑1 ↓0
+  Next: gitrust "push" · changed your mind? gitrust "undo"
+
+----- final (exit=0) -----
+⚡  Commit everything
+> Commit message: Add logout
+
+Plan  · 2 steps · snapshot taken at 52f4474
+
+  ●  stage     all modified files
+  │     + README.md
+  │     + src/auth.rs
+  │     + src/login.rs
+  │     + notes.txt
+  │
+  ●  commit    "Add logout"  ⚠
+
+
+  [Enter] run · [q] cancel
+  ✓  stage     all modified files
+  │  → Staged all changes
+  │
+  ✓  commit    "Add logout"
+  │  → Committed: Add logout (52f4474→9efa0fb)
+
+  ✓ Done · 1 commit on main, ↑1 ↓0
+  Next: gitrust "push" · changed your mind? gitrust "undo"

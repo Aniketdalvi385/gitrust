@@ -1,0 +1,49 @@
+$ gitrust 'help'
+
+----- after run -----
+GiTrust — say what you want to do in Git, in plain words.
+
+These always work instantly (no model needed):
+
+  Look:        status · log · diff · show · branches · remotes · config
+  Save:        commit all my files · commit and push · commit everything and push
+  Share:       push · publish · pull · fetch · safe to pull
+  Branches:    create branch <name> · switch to <name> · current branch
+  Undo & tidy: undo · stash · stash pop · clean up my repo · find my lost work
+  Mid-rebase:  continue rebase · skip rebase · abort rebase · abort merge
+  Setup:       init · add remote origin <url> · add remote <url>
+
+Anything else, just say it:  gitrust "push only the login changes"
+                             gitrust "what did I do yesterday"
+A small local model picks from a fixed list of Git operations — it never
+invents a command — and GiTrust asks you whenever it isn't sure.
+
+Keys: Enter chooses or runs · Esc cancels any prompt (nothing is changed).
+--yes skips prompts, but never picks an option for you and never skips
+a type-to-confirm.  GITRUST_DEBUG=1 shows the model's scores.
+
+More: gitrust setup · gitrust recover --list · gitrust --help
+
+----- final (exit=0) -----
+GiTrust — say what you want to do in Git, in plain words.
+
+These always work instantly (no model needed):
+
+  Look:        status · log · diff · show · branches · remotes · config
+  Save:        commit all my files · commit and push · commit everything and push
+  Share:       push · publish · pull · fetch · safe to pull
+  Branches:    create branch <name> · switch to <name> · current branch
+  Undo & tidy: undo · stash · stash pop · clean up my repo · find my lost work
+  Mid-rebase:  continue rebase · skip rebase · abort rebase · abort merge
+  Setup:       init · add remote origin <url> · add remote <url>
+
+Anything else, just say it:  gitrust "push only the login changes"
+                             gitrust "what did I do yesterday"
+A small local model picks from a fixed list of Git operations — it never
+invents a command — and GiTrust asks you whenever it isn't sure.
+
+Keys: Enter chooses or runs · Esc cancels any prompt (nothing is changed).
+--yes skips prompts, but never picks an option for you and never skips
+a type-to-confirm.  GITRUST_DEBUG=1 shows the model's scores.
+
+More: gitrust setup · gitrust recover --list · gitrust --help

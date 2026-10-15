@@ -1,0 +1,45 @@
+$ gitrust 'commit everything'
+
+----- message prompt -----
+⚡  (instant)
+? Commit message:
+
+----- typed message -----
+⚡  (instant)
+? Commit message:
+
+----- after Enter on plan -----
+⚡  (instant)
+> Commit message: Add logout
+
+Plan  · 2 steps · snapshot taken at fa22c4c
+
+  ●  stage     all modified files  ⚠
+  │
+  ●  commit    "Add logout"  ⚠
+
+  [Enter] run · [q] cancel
+
+? Execute this plan? [Y/n] (Y/n)
+
+----- final (exit=0) -----
+⚡  (instant)
+> Commit message: Add logout
+
+Plan  · 2 steps · snapshot taken at fa22c4c
+
+  ●  stage     all modified files  ⚠
+  │
+  ●  commit    "Add logout"  ⚠
+
+  [Enter] run · [q] cancel
+
+> Execute this plan? [Y/n] Yes
+  ●  stage     all modified files  ⚠  ●
+  │  → Staged all changes
+  │
+  ●  commit    "Add logout"  ⚠  ●
+  │  → Committed: Add logout (fa22c4c→f21f693)
+
+  ✓ Done · 1 commit on main, ↑1 ↓0
+  Next: gitrust "status" · undo with `gitrust recover`

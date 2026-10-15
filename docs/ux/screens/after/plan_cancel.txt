@@ -1,0 +1,59 @@
+$ gitrust 'commit everything'
+
+----- message prompt -----
+⚡  Commit everything
+? Commit message:
+[Enter to continue · Esc to cancel]
+
+----- plan -----
+⚡  Commit everything
+> Commit message: wip
+
+Plan  · 2 steps · snapshot taken at 1cebcba
+
+  ●  stage     all modified files
+  │     + README.md
+  │     + src/auth.rs
+  │     + src/login.rs
+  │     + notes.txt
+  │
+  ●  commit    "wip"  ⚠
+
+
+  [Enter] run · [q] cancel
+
+----- after q -----
+⚡  Commit everything
+> Commit message: wip
+
+Plan  · 2 steps · snapshot taken at 1cebcba
+
+  ●  stage     all modified files
+  │     + README.md
+  │     + src/auth.rs
+  │     + src/login.rs
+  │     + notes.txt
+  │
+  ●  commit    "wip"  ⚠
+
+
+  [Enter] run · [q] cancel
+↪  Canceled — nothing was done.
+
+----- final (exit=1) -----
+⚡  Commit everything
+> Commit message: wip
+
+Plan  · 2 steps · snapshot taken at 1cebcba
+
+  ●  stage     all modified files
+  │     + README.md
+  │     + src/auth.rs
+  │     + src/login.rs
+  │     + notes.txt
+  │
+  ●  commit    "wip"  ⚠
+
+
+  [Enter] run · [q] cancel
+↪  Canceled — nothing was done.

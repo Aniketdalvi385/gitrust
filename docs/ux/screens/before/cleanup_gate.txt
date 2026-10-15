@@ -1,0 +1,74 @@
+$ gitrust 'clean up my repo'
+
+----- cleanup gate -----
+⚡  (instant)
+? Clean up — what should be removed?
+> Discard tracked changes — discard 3 tracked change(s) (a hard reset — backed up to the trash-net f
+irst).
+  Delete untracked files — delete 1 untracked file(s) — these have NO git history; only the trash-ne
+t protects them.
+  Both — discard tracked changes AND delete untracked files (both backed up to the trash-net first).
+  Abort — do nothing.
+[↑↓ to move, enter to select, type to filter]
+
+----- pick first -----
+⚡  (instant)
+? Clean up — what should be removed?
+> Discard tracked changes — discard 3 tracked change(s) (a hard reset — backed up to the trash-net f
+irst).
+  Delete untracked files — delete 1 untracked file(s) — these have NO git history; only the trash-ne
+t protects them.
+  Both — discard tracked changes AND delete untracked files (both backed up to the trash-net first).
+  Abort — do nothing.
+[↑↓ to move, enter to select, type to filter]
+
+----- after pick -----
+⚡  (instant)
+> Clean up — what should be removed? Discard tracked changes — discard 3 tracked change(s) (a hard r
+eset — backed up to the trash-net first).
+
+Plan  · 1 steps · snapshot taken at 059f735
+
+  ●  reset     hard (discards working tree)  ⚠⚠
+
+  Warnings:
+    · reset --hard will discard ALL uncommitted changes. This cannot be undone (except via git reflo
+g).
+
+  [Enter] run · [q] cancel
+
+? Execute this plan? [Y/n] (Y/n)
+
+----- !! killed at timeout -----
+⚡  (instant)
+> Clean up — what should be removed? Discard tracked changes — discard 3 tracked change(s) (a hard r
+eset — backed up to the trash-net first).
+
+Plan  · 1 steps · snapshot taken at 059f735
+
+  ●  reset     hard (discards working tree)  ⚠⚠
+
+  Warnings:
+    · reset --hard will discard ALL uncommitted changes. This cannot be undone (except via git reflo
+g).
+
+  [Enter] run · [q] cancel
+
+? Execute this plan? [Y/n] (Y/n)
+
+----- final (exit=?) -----
+⚡  (instant)
+> Clean up — what should be removed? Discard tracked changes — discard 3 tracked change(s) (a hard r
+eset — backed up to the trash-net first).
+
+Plan  · 1 steps · snapshot taken at 059f735
+
+  ●  reset     hard (discards working tree)  ⚠⚠
+
+  Warnings:
+    · reset --hard will discard ALL uncommitted changes. This cannot be undone (except via git reflo
+g).
+
+  [Enter] run · [q] cancel
+
+? Execute this plan? [Y/n] (Y/n)

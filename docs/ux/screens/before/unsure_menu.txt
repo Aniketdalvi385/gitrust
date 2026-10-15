@@ -1,0 +1,24 @@
+$ gitrust 'put my work up on github'
+
+----- menu shown -----
+? I'm not sure which operation you meant. Which one?
+> scoped push  (23%) — Commit and push only the files belonging to one named feature or topic (for e
+xample the files about one area of the code).
+  add commit  (23%) — Stage all changes (or the named files) and create a commit.
+  push  (13%) — Upload the current branch's commits to the remote, everything, no filtering.
+  none of these — Do nothing — rephrase your request.
+[↑↓ to move, enter to select, type to filter]
+
+----- after Esc -----
+? I'm not sure which operation you meant. Which one?
+> scoped push  (23%) — Commit and push only the files belonging to one named feature or topic (for e
+xample the files about one area of the code).
+  add commit  (23%) — Stage all changes (or the named files) and create a commit.
+  push  (13%) — Upload the current branch's commits to the remote, everything, no filtering.
+  none of these — Do nothing — rephrase your request.
+[↑↓ to move, enter to select, type to filter]
+
+----- final (exit=1) -----
+? I'm not sure which operation you meant. Which one? <canceled>
+✗  Choice prompt failed
+   caused by: Operation was canceled by the user

@@ -1,0 +1,8 @@
+$ gitrust 'make me a sandwich'
+
+----- after run -----
+
+
+----- final (exit=1) -----
+✦  (kev · p=0.95 · 1.5s)
+✗  That doesn't look like a Git request. Try rephrasing — e.g. "show status" or "push my commits".

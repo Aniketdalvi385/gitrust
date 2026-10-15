@@ -1,0 +1,96 @@
+$ gitrust 'push the login changes'
+
+----- file picker -----
+⚡  Push only the “login” changes
+
+Pick the files for this commit · 2 of 4 changed files pre-selected
+? Stage which files?
+> [x] src/login.rs  edited · name matches “login”
+  [x] src/auth.rs   edited · likely part of “login”
+  [ ] notes.txt     new · might be part of “login” — your call
+  [ ] README.md     edited · might be part of “login” — your call
+[↑↓ move · Space toggle · → all · ← none · Enter stage · Esc cancel]
+
+----- message -----
+⚡  Push only the “login” changes
+
+Pick the files for this commit · 2 of 4 changed files pre-selected
+> Stage which files? src/login.rs, src/auth.rs
+? Commit message:
+[Enter to continue · Esc to cancel]
+
+----- plan -----
+⚡  Push only the “login” changes
+
+Pick the files for this commit · 2 of 4 changed files pre-selected
+> Stage which files? src/login.rs, src/auth.rs
+> Commit message: Add logout flow
+
+Plan  · 3 steps · snapshot taken at 1f4a2e0
+
+  ●  stage     src/login.rs, src/auth.rs
+  │
+  ●  commit    "Add logout flow"  ⚠
+  │
+  ●  push      → origin/main  ⚠
+
+
+  [Enter] run · [q] cancel
+
+----- done -----
+⚡  Push only the “login” changes
+
+Pick the files for this commit · 2 of 4 changed files pre-selected
+> Stage which files? src/login.rs, src/auth.rs
+> Commit message: Add logout flow
+
+Plan  · 3 steps · snapshot taken at 1f4a2e0
+
+  ●  stage     src/login.rs, src/auth.rs
+  │
+  ●  commit    "Add logout flow"  ⚠
+  │
+  ●  push      → origin/main  ⚠
+
+
+  [Enter] run · [q] cancel
+  ✓  stage     src/login.rs, src/auth.rs
+  │  → Staged 2 files
+  │
+  ✓  commit    "Add logout flow"
+  │  → Committed: Add logout flow (1f4a2e0→db3a46b)
+  │
+  ✓  push      → origin/main
+  │  → Pushed 1 commit(s) to origin/main
+
+  ✓ Done · 1 commit on main, ↑0 ↓0
+  Next: gitrust "status" · changed your mind? gitrust "undo" (reverts it — it's pushed)
+
+----- final (exit=0) -----
+⚡  Push only the “login” changes
+
+Pick the files for this commit · 2 of 4 changed files pre-selected
+> Stage which files? src/login.rs, src/auth.rs
+> Commit message: Add logout flow
+
+Plan  · 3 steps · snapshot taken at 1f4a2e0
+
+  ●  stage     src/login.rs, src/auth.rs
+  │
+  ●  commit    "Add logout flow"  ⚠
+  │
+  ●  push      → origin/main  ⚠
+
+
+  [Enter] run · [q] cancel
+  ✓  stage     src/login.rs, src/auth.rs
+  │  → Staged 2 files
+  │
+  ✓  commit    "Add logout flow"
+  │  → Committed: Add logout flow (1f4a2e0→db3a46b)
+  │
+  ✓  push      → origin/main
+  │  → Pushed 1 commit(s) to origin/main
+
+  ✓ Done · 1 commit on main, ↑0 ↓0
+  Next: gitrust "status" · changed your mind? gitrust "undo" (reverts it — it's pushed)

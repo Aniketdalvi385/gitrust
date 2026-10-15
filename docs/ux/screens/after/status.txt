@@ -1,0 +1,33 @@
+$ gitrust 'status'
+
+----- after run -----
+⚡  Show status
+On branch main · tracking origin/main · up to date
+Last commit: f150d2c "Update README" (just now)
+
+Modified:
+  M README.md
+  M src/auth.rs
+  M src/login.rs
+Untracked:
+  ? notes.txt
+
+→ 4 file(s) not staged. Try: gitrust "commit all my files"
+
+(Remote state from last fetch — run `gitrust "fetch"` to refresh.)
+
+----- final (exit=0) -----
+⚡  Show status
+On branch main · tracking origin/main · up to date
+Last commit: f150d2c "Update README" (just now)
+
+Modified:
+  M README.md
+  M src/auth.rs
+  M src/login.rs
+Untracked:
+  ? notes.txt
+
+→ 4 file(s) not staged. Try: gitrust "commit all my files"
+
+(Remote state from last fetch — run `gitrust "fetch"` to refresh.)

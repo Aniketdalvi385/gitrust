@@ -1,0 +1,10 @@
+$ gitrust 'whats conflicting'
+
+----- after run -----
+
+
+----- final (exit=0) -----
+✦  (kev · p=0.56 · 2.8s)
+Fetching origin… ✓
+
+No remote-tracking ref found (have you fetched recently?).

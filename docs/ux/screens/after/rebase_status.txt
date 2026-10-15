@@ -1,0 +1,23 @@
+$ gitrust 'whats conflicting'
+
+----- after run -----
+⚡  Show status
+Not on a branch · at c448b0b
+⚠ Rebase in progress — stopped at commit 1 of 2
+  1 conflicted file (listed below) — edit it and remove the <<<<<<< / >>>>>>> markers.
+  Then: gitrust "continue rebase" · or go back to before it started: gitrust "abort rebase"
+Last commit: c448b0b "Main change" (just now)
+
+Conflicted:
+  ! src/login.rs
+
+----- final (exit=0) -----
+⚡  Show status
+Not on a branch · at c448b0b
+⚠ Rebase in progress — stopped at commit 1 of 2
+  1 conflicted file (listed below) — edit it and remove the <<<<<<< / >>>>>>> markers.
+  Then: gitrust "continue rebase" · or go back to before it started: gitrust "abort rebase"
+Last commit: c448b0b "Main change" (just now)
+
+Conflicted:
+  ! src/login.rs

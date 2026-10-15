@@ -1,0 +1,9 @@
+$ gitrust 'make me a sandwich'
+
+----- after run -----
+✗  That doesn't look like a Git request. Try e.g. "show status" or "push my commits" — or `gitrust h
+elp` for phrases that always work.
+
+----- final (exit=1) -----
+✗  That doesn't look like a Git request. Try e.g. "show status" or "push my commits" — or `gitrust h
+elp` for phrases that always work.

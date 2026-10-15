@@ -1,0 +1,19 @@
+$ gitrust 'status'
+
+----- after run -----
+⚡  (instant)
+HEAD detached at HEAD
+Last commit: e6cb6c2 "Main change" (just now)
+
+Nothing to commit, working tree clean.
+
+→ No upstream set. Try: gitrust "publish"
+
+----- final (exit=0) -----
+⚡  (instant)
+HEAD detached at HEAD
+Last commit: e6cb6c2 "Main change" (just now)
+
+Nothing to commit, working tree clean.
+
+→ No upstream set. Try: gitrust "publish"

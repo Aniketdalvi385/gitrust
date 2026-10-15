@@ -1,0 +1,40 @@
+$ gitrust 'show me the history'
+
+----- after run -----
+⚠  The Kev model server isn't running at http://127.0.0.1:8999.
+  Start it with `gitrust setup`, or set kev_dir + kev_autostart in ~/.gitrust.toml.
+? The local model isn't available — pick what you want to do (type to filter):
+> Show status  — what's changed, staged or untracked
+  Show history  — recent commits
+  Show changes  — line-by-line diff of your edits
+  List branches  — and which one you're on
+  Show Git settings  — your name, email and other config
+  Show a commit  — author, date, message and files
+v Check the remote  — ahead or behind? changes nothing
+[↑↓ move · Enter choose · Esc cancel]
+
+----- !! killed at timeout -----
+⚠  The Kev model server isn't running at http://127.0.0.1:8999.
+  Start it with `gitrust setup`, or set kev_dir + kev_autostart in ~/.gitrust.toml.
+? The local model isn't available — pick what you want to do (type to filter):
+> Show status  — what's changed, staged or untracked
+  Show history  — recent commits
+  Show changes  — line-by-line diff of your edits
+  List branches  — and which one you're on
+  Show Git settings  — your name, email and other config
+  Show a commit  — author, date, message and files
+v Check the remote  — ahead or behind? changes nothing
+[↑↓ move · Enter choose · Esc cancel]
+
+----- final (exit=?) -----
+⚠  The Kev model server isn't running at http://127.0.0.1:8999.
+  Start it with `gitrust setup`, or set kev_dir + kev_autostart in ~/.gitrust.toml.
+? The local model isn't available — pick what you want to do (type to filter):
+> Show status  — what's changed, staged or untracked
+  Show history  — recent commits
+  Show changes  — line-by-line diff of your edits
+  List branches  — and which one you're on
+  Show Git settings  — your name, email and other config
+  Show a commit  — author, date, message and files
+v Check the remote  — ahead or behind? changes nothing
+[↑↓ move · Enter choose · Esc cancel]

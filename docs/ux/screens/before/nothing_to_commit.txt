@@ -1,0 +1,13 @@
+$ gitrust 'commit everything'
+
+----- after run -----
+⚡  (instant)
+? Commit message:
+
+----- !! killed at timeout -----
+⚡  (instant)
+? Commit message:
+
+----- final (exit=?) -----
+⚡  (instant)
+? Commit message:

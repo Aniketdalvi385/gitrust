@@ -177,18 +177,21 @@ async fn run() -> anyhow::Result<()> {
 }
 
 fn print_help() {
-    println!("GiTrust canonical phrases (always work, instant, no model needed):\n");
-    println!("  Inspect:    status · log · show · diff · branches · remotes · config");
-    println!("  Track:      fetch · safe to pull · merge preview · check remote");
-    println!("  Stage:      commit · commit all my files · commit <file>");
-    println!("  Branch:     create branch <name> · switch to <name> · current branch");
-    println!("  Sync:       push · publish · pull · rebase");
-    println!("  Recover:    undo · stash · stash pop · force push · discard local");
-    println!("  Setup:      init · add remote <url> · delete repository");
-    println!("  Tooling:    gitrust setup · gitrust help · gitrust recover --list / --clean");
+    println!("GiTrust — say what you want to do in Git, in plain words.\n");
+    println!("These always work instantly (no model needed):\n");
+    for (section, phrases) in copy::HELP_SECTIONS {
+        println!("  {:<13}{}", format!("{}:", section), phrases.join(" · "));
+    }
     println!();
-    println!("Anything else: phrase it naturally — the local Kev model routes it, and asks you when it isn't sure.");
-    println!("Use --yes to auto-confirm non-destructive prompts.");
+    println!("Anything else, just say it:  gitrust \"push only the login changes\"");
+    println!("                             gitrust \"what did I do yesterday\"");
+    println!("{}", copy::HELP_TRUST);
+    println!();
+    println!("Keys: Enter chooses or runs · Esc cancels any prompt (nothing is changed).");
+    println!("--yes skips prompts, but never picks an option for you and never skips");
+    println!("a type-to-confirm.  GITRUST_DEBUG=1 shows the model's scores.");
+    println!();
+    println!("More: gitrust setup · gitrust recover --list · gitrust --help");
 }
 
 fn run_recover_subcommand(list: bool, clean: bool) -> anyhow::Result<()> {
@@ -252,9 +255,9 @@ async fn run_repl(
 ) -> anyhow::Result<()> {
     use inquire::Text;
 
-    println!("GiTrust — say what you want to do in Git.  (exit, Ctrl-C or an empty line to leave)");
+    println!("GiTrust — say what you want to do in Git.  help lists instant phrases · exit leaves");
     println!(
-        "Model: kev ({})  |  Remote: {}",
+        "Local model: {} · remote: {}",
         config.kev_run, config.remote
     );
     println!();
@@ -274,6 +277,11 @@ async fn run_repl(
         if trimmed.is_empty() || ux::is_repl_exit(trimmed) {
             println!("Bye.");
             break;
+        }
+        if matches!(trimmed.to_lowercase().as_str(), "help" | "?" | "h") {
+            print_help();
+            println!();
+            continue;
         }
 
         if let Err(e) = agent::run_agent(trimmed, config, auto_confirm, show_all).await {

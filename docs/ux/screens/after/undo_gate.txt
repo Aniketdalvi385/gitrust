@@ -1,0 +1,24 @@
+$ gitrust 'undo'
+
+----- undo gate -----
+⚡  Undo the last commit
+? Undo da4c473 "Update README"? It's already pushed, so reverting is the safe choice.
+> Undo with a revert commit  — a new commit reverses it; history is kept — safe after pushing
+  Undo, keep the changes staged  — the commit goes; its changes stay staged, ready to re-commit
+  Undo, keep the changes in my files  — the commit goes; its changes stay in your files, unstaged
+  Undo and throw the changes away  ⚠⚠  — both go (git keeps them ~90 days) · you'll type to confirm
+[↑↓ move · Enter choose · Esc cancel]
+
+----- Esc -----
+⚡  Undo the last commit
+? Undo da4c473 "Update README"? It's already pushed, so reverting is the safe choice.
+> Undo with a revert commit  — a new commit reverses it; history is kept — safe after pushing
+  Undo, keep the changes staged  — the commit goes; its changes stay staged, ready to re-commit
+  Undo, keep the changes in my files  — the commit goes; its changes stay in your files, unstaged
+  Undo and throw the changes away  ⚠⚠  — both go (git keeps them ~90 days) · you'll type to confirm
+[↑↓ move · Enter choose · Esc cancel]
+
+----- final (exit=1) -----
+⚡  Undo the last commit
+? Undo da4c473 "Update README"? It's already pushed, so reverting is the safe choice. <canceled>
+↪  Canceled — nothing was done.

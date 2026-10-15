@@ -1,0 +1,8 @@
+$ gitrust 'continue'
+
+----- after run -----
+⠴ Understanding your request…
+
+----- final (exit=1) -----
+✦  Continue the rebase · 0.7s
+✗  1 file(s) still conflicted: src/login.rs — resolve and stage them, then continue.

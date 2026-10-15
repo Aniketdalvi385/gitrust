@@ -1,0 +1,19 @@
+$ gitrust 'put my work up on github'
+
+----- menu shown -----
+? I'm not sure which operation you meant. Which one?
+> Push only some changes  — pick one topic's files, commit, push
+  Commit everything  — stage all changes and commit — no push
+  Push  — upload all your commits
+[↑↓ move · Enter choose · Esc cancel]
+
+----- after Esc -----
+? I'm not sure which operation you meant. Which one?
+> Push only some changes  — pick one topic's files, commit, push
+  Commit everything  — stage all changes and commit — no push
+  Push  — upload all your commits
+[↑↓ move · Enter choose · Esc cancel]
+
+----- final (exit=1) -----
+? I'm not sure which operation you meant. Which one? <canceled>
+↪  Canceled — nothing was done.

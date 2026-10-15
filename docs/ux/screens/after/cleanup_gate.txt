@@ -1,0 +1,66 @@
+$ gitrust 'clean up my repo'
+
+----- cleanup gate -----
+⚡  Discard uncommitted changes
+? Clean up — what should be removed?
+> Discard changes to 3 tracked files  — backed up to ~/.gitrust/trash first
+  Delete 1 untracked file  — never committed, so the trash backup is their only copy
+  Both  — discard and delete — both backed up first
+[↑↓ move · Enter choose · Esc cancel]
+
+----- plan -----
+⚡  Discard uncommitted changes
+> Clean up — what should be removed? Discard changes to 3 tracked files
+
+Plan  · 1 step · snapshot taken at d37b8ce
+
+  ●  discard   uncommitted changes to tracked files  ⚠⚠
+
+  Warnings:
+    · Discards uncommitted changes in tracked files — they're backed up to ~/.gitrust/trash first; a
+ny dropped commit stays recoverable from git's reflog.
+
+
+  [Enter] run · [q] cancel
+
+----- done -----
+⚡  Discard uncommitted changes
+> Clean up — what should be removed? Discard changes to 3 tracked files
+
+Plan  · 1 step · snapshot taken at d37b8ce
+
+  ●  discard   uncommitted changes to tracked files  ⚠⚠
+
+  Warnings:
+    · Discards uncommitted changes in tracked files — they're backed up to ~/.gitrust/trash first; a
+ny dropped commit stays recoverable from git's reflog.
+
+
+  [Enter] run · [q] cancel
+  ✓  discard   uncommitted changes to tracked files
+  │  → Discarded the changes to tracked files
+  │  A backup of the discarded changes is in ~/.gitrust/trash/20261015-124449 for 7 days.
+
+  ✓ Done · on main, ↑0 ↓0
+  Next: gitrust "status"
+
+----- final (exit=0) -----
+⚡  Discard uncommitted changes
+> Clean up — what should be removed? Discard changes to 3 tracked files
+
+Plan  · 1 step · snapshot taken at d37b8ce
+
+  ●  discard   uncommitted changes to tracked files  ⚠⚠
+
+  Warnings:
+    · Discards uncommitted changes in tracked files — they're backed up to ~/.gitrust/trash first; a
+ny dropped commit stays recoverable from git's reflog.
+
+
+  [Enter] run · [q] cancel
+  ✓  discard   uncommitted changes to tracked files
+  │  → Discarded the changes to tracked files
+  │  A backup of the discarded changes is in ~/.gitrust/trash/20261015-124449 for 7 days.
+
+  ✓ Done · on main, ↑0 ↓0
+  Next: gitrust "status"

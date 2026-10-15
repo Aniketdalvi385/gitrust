@@ -1,0 +1,9 @@
+$ gitrust 'status'
+
+----- after run -----
+⚡  Show status
+✗  Not inside a git repository. Run 'gitrust "initialize a repository"' or 'git init' first.
+
+----- final (exit=1) -----
+⚡  Show status
+✗  Not inside a git repository. Run 'gitrust "initialize a repository"' or 'git init' first.

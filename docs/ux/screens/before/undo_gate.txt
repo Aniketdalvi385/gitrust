@@ -1,0 +1,33 @@
+$ gitrust 'undo'
+
+----- undo gate -----
+⚡  (instant)
+? Undo f2410be "Update README" — what should happen to its changes?
+> Make an inverse commit (revert) — This commit is already on the remote, so revert is the safe defa
+ult: add an inverse commit (revert) — history is preserved; safe even after pushing.
+  Keep them staged — keep them staged (soft reset) — the commit is removed, files stay ready to re-c
+ommit.
+  Keep them in files — keep them in your files, unstaged (mixed reset) — re-stage what you want befo
+re committing.
+  Discard completely — discard them completely (hard reset) — the changes are gone (reflog holds the
+m ~90 days). Requires typing to confirm.
+[↑↓ to move, enter to select, type to filter]
+
+----- Esc -----
+⚡  (instant)
+? Undo f2410be "Update README" — what should happen to its changes?
+> Make an inverse commit (revert) — This commit is already on the remote, so revert is the safe defa
+ult: add an inverse commit (revert) — history is preserved; safe even after pushing.
+  Keep them staged — keep them staged (soft reset) — the commit is removed, files stay ready to re-c
+ommit.
+  Keep them in files — keep them in your files, unstaged (mixed reset) — re-stage what you want befo
+re committing.
+  Discard completely — discard them completely (hard reset) — the changes are gone (reflog holds the
+m ~90 days). Requires typing to confirm.
+[↑↓ to move, enter to select, type to filter]
+
+----- final (exit=1) -----
+⚡  (instant)
+? Undo f2410be "Update README" — what should happen to its changes? <canceled>
+✗  Choice prompt failed
+   caused by: Operation was canceled by the user

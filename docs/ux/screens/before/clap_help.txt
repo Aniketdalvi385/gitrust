@@ -1,0 +1,77 @@
+$ gitrust '--help'
+
+----- after run -----
+GiTrust — Agentic Git CLI. Natural language interface for Git. Powered by a local decision model (Ke
+v).
+
+Examples: gitrust setup gitrust "push login changes" gitrust "commit and push with message feat: add
+ auth" gitrust "show status" gitrust --recover gitrust              # opens interactive REPL
+
+Usage: gitrust [OPTIONS] [QUERY] [COMMAND]
+
+Commands:
+  setup    Set up the local Kev model (clone, install, start, smoke test)
+  help     Show the list of canonical phrases GiTrust understands
+  recover  Manage recovery snapshots (preserved when a pipeline fails)
+
+Arguments:
+  [QUERY]
+          Query to execute (omit for interactive REPL mode)
+
+Options:
+  -y, --yes
+          Skip all confirmation prompts (auto-confirm). Does NOT bypass type-to-confirm safety gates
+
+      --recover
+          Recover from an interrupted pipeline (restores HEAD and index to pre-pipeline state)
+
+      --model <MODEL>
+          Kev checkpoint to serve if GiTrust has to start the server (Hub id or local run directory,
+ e.g. a fine-tune). Ignored if a server is already up
+
+      --show-all
+          Show all modified files in file selection (including unrelated)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+
+----- final (exit=0) -----
+GiTrust — Agentic Git CLI. Natural language interface for Git. Powered by a local decision model (Ke
+v).
+
+Examples: gitrust setup gitrust "push login changes" gitrust "commit and push with message feat: add
+ auth" gitrust "show status" gitrust --recover gitrust              # opens interactive REPL
+
+Usage: gitrust [OPTIONS] [QUERY] [COMMAND]
+
+Commands:
+  setup    Set up the local Kev model (clone, install, start, smoke test)
+  help     Show the list of canonical phrases GiTrust understands
+  recover  Manage recovery snapshots (preserved when a pipeline fails)
+
+Arguments:
+  [QUERY]
+          Query to execute (omit for interactive REPL mode)
+
+Options:
+  -y, --yes
+          Skip all confirmation prompts (auto-confirm). Does NOT bypass type-to-confirm safety gates
+
+      --recover
+          Recover from an interrupted pipeline (restores HEAD and index to pre-pipeline state)
+
+      --model <MODEL>
+          Kev checkpoint to serve if GiTrust has to start the server (Hub id or local run directory,
+ e.g. a fine-tune). Ignored if a server is already up
+
+      --show-all
+          Show all modified files in file selection (including unrelated)
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version

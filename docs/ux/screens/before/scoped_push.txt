@@ -1,0 +1,101 @@
+$ gitrust 'push the login changes'
+
+----- file picker -----
+⚡  (instant)
+
+Select files to stage
+  Related   (2, pre-checked)
+  Uncertain (2, visible, not pre-checked)
+
+? Select files to stage (Space to toggle, Enter to confirm):
+> [x] [related]   src/login.rs  filename match
+  [x] [related]   src/auth.rs  kev p=0.77
+  [ ] [uncertain] notes.txt  kev p=0.30
+  [ ] [uncertain] README.md  kev p=0.63
+[↑↓ to move, space to select one, → to all, ← to none, type to filter]
+
+----- accept files -----
+⚡  (instant)
+
+Select files to stage
+  Related   (2, pre-checked)
+  Uncertain (2, visible, not pre-checked)
+
+? Select files to stage (Space to toggle, Enter to confirm):
+> [x] [related]   src/login.rs  filename match
+  [x] [related]   src/auth.rs  kev p=0.77
+  [ ] [uncertain] notes.txt  kev p=0.30
+  [ ] [uncertain] README.md  kev p=0.63
+[↑↓ to move, space to select one, → to all, ← to none, type to filter]
+
+----- message -----
+⚡  (instant)
+
+Select files to stage
+  Related   (2, pre-checked)
+  Uncertain (2, visible, not pre-checked)
+
+> Select files to stage (Space to toggle, Enter to confirm): [related]   src/login.rs  filename matc
+h, [related]   src/auth.rs  kev p=0.77
+? Commit message:
+
+----- run plan -----
+⚡  (instant)
+
+Select files to stage
+  Related   (2, pre-checked)
+  Uncertain (2, visible, not pre-checked)
+
+> Select files to stage (Space to toggle, Enter to confirm): [related]   src/login.rs  filename matc
+h, [related]   src/auth.rs  kev p=0.77
+> Commit message: Add logout flow
+
+Plan  · 3 steps · snapshot taken at fd82f08
+
+  ●  stage     src/login.rs, src/auth.rs  ⚠
+  │     + src/login.rs
+  │     + src/auth.rs
+  │
+  ●  commit    "Add logout flow"  ⚠
+  │
+  ●  push      → origin/main  ⚠
+
+  [Enter] run · [q] cancel
+
+? Execute this plan? [Y/n] (Y/n)
+
+----- final (exit=0) -----
+⚡  (instant)
+
+Select files to stage
+  Related   (2, pre-checked)
+  Uncertain (2, visible, not pre-checked)
+
+> Select files to stage (Space to toggle, Enter to confirm): [related]   src/login.rs  filename matc
+h, [related]   src/auth.rs  kev p=0.77
+> Commit message: Add logout flow
+
+Plan  · 3 steps · snapshot taken at fd82f08
+
+  ●  stage     src/login.rs, src/auth.rs  ⚠
+  │     + src/login.rs
+  │     + src/auth.rs
+  │
+  ●  commit    "Add logout flow"  ⚠
+  │
+  ●  push      → origin/main  ⚠
+
+  [Enter] run · [q] cancel
+
+> Execute this plan? [Y/n] Yes
+  ●  stage     src/login.rs, src/auth.rs  ⚠  ●
+  │  → Staged 2 files
+  │
+  ●  commit    "Add logout flow"  ⚠  ●
+  │  → Committed: Add logout flow (fd82f08→599bf7a)
+  │
+  ●  push      → origin/main  ⚠  ●
+  │  → Pushed 1 commit(s) to origin/main
+
+  ✓ Done · 1 commit on main, ↑0 ↓0
+  Next: gitrust "status" · undo with `gitrust recover`

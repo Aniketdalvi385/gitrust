@@ -1,0 +1,13 @@
+$ gitrust 'show me the history'
+
+----- after run -----
+
+
+----- final (exit=0) -----
+✦  (kev · p=0.99 · 1.1s)
+On branch main · tracking origin/main · up to date
+
+e42415d  (just now)  Update README  ← HEAD
+b759d4b  (just now)  Initial commit
+92ecc42  (just now)  Add login form
+254619d  (just now)  Fix token check

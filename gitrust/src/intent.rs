@@ -180,9 +180,17 @@ pub fn try_canonical(query: &str) -> Option<IntentType> {
     if let Some(intent) = capture_amend_message(query) {
         return Some(intent);
     }
+    // "add remote [name] <url>" — the URL is captured from the RAW query (its
+    // path can be case-sensitive).
+    if let Some(intent) = capture_add_remote(query) {
+        return Some(intent);
+    }
     let q = query.trim().to_lowercase();
     let intent = match q.as_str() {
         "status" | "st" => IntentType::ReadOnly(ReadOnlyOp::Status),
+        "init" | "git init" | "initialize a repository" => {
+            IntentType::ScopedWrite(ScopedWriteOp::Init)
+        }
         "log" => IntentType::ReadOnly(ReadOnlyOp::Log { count: 10 }),
         "diff" => IntentType::ReadOnly(ReadOnlyOp::Diff { path: None }),
         "remotes" | "remote" | "remote -v" => IntentType::ReadOnly(ReadOnlyOp::Remotes),
@@ -1155,6 +1163,29 @@ fn capture_commit_ref(raw: &str) -> Option<String> {
 }
 
 /// A remote URL token (scheme://… or scp-style git@host:path).
+/// "add remote <url>" / "add remote <name> <url>" (also "git remote add …").
+/// Exactly that shape, or None — anything looser goes to the model.
+fn capture_add_remote(raw: &str) -> Option<IntentType> {
+    let t = raw.trim();
+    let lower = t.to_lowercase();
+    let prefix = ["add remote ", "git remote add ", "remote add "]
+        .iter()
+        .find(|p| lower.starts_with(*p))?;
+    let rest: Vec<&str> = t[prefix.len()..].split_whitespace().collect();
+    let is_url = |w: &str| w.contains("://") || (w.starts_with("git@") && w.contains(':'));
+    let (name, url) = match rest.as_slice() {
+        [url] if is_url(url) => ("origin".to_string(), url.to_string()),
+        [name, url] if is_url(url) && is_single_git_ref_token(name) => {
+            (name.to_string(), url.to_string())
+        }
+        _ => return None,
+    };
+    Some(IntentType::ScopedWrite(ScopedWriteOp::AddRemote {
+        name,
+        url,
+    }))
+}
+
 fn capture_url(raw: &str) -> Option<String> {
     raw.split_whitespace()
         .find(|w| w.contains("://") || (w.starts_with("git@") && w.contains(':')))
@@ -1251,6 +1282,32 @@ mod tests {
         assert!(try_canonical("status of branch").is_none());
         assert!(try_canonical("push my login work").is_none());
         assert!(try_canonical("show me the status").is_none());
+    }
+
+    #[test]
+    fn test_canonical_init_and_add_remote() {
+        // Advertised by `gitrust help` (and the not-a-repo message) as instant;
+        // they used to need the model — even outside a repository.
+        for q in ["init", "git init", "initialize a repository"] {
+            assert!(
+                matches!(
+                    try_canonical(q),
+                    Some(IntentType::ScopedWrite(ScopedWriteOp::Init))
+                ),
+                "{q}"
+            );
+        }
+        assert!(matches!(
+            try_canonical("add remote origin https://github.com/Acme/Site.git"),
+            Some(IntentType::ScopedWrite(ScopedWriteOp::AddRemote { ref name, ref url }))
+                if name == "origin" && url == "https://github.com/Acme/Site.git"
+        ));
+        assert!(matches!(
+            try_canonical("add remote git@github.com:me/proj.git"),
+            Some(IntentType::ScopedWrite(ScopedWriteOp::AddRemote { ref name, .. })) if name == "origin"
+        ));
+        assert!(try_canonical("add remote").is_none());
+        assert!(try_canonical("add remote origin").is_none());
     }
 
     #[test]

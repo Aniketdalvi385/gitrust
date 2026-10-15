@@ -1,0 +1,45 @@
+$ gitrust 'force push'
+
+----- gate -----
+⚡  (instant)
+
+  ⛔ Irreversible: Replaces the remote branch with your local version, overwriting whatever is there
+.
+     Risks:    Anyone who fetched the old version will need to reset. Their commits made on top are
+abandoned.
+     Recovery: Recovery exists only if someone has the old SHA: `git reflog` finds it locally; other
+wise it's gone.
+     Safety:   Uses --force-with-lease — refuses if the remote moved since your last fetch (catches
+accidental teammate overwrites).
+
+? Type 'main' to confirm force-push to origin/main: main
+
+----- ctrl-c -----
+⚡  (instant)
+
+  ⛔ Irreversible: Replaces the remote branch with your local version, overwriting whatever is there
+.
+     Risks:    Anyone who fetched the old version will need to reset. Their commits made on top are
+abandoned.
+     Recovery: Recovery exists only if someone has the old SHA: `git reflog` finds it locally; other
+wise it's gone.
+     Safety:   Uses --force-with-lease — refuses if the remote moved since your last fetch (catches
+accidental teammate overwrites).
+
+? Type 'main' to confirm force-push to origin/main: main
+
+----- final (exit=0) -----
+⚡  (instant)
+
+  ⛔ Irreversible: Replaces the remote branch with your local version, overwriting whatever is there
+.
+     Risks:    Anyone who fetched the old version will need to reset. Their commits made on top are
+abandoned.
+     Recovery: Recovery exists only if someone has the old SHA: `git reflog` finds it locally; other
+wise it's gone.
+     Safety:   Uses --force-with-lease — refuses if the remote moved since your last fetch (catches
+accidental teammate overwrites).
+
+? Type 'main' to confirm force-push to origin/main: main
+  Aborted.
+  Nothing to do.

@@ -1,0 +1,14 @@
+$ gitrust 'i lost a commit help'
+
+----- screen -----
+⠴ Understanding your request…
+
+----- esc -----
+✦  Find lost work · 1.0s
+Nothing found. Work that was never committed, or that git has already garbage-collected, may be unre
+coverable.
+
+----- final (exit=0) -----
+✦  Find lost work · 1.0s
+Nothing found. Work that was never committed, or that git has already garbage-collected, may be unre
+coverable.

@@ -1,0 +1,39 @@
+$ gitrust 'commit all my work and push it'
+
+----- first screen -----
+
+
+----- message -----
+
+
+----- run -----
+Ship it
+
+----- final (exit=0) -----
+Ship it
+
+✦  (kev · p=0.92 · 3.9s)
+> Commit message: Ship it
+
+Plan  · 3 steps · snapshot taken at f42b237
+
+  ●  stage     all modified files  ⚠
+  │
+  ●  commit    "Ship it"  ⚠
+  │
+  ●  push      → origin/main  ⚠
+
+  [Enter] run · [q] cancel
+
+> Execute this plan? [Y/n] Yes
+  ●  stage     all modified files  ⚠  ●
+  │  → Staged all changes
+  │
+  ●  commit    "Ship it"  ⚠  ●
+  │  → Committed: Ship it (f42b237→d09147a)
+  │
+  ●  push      → origin/main  ⚠  ●
+  │  → Pushed 1 commit(s) to origin/main
+
+  ✓ Done · 1 commit on main, ↑0 ↓0
+  Next: gitrust "status" · undo with `gitrust recover`

@@ -1,0 +1,15 @@
+$ gitrust 'make me a new branch'
+
+----- prompt shown -----
+? Name for the new branch:
+
+----- typed bad name -----
+? Name for the new branch:
+
+----- after -----
+> Name for the new branch: feat/Login Page (v2)
+✗  'feat/Login Page (v2)' is not a valid branch name.
+
+----- final (exit=1) -----
+> Name for the new branch: feat/Login Page (v2)
+✗  'feat/Login Page (v2)' is not a valid branch name.

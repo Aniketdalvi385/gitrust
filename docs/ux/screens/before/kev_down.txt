@@ -1,0 +1,52 @@
+$ gitrust 'show me the history'
+
+----- after run -----
+⚠  The Kev model server isn't running at http://127.0.0.1:8999.
+  Start it with `gitrust setup`, or set kev_dir + kev_autostart in ~/.gitrust.toml.
+   Falling back to manual mode.
+
+  The Kev model is unavailable. Entering manual mode.
+  What would you like to do?
+? Select operation:
+> git init
+  git remote add
+  git remote remove
+  delete repository (.git)
+  git status
+  git remote -v
+v git branch --list
+[↑↓ to move, enter to select, type to filter]
+
+----- !! killed at timeout -----
+⚠  The Kev model server isn't running at http://127.0.0.1:8999.
+  Start it with `gitrust setup`, or set kev_dir + kev_autostart in ~/.gitrust.toml.
+   Falling back to manual mode.
+
+  The Kev model is unavailable. Entering manual mode.
+  What would you like to do?
+? Select operation:
+> git init
+  git remote add
+  git remote remove
+  delete repository (.git)
+  git status
+  git remote -v
+v git branch --list
+[↑↓ to move, enter to select, type to filter]
+
+----- final (exit=?) -----
+⚠  The Kev model server isn't running at http://127.0.0.1:8999.
+  Start it with `gitrust setup`, or set kev_dir + kev_autostart in ~/.gitrust.toml.
+   Falling back to manual mode.
+
+  The Kev model is unavailable. Entering manual mode.
+  What would you like to do?
+? Select operation:
+> git init
+  git remote add
+  git remote remove
+  delete repository (.git)
+  git status
+  git remote -v
+v git branch --list
+[↑↓ to move, enter to select, type to filter]

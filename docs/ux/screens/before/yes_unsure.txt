@@ -1,0 +1,8 @@
+$ gitrust '--yes' 'put my work up on github'
+
+----- after run -----
+
+
+----- final (exit=1) -----
+✗  --yes flag cannot answer this choice for you: "I'm not sure which operation you meant. Which one?
+" Run interactively and pick an option manually.

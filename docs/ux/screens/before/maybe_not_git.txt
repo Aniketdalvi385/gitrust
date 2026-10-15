@@ -1,0 +1,26 @@
+$ gitrust 'where am i right now'
+
+----- menu shown -----
+? That may not be a Git request. If it is, which operation did you mean?
+> status  (2%) — Show the working tree status: which files are modified, staged or untracked. Local
+only.
+  find lost work  (2%) — Search for and recover lost or deleted commits.
+  checkout  (2%) — Switch to a different existing branch.
+  none of these — Do nothing — rephrase your request.
+[↑↓ to move, enter to select, type to filter]
+
+----- pick 2nd -----
+? That may not be a Git request. If it is, which operation did you mean?
+> status  (2%) — Show the working tree status: which files are modified, staged or untracked. Local
+only.
+  find lost work  (2%) — Search for and recover lost or deleted commits.
+  checkout  (2%) — Switch to a different existing branch.
+  none of these — Do nothing — rephrase your request.
+[↑↓ to move, enter to select, type to filter]
+
+----- final (exit=0) -----
+> That may not be a Git request. If it is, which operation did you mean? find lost work  (2%) — Sear
+ch for and recover lost or deleted commits.
+◇  (you picked)
+Nothing found. Work that was never committed, or that git has already garbage-collected, may be unre
+coverable.

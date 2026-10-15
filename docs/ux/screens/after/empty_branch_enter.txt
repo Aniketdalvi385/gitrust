@@ -1,0 +1,19 @@
+$ gitrust 'make me a new branch'
+
+----- prompt -----
+? Name for the new branch:
+[Enter to continue · Esc to cancel]
+
+----- after empty enter -----
+# This can't be empty — type a value, or press Esc to cancel.
+? Name for the new branch:
+[Enter to continue · Esc to cancel]
+
+----- esc -----
+# This can't be empty — type a value, or press Esc to cancel.
+? Name for the new branch:
+[Enter to continue · Esc to cancel]
+
+----- final (exit=1) -----
+? Name for the new branch: <canceled>
+↪  Canceled — nothing was done.

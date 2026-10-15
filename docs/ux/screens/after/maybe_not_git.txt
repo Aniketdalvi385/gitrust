@@ -1,0 +1,21 @@
+$ gitrust 'where am i right now'
+
+----- menu shown -----
+? That may not be a Git request. If it is, which operation did you mean?
+> Show status  — what's changed, staged or untracked
+  Find lost work  — search for deleted commits
+  Switch branch  — to a branch that exists
+[↑↓ move · Enter choose · Esc cancel]
+
+----- pick 2nd -----
+? That may not be a Git request. If it is, which operation did you mean?
+> Show status  — what's changed, staged or untracked
+  Find lost work  — search for deleted commits
+  Switch branch  — to a branch that exists
+[↑↓ move · Enter choose · Esc cancel]
+
+----- final (exit=0) -----
+> That may not be a Git request. If it is, which operation did you mean? Find lost work
+◇  Find lost work · your choice
+Nothing found. Work that was never committed, or that git has already garbage-collected, may be unre
+coverable.

@@ -532,6 +532,70 @@ pub const SPINNER_COLD_START: &str =
 pub const MANUAL_MENU_QUESTION: &str =
     "The local model isn't available — pick what you want to do (type to filter):";
 
+/// `gitrust help`: phrases that always work instantly (no model), by task.
+/// `<name>` / `<url>` / `<file>` are placeholders. A test checks every one
+/// really is a fast-path phrase, so help never advertises something slow.
+pub const HELP_SECTIONS: &[(&str, &[&str])] = &[
+    (
+        "Look",
+        &[
+            "status", "log", "diff", "show", "branches", "remotes", "config",
+        ],
+    ),
+    (
+        "Save",
+        &[
+            "commit all my files",
+            "commit and push",
+            "commit everything and push",
+        ],
+    ),
+    (
+        "Share",
+        &["push", "publish", "pull", "fetch", "safe to pull"],
+    ),
+    (
+        "Branches",
+        &["create branch <name>", "switch to <name>", "current branch"],
+    ),
+    (
+        "Undo & tidy",
+        &[
+            "undo",
+            "stash",
+            "stash pop",
+            "clean up my repo",
+            "find my lost work",
+        ],
+    ),
+    (
+        "Mid-rebase",
+        &[
+            "continue rebase",
+            "skip rebase",
+            "abort rebase",
+            "abort merge",
+        ],
+    ),
+    (
+        "Setup",
+        &["init", "add remote origin <url>", "add remote <url>"],
+    ),
+];
+
+/// The trust line (design handoff M6/M7), kept true: the model only picks
+/// from a closed list; the code decides whether to act, ask or refuse.
+pub const HELP_TRUST: &str = "A small local model picks from a fixed list of Git operations — it never\ninvents a command — and GiTrust asks you whenever it isn't sure.";
+
+/// Fill a help placeholder with a sample value (for the help self-test).
+#[cfg(test)]
+pub fn help_sample(phrase: &str) -> String {
+    phrase
+        .replace("<name>", "feature-x")
+        .replace("<url>", "https://example.com/repo.git")
+        .replace("<file>", "src/main.rs")
+}
+
 /// Kev was confident the request isn't about Git.
 pub const NOT_A_GIT_REQUEST: &str =
     "That doesn't look like a Git request. Try e.g. \"show status\" or \"push my commits\" — or `gitrust help` for phrases that always work.";
@@ -579,6 +643,19 @@ Put one in your request, e.g. commit everything with message 'fix login'.";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_help_phrase_is_instant() {
+        let slow: Vec<&str> = HELP_SECTIONS
+            .iter()
+            .flat_map(|(_, phrases)| phrases.iter().copied())
+            .filter(|p| crate::intent::try_canonical(&help_sample(p)).is_none())
+            .collect();
+        assert!(
+            slow.is_empty(),
+            "`gitrust help` lists phrases that aren't instant: {slow:?}"
+        );
+    }
 
     #[test]
     fn every_kev_option_has_a_menu_label() {

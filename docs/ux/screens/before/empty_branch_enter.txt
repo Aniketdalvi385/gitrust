@@ -1,0 +1,17 @@
+$ gitrust 'make me a new branch'
+
+----- prompt -----
+? Name for the new branch:
+
+----- after empty enter -----
+# Commit message cannot be empty.
+? Name for the new branch:
+
+----- esc -----
+# Commit message cannot be empty.
+? Name for the new branch:
+
+----- final (exit=1) -----
+? Name for the new branch: <canceled>
+✗  Text prompt failed
+   caused by: Operation was canceled by the user

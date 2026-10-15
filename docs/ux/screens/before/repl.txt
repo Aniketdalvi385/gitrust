@@ -1,0 +1,107 @@
+$ gitrust 
+
+----- repl start -----
+GiTrust — Agentic Git CLI  (Ctrl-C or empty input to exit)
+Model: kev (jaredpalmer/kev-0.8b@v1.0)  |  Remote: origin
+
+? gitrust>
+
+----- status -----
+GiTrust — Agentic Git CLI  (Ctrl-C or empty input to exit)
+Model: kev (jaredpalmer/kev-0.8b@v1.0)  |  Remote: origin
+
+? gitrust>
+
+----- query 2 -----
+GiTrust — Agentic Git CLI  (Ctrl-C or empty input to exit)
+Model: kev (jaredpalmer/kev-0.8b@v1.0)  |  Remote: origin
+
+> gitrust> status
+⚡  (instant)
+On branch main · tracking origin/main · up to date
+Last commit: 08660e2 "Update README" (just now)
+
+Modified:
+  M README.md
+  M src/auth.rs
+  M src/login.rs
+Untracked:
+  ? notes.txt
+
+→ 4 file(s) not staged. Try: gitrust "commit all my files"
+
+(Remote state from last fetch — run `gitrust "fetch"` to refresh.)
+
+? gitrust>
+
+----- exit -----
+GiTrust — Agentic Git CLI  (Ctrl-C or empty input to exit)
+Model: kev (jaredpalmer/kev-0.8b@v1.0)  |  Remote: origin
+
+> gitrust> status
+⚡  (instant)
+On branch main · tracking origin/main · up to date
+Last commit: 08660e2 "Update README" (just now)
+
+Modified:
+  M README.md
+  M src/auth.rs
+  M src/login.rs
+Untracked:
+  ? notes.txt
+
+→ 4 file(s) not staged. Try: gitrust "commit all my files"
+
+(Remote state from last fetch — run `gitrust "fetch"` to refresh.)
+
+> gitrust> what did i do
+
+----- !! killed at timeout -----
+GiTrust — Agentic Git CLI  (Ctrl-C or empty input to exit)
+Model: kev (jaredpalmer/kev-0.8b@v1.0)  |  Remote: origin
+
+> gitrust> status
+⚡  (instant)
+On branch main · tracking origin/main · up to date
+Last commit: 08660e2 "Update README" (just now)
+
+Modified:
+  M README.md
+  M src/auth.rs
+  M src/login.rs
+Untracked:
+  ? notes.txt
+
+→ 4 file(s) not staged. Try: gitrust "commit all my files"
+
+(Remote state from last fetch — run `gitrust "fetch"` to refresh.)
+
+> gitrust> what did i do
+exit
+? That may not be a Git request. If it is, which operation did you mean? exit
+[↑↓ to move, enter to select, type to filter]
+
+----- final (exit=?) -----
+GiTrust — Agentic Git CLI  (Ctrl-C or empty input to exit)
+Model: kev (jaredpalmer/kev-0.8b@v1.0)  |  Remote: origin
+
+> gitrust> status
+⚡  (instant)
+On branch main · tracking origin/main · up to date
+Last commit: 08660e2 "Update README" (just now)
+
+Modified:
+  M README.md
+  M src/auth.rs
+  M src/login.rs
+Untracked:
+  ? notes.txt
+
+→ 4 file(s) not staged. Try: gitrust "commit all my files"
+
+(Remote state from last fetch — run `gitrust "fetch"` to refresh.)
+
+> gitrust> what did i do
+exit
+? That may not be a Git request. If it is, which operation did you mean? exit
+[↑↓ to move, enter to select, type to filter]

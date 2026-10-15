@@ -1,0 +1,51 @@
+$ gitrust 'make me a new branch'
+
+----- prompt shown -----
+? Name for the new branch:
+[Enter to continue · Esc to cancel]
+
+----- suggestion -----
+> Name for the new branch: feat/Login Page (v2)
+✦  Create branch “feat/Login Page (v2)” · 1.4s
+  Git won't allow spaces or parentheses in branch names.
+? Branch name (suggested — Enter to use, or edit): feat/Login-Page-v2
+[Enter to continue · Esc to cancel]
+
+----- after -----
+> Name for the new branch: feat/Login Page (v2)
+✦  Create branch “feat/Login Page (v2)” · 1.4s
+  Git won't allow spaces or parentheses in branch names.
+> Branch name (suggested — Enter to use, or edit): feat/Login-Page-v2
+
+Plan  · 1 step · snapshot taken at 818da83
+
+  ●  branch    feat/Login-Page-v2  ⚠
+
+
+  [Enter] run · [q] cancel
+
+----- !! killed at timeout -----
+> Name for the new branch: feat/Login Page (v2)
+✦  Create branch “feat/Login Page (v2)” · 1.4s
+  Git won't allow spaces or parentheses in branch names.
+> Branch name (suggested — Enter to use, or edit): feat/Login-Page-v2
+
+Plan  · 1 step · snapshot taken at 818da83
+
+  ●  branch    feat/Login-Page-v2  ⚠
+
+
+  [Enter] run · [q] cancel
+
+----- final (exit=?) -----
+> Name for the new branch: feat/Login Page (v2)
+✦  Create branch “feat/Login Page (v2)” · 1.4s
+  Git won't allow spaces or parentheses in branch names.
+> Branch name (suggested — Enter to use, or edit): feat/Login-Page-v2
+
+Plan  · 1 step · snapshot taken at 818da83
+
+  ●  branch    feat/Login-Page-v2  ⚠
+
+
+  [Enter] run · [q] cancel

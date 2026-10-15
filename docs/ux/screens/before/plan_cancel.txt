@@ -1,0 +1,61 @@
+$ gitrust 'commit everything'
+
+----- message prompt -----
+⚡  (instant)
+? Commit message:
+
+----- plan -----
+⚡  (instant)
+> Commit message: wip
+
+Plan  · 2 steps · snapshot taken at 4c6c5e1
+
+  ●  stage     all modified files  ⚠
+  │
+  ●  commit    "wip"  ⚠
+
+  [Enter] run · [q] cancel
+
+? Execute this plan? [Y/n] (Y/n)
+
+----- after q -----
+⚡  (instant)
+> Commit message: wip
+
+Plan  · 2 steps · snapshot taken at 4c6c5e1
+
+  ●  stage     all modified files  ⚠
+  │
+  ●  commit    "wip"  ⚠
+
+  [Enter] run · [q] cancel
+
+? Execute this plan? [Y/n] (Y/n)
+
+----- !! killed at timeout -----
+⚡  (instant)
+> Commit message: wip
+
+Plan  · 2 steps · snapshot taken at 4c6c5e1
+
+  ●  stage     all modified files  ⚠
+  │
+  ●  commit    "wip"  ⚠
+
+  [Enter] run · [q] cancel
+
+? Execute this plan? [Y/n] (Y/n) q
+
+----- final (exit=?) -----
+⚡  (instant)
+> Commit message: wip
+
+Plan  · 2 steps · snapshot taken at 4c6c5e1
+
+  ●  stage     all modified files  ⚠
+  │
+  ●  commit    "wip"  ⚠
+
+  [Enter] run · [q] cancel
+
+? Execute this plan? [Y/n] (Y/n) q

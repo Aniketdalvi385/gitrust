@@ -1,0 +1,9 @@
+$ gitrust '--yes' 'put my work up on github'
+
+----- after run -----
+⠴ Understanding your request…
+
+----- final (exit=1) -----
+✗  --yes won't choose for you — I'm not sure which operation you meant. Which one?
+   Choices: Push only some changes · Commit everything · Push
+   Run it interactively (without --yes) to pick one, or say more precisely what you want.

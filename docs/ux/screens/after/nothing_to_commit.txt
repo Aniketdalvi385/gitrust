@@ -1,0 +1,9 @@
+$ gitrust 'commit everything'
+
+----- after run -----
+⚡  Commit everything
+✗  Nothing to commit — the working tree is clean.
+
+----- final (exit=1) -----
+⚡  Commit everything
+✗  Nothing to commit — the working tree is clean.

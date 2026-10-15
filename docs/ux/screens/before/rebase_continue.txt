@@ -1,0 +1,8 @@
+$ gitrust 'continue'
+
+----- after run -----
+
+
+----- final (exit=1) -----
+✦  (kev · p=0.95 · 9.4s)
+✗  1 file(s) still conflicted: src/login.rs — resolve and stage them, then continue.

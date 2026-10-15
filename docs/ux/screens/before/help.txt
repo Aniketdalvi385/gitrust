@@ -1,0 +1,31 @@
+$ gitrust 'help'
+
+----- after run -----
+GiTrust canonical phrases (always work, instant, no model needed):
+
+  Inspect:    status · log · show · diff · branches · remotes · config
+  Track:      fetch · safe to pull · merge preview · check remote
+  Stage:      commit · commit all my files · commit <file>
+  Branch:     create branch <name> · switch to <name> · current branch
+  Sync:       push · publish · pull · rebase
+  Recover:    undo · stash · stash pop · force push · discard local
+  Setup:      init · add remote <url> · delete repository
+  Tooling:    gitrust setup · gitrust help · gitrust recover --list / --clean
+
+Anything else: phrase it naturally — the local Kev model routes it, and asks you when it isn't sure.
+Use --yes to auto-confirm non-destructive prompts.
+
+----- final (exit=0) -----
+GiTrust canonical phrases (always work, instant, no model needed):
+
+  Inspect:    status · log · show · diff · branches · remotes · config
+  Track:      fetch · safe to pull · merge preview · check remote
+  Stage:      commit · commit all my files · commit <file>
+  Branch:     create branch <name> · switch to <name> · current branch
+  Sync:       push · publish · pull · rebase
+  Recover:    undo · stash · stash pop · force push · discard local
+  Setup:      init · add remote <url> · delete repository
+  Tooling:    gitrust setup · gitrust help · gitrust recover --list / --clean
+
+Anything else: phrase it naturally — the local Kev model routes it, and asks you when it isn't sure.
+Use --yes to auto-confirm non-destructive prompts.
