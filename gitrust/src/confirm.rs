@@ -106,12 +106,27 @@ impl ConfirmationGate for InquireGate {
                 };
                 let labels: Vec<String> = options
                     .iter()
-                    .map(|o| format!("{} — {}", o.label, dim(&o.consequence)))
+                    .map(|o| {
+                        if o.consequence.is_empty() {
+                            o.label.clone()
+                        } else {
+                            format!("{}  {}", o.label, dim(&format!("— {}", o.consequence)))
+                        }
+                    })
                     .collect();
+                // After a pick, echo just the chosen label — not the wrapped
+                // consequence sentence.
+                let echo = |o: inquire::list_option::ListOption<&String>| {
+                    options
+                        .get(o.index)
+                        .map(|c| crate::ux::strip_ansi(&c.label))
+                        .unwrap_or_default()
+                };
                 let selected = prompt_result(
                     Select::new(question, labels.clone())
                         .with_starting_cursor(0)
                         .with_help_message(crate::copy::CHOICE_HELP)
+                        .with_formatter(&echo)
                         .prompt(),
                     "Choice prompt",
                 )?;
@@ -379,17 +394,21 @@ impl ConfirmationGate for AutoConfirmGate {
                     Ok(GateResponse::Chose(0))
                 }
             }
-            GateType::ChoiceGate { question, .. } => {
+            GateType::ChoiceGate { question, options } => {
                 // --yes must NEVER silently pick from a ChoiceGate — an auto-
                 // chosen undo mode, cleanup scope, or reconcile strategy could
                 // discard or rewrite work the user meant to keep. Refuse,
-                // mirroring TypeToConfirm. Echo the actual question so the
-                // message fits whichever decision raised the gate (M-17: the old
-                // copy hardcoded "rebase vs merge" even for an undo).
+                // mirroring TypeToConfirm. Echo the actual question (M-17) and
+                // the choices, so the refusal says what to rephrase toward.
+                let choices: Vec<String> = options
+                    .iter()
+                    .map(|o| crate::ux::strip_ansi(&o.label).trim().to_string())
+                    .collect();
                 Err(anyhow::anyhow!(
-                    "--yes flag cannot answer this choice for you: \"{}\" \
-                     Run interactively and pick an option manually.",
-                    question
+                    "--yes won't choose for you — {}\n   Choices: {}\n   Run it interactively \
+                     (without --yes) to pick one, or say more precisely what you want.",
+                    question,
+                    choices.join(" · ")
                 ))
             }
             GateType::RecoveryBrowser { .. } => {

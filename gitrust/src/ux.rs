@@ -118,6 +118,161 @@ pub fn run_plan_keypress() -> anyhow::Result<crate::commands::GateResponse> {
     Ok(response)
 }
 
+// =============================================================================
+// Interpretation echo — what GiTrust understood, before it acts
+// =============================================================================
+
+/// A short, user-facing name for an intent ("Show history", "Push only the
+/// “login” changes"). `None` for a refusal, which says everything itself.
+pub fn intent_title(intent: &crate::commands::IntentType) -> Option<String> {
+    use crate::commands::{
+        FeaturePipelineOp as F, IntentType as I, ReadOnlyOp as R, ScopedWriteOp as W,
+    };
+    let q = |s: &str| format!("“{}”", s);
+    Some(match intent {
+        I::NeedsClarification(_) => return None,
+        I::ReadOnly(op) => match op {
+            R::Status => "Show status".into(),
+            R::Log { .. } => "Show history".into(),
+            R::Diff { path: Some(p) } => format!("Show changes in {}", q(p)),
+            R::Diff { path: None } => "Show changes".into(),
+            R::Remotes => "List remotes".into(),
+            R::Branches => "List branches".into(),
+            R::Config => "Show Git settings".into(),
+            R::Show { target: Some(t) } => format!("Show commit {}", q(t)),
+            R::Show { target: None } => "Show the last commit".into(),
+            R::FetchStatus { remote } => format!("Check {}", remote),
+            R::MergePreview { remote } => format!("Preview a pull from {}", remote),
+        },
+        I::ScopedWrite(op) => match op {
+            W::Add { .. } => "Stage files".into(),
+            W::Commit { .. } => "Commit staged files".into(),
+            W::Branch { name } if name.trim().is_empty() => "List branches".into(),
+            W::Branch { name } => format!("Create branch {}", q(name)),
+            W::Checkout { target } => format!("Switch to {}", q(target)),
+            W::Stash => "Stash changes".into(),
+            W::StashPop => "Restore stashed changes".into(),
+            W::Reset { .. } => "Reset".into(),
+            W::Pull { remote } => format!("Pull from {}", remote),
+            W::Init => "Start a repository here".into(),
+            W::DeleteRepo => "Remove Git from this folder".into(),
+            W::AddRemote { name, .. } => format!("Add remote {}", q(name)),
+            W::RemoveRemote { name } => format!("Remove remote {}", q(name)),
+            W::AddAndCommit { files, .. } => match files {
+                crate::commands::FileSelection::Explicit(f) if f.len() == 1 => {
+                    format!("Commit {}", q(&f[0]))
+                }
+                crate::commands::FileSelection::Explicit(f) => format!("Commit {} files", f.len()),
+                _ => "Commit everything".into(),
+            },
+            W::Push { remote } => format!("Push to {}", remote),
+            W::Undo | W::UndoIntent => "Undo the last commit".into(),
+            W::ForensicRecover => "Find lost work".into(),
+            W::CleanupIntent => "Discard uncommitted changes".into(),
+            W::Amend {
+                message: Some(_), ..
+            } => "Reword the last commit".into(),
+            W::Amend { .. } => "Amend the last commit".into(),
+            W::Revert { oid } => format!("Revert {}", &oid[..oid.len().min(7)]),
+            W::Unstage { .. } => "Unstage files".into(),
+            W::SetUpstream { remote, branch } => format!("Track {}/{}", remote, branch),
+            W::SquashLastN { n } => format!("Squash the last {} commits", n),
+            W::PullRebase { .. } => "Pull with rebase".into(),
+            W::ForcePush { .. } => "Force push".into(),
+            W::DiscardLocal { .. } => "Reset to the remote".into(),
+            W::MergeAbort => "Abort the merge".into(),
+            W::RebaseContinue => "Continue the rebase".into(),
+            W::RebaseSkip => "Skip this commit".into(),
+            W::RebaseAbort => "Abort the rebase".into(),
+            W::CherryPickContinue => "Continue the cherry-pick".into(),
+            W::CherryPickAbort => "Abort the cherry-pick".into(),
+            W::RevertContinue => "Continue the revert".into(),
+            W::RevertAbort => "Abort the revert".into(),
+        },
+        I::FeaturePipeline(op) => match op {
+            F::AddCommitPush { feature_hint } if feature_hint.is_empty() => {
+                "Push only some changes".into()
+            }
+            F::AddCommitPush { feature_hint } => {
+                format!("Push only the {} changes", q(feature_hint))
+            }
+            F::CommitPush {
+                stage_first: Some(_),
+                ..
+            } => "Commit and push everything".into(),
+            F::CommitPush {
+                stage_first: None, ..
+            } => "Commit and push staged files".into(),
+            F::Sync { .. } => "Update from main".into(),
+        },
+    })
+}
+
+/// The one line printed after classification: engine glyph + what GiTrust
+/// understood (+ the model's latency). The model's probability only appears
+/// under GITRUST_DEBUG. `plain` = no color/unicode → ASCII glyph.
+pub fn engine_line(
+    r: &crate::commands::IntentResult,
+    elapsed: std::time::Duration,
+    plain: bool,
+    debug: bool,
+) -> Option<String> {
+    use crate::commands::Engine;
+    use crate::copy::*;
+    let title = intent_title(&r.intent)?;
+    let (glyph, suffix) = match r.engine {
+        Engine::Fast => (
+            if plain {
+                ENGINE_FAST_ASCII
+            } else {
+                ENGINE_FAST_GLYPH
+            },
+            String::new(),
+        ),
+        Engine::Kev => (
+            if plain {
+                ENGINE_KEV_ASCII
+            } else {
+                ENGINE_KEV_GLYPH
+            },
+            format!(" · {:.1}s", elapsed.as_secs_f32()),
+        ),
+        Engine::User => (
+            if plain {
+                ENGINE_USER_ASCII
+            } else {
+                ENGINE_USER_GLYPH
+            },
+            " · your choice".to_string(),
+        ),
+    };
+    let dbg = if debug && r.engine == Engine::Kev {
+        format!("  (p={:.2})", r.confidence)
+    } else {
+        String::new()
+    };
+    Some(format!("{}  {}{}{}", glyph, title, suffix, dbg))
+}
+
+/// Remove ANSI color sequences (labels carry colored markers on a TTY).
+pub fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' && chars.peek() == Some(&'[') {
+            chars.next();
+            for c in chars.by_ref() {
+                if c.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Words that leave the interactive prompt (besides an empty line / Ctrl-C /
 /// Ctrl-D). Without this, "exit" went to the model as a Git request.
 pub fn is_repl_exit(input: &str) -> bool {
@@ -130,6 +285,80 @@ pub fn is_repl_exit(input: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn engine_line_says_what_was_understood() {
+        use crate::commands::{Engine, FeaturePipelineOp, IntentResult, IntentType, ReadOnlyOp};
+        let r = |intent, engine, confidence| IntentResult {
+            intent,
+            confidence,
+            raw_query: "q".into(),
+            engine,
+        };
+        let ms = std::time::Duration::from_millis(600);
+        let fast = engine_line(
+            &r(IntentType::ReadOnly(ReadOnlyOp::Status), Engine::Fast, 1.0),
+            ms,
+            false,
+            false,
+        );
+        assert_eq!(fast.as_deref(), Some("⚡  Show status"));
+        let kev = engine_line(
+            &r(
+                IntentType::ReadOnly(ReadOnlyOp::Log { count: 10 }),
+                Engine::Kev,
+                0.99,
+            ),
+            ms,
+            false,
+            false,
+        );
+        assert_eq!(kev.as_deref(), Some("✦  Show history · 0.6s"));
+        // The model's probability is a debugging aid, not user copy.
+        let dbg = engine_line(
+            &r(
+                IntentType::ReadOnly(ReadOnlyOp::Log { count: 10 }),
+                Engine::Kev,
+                0.99,
+            ),
+            ms,
+            false,
+            true,
+        );
+        assert!(dbg.unwrap().contains("p=0.99"));
+        let user = engine_line(
+            &r(
+                IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush {
+                    feature_hint: "login".into(),
+                }),
+                Engine::User,
+                1.0,
+            ),
+            ms,
+            false,
+            false,
+        );
+        assert_eq!(
+            user.as_deref(),
+            Some("◇  Push only the “login” changes · your choice")
+        );
+        // A refusal has nothing to echo — its own message says it.
+        assert!(engine_line(
+            &r(IntentType::NeedsClarification("x".into()), Engine::Kev, 0.9),
+            ms,
+            false,
+            false
+        )
+        .is_none());
+        // ASCII fallback when color/unicode is off.
+        let plain = engine_line(
+            &r(IntentType::ReadOnly(ReadOnlyOp::Status), Engine::Fast, 1.0),
+            ms,
+            true,
+            false,
+        );
+        assert_eq!(plain.as_deref(), Some("*  Show status"));
+    }
 
     #[test]
     fn repl_exit_words_leave_instead_of_reaching_the_model() {

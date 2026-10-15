@@ -223,9 +223,10 @@ fn run_recover_subcommand(list: bool, clean: bool) -> anyhow::Result<()> {
             .iter()
             .map(|s| format!("{}  ({})", s.pipeline_id, s.captured_at))
             .collect();
-        let to_delete = inquire::MultiSelect::new("Pick snapshots to delete:", labels)
-            .prompt()
-            .map_err(|e| anyhow::anyhow!("Aborted: {}", e))?;
+        let to_delete = ux::prompt_result(
+            inquire::MultiSelect::new("Pick snapshots to delete:", labels).prompt(),
+            "Snapshot picker",
+        )?;
         if to_delete.is_empty() {
             println!("  Nothing selected.");
             return Ok(());

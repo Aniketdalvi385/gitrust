@@ -176,7 +176,6 @@ pub fn reconcile_rebase_consequence(ahead: u32, cross_branch: bool) -> String {
 }
 pub const RECONCILE_MERGE_CONSEQUENCE: &str =
     "keep both histories, adds a merge commit. Safer if others may have pulled your commits.";
-pub const RECONCILE_ABORT_CONSEQUENCE: &str = "do nothing.";
 
 /// The calm handoff when a reconcile step pauses on conflicts. `op` is "rebase"
 /// or "merge"; merge has no `--continue`, so its finish is "resolve and commit".
@@ -221,24 +220,31 @@ pub fn reconcile_fast_forwarded(target: &str) -> String {
 // =============================================================================
 
 /// The gate question, always naming the target commit so the user sees exactly
-/// what is being undone.
-pub fn undo_gate_question(short_sha: &str, summary: &str) -> String {
-    format!("Undo {short_sha} \"{summary}\" — what should happen to its changes?")
+/// what is being undone. When it's already pushed, say once why Revert is
+/// listed first.
+pub fn undo_gate_question(short_sha: &str, summary: &str, pushed: bool) -> String {
+    if pushed {
+        format!(
+            "Undo {short_sha} \"{summary}\"? It's already pushed, so reverting is the safe choice."
+        )
+    } else {
+        format!("Undo {short_sha} \"{summary}\" — what should happen to its changes?")
+    }
 }
 
+// Each option: a distinct label + a short consequence that doesn't repeat it.
+pub const UNDO_KEEP_STAGED_LABEL: &str = "Undo, keep the changes staged";
 pub const UNDO_KEEP_STAGED_CONSEQUENCE: &str =
-    "keep them staged (soft reset) — the commit is removed, files stay ready to re-commit.";
+    "the commit goes; its changes stay staged, ready to re-commit";
+pub const UNDO_KEEP_IN_FILES_LABEL: &str = "Undo, keep the changes in my files";
 pub const UNDO_KEEP_IN_FILES_CONSEQUENCE: &str =
-    "keep them in your files, unstaged (mixed reset) — re-stage what you want before committing.";
+    "the commit goes; its changes stay in your files, unstaged";
+pub const UNDO_REVERT_LABEL: &str = "Undo with a revert commit";
 pub const UNDO_REVERT_CONSEQUENCE: &str =
-    "add an inverse commit (revert) — history is preserved; safe even after pushing.";
+    "a new commit reverses it; history is kept — safe after pushing";
+pub const UNDO_DISCARD_LABEL: &str = "Undo and throw the changes away";
 pub const UNDO_DISCARD_CONSEQUENCE: &str =
-    "discard them completely (hard reset) — the changes are gone (reflog holds them ~90 days). Requires typing to confirm.";
-
-/// Prepended to the Revert consequence when HEAD is already on the remote — the
-/// gate reorders Revert first and says why.
-pub const UNDO_PUSHED_WHY: &str =
-    "This commit is already on the remote, so revert is the safe default: ";
+    "both go (git keeps them ~90 days) · you'll type to confirm";
 
 /// Guidance returned (as an Err) when the user asked to undo more than one
 /// commit — v1 undo is single-HEAD only (P6: never act on an LLM-extracted count).
@@ -401,18 +407,27 @@ pub fn trash_backup_note(dir: &str, days: u64) -> String {
 /// The gate question for a destructive-cleanup phrase.
 pub const CLEANUP_GATE_QUESTION: &str = "Clean up — what should be removed?";
 
-/// Consequence sentence for discarding tracked modifications (reflog-adjacent:
-/// the working-tree delta is only in the trash-net, but committed history is safe).
-pub fn cleanup_tracked_consequence(n: usize) -> String {
-    format!("discard {n} tracked change(s) (a hard reset — backed up to the trash-net first).")
+/// Clean-up options: the count goes in the label (what you'll lose), the
+/// safety net in the consequence.
+pub fn cleanup_tracked_label(n: usize) -> String {
+    format!(
+        "Discard changes to {} tracked file{}",
+        n,
+        if n == 1 { "" } else { "s" }
+    )
 }
-/// Consequence for deleting untracked files — the dangerous one (no reflog).
-pub fn cleanup_untracked_consequence(n: usize) -> String {
-    format!("delete {n} untracked file(s) — these have NO git history; only the trash-net protects them.")
+pub const CLEANUP_TRACKED_CONSEQUENCE: &str = "backed up to ~/.gitrust/trash first";
+pub fn cleanup_untracked_label(n: usize) -> String {
+    format!(
+        "Delete {} untracked file{}",
+        n,
+        if n == 1 { "" } else { "s" }
+    )
 }
-pub const CLEANUP_BOTH_CONSEQUENCE: &str =
-    "discard tracked changes AND delete untracked files (both backed up to the trash-net first).";
-pub const CLEANUP_ABORT_CONSEQUENCE: &str = "do nothing.";
+pub const CLEANUP_UNTRACKED_CONSEQUENCE: &str =
+    "never committed, so the trash backup is their only copy";
+pub const CLEANUP_BOTH_LABEL: &str = "Both";
+pub const CLEANUP_BOTH_CONSEQUENCE: &str = "discard and delete — both backed up first";
 
 /// Degenerate guard: nothing to clean, so no gate is rendered.
 pub const CLEANUP_NOTHING: &str =
@@ -437,9 +452,80 @@ pub const TEXT_PROMPT_EMPTY: &str = "This can't be empty — type a value, or pr
 // Kev (local decision model) — Layer 1 copy
 // ---------------------------------------------------------------------------
 
+/// What a menu shows for a Kev option: (title, short hint). User-facing only —
+/// the model is asked with kev_ops.json's descriptions, whose wording is
+/// load-bearing; these can change freely. `None` = no such option.
+pub fn op_label(op: &str) -> Option<(&'static str, &'static str)> {
+    Some(match op {
+        "status" => ("Show status", "what's changed, staged or untracked"),
+        "log" => ("Show history", "recent commits"),
+        "diff" => ("Show changes", "line-by-line diff of your edits"),
+        "branches" => ("List branches", "and which one you're on"),
+        "config" => ("Show Git settings", "your name, email and other config"),
+        "show" => ("Show a commit", "author, date, message and files"),
+        "fetch" => ("Check the remote", "ahead or behind? changes nothing"),
+        "merge_preview" => ("Preview a pull", "would it conflict? changes nothing"),
+        "add_commit" => (
+            "Commit everything",
+            "stage all changes and commit — no push",
+        ),
+        "commit" => ("Commit staged files", "only what's already staged"),
+        "push" => ("Push", "upload all your commits"),
+        "scoped_push" => (
+            "Push only some changes",
+            "pick one topic's files, commit, push",
+        ),
+        "commit_push" => ("Commit and push everything", "stage all, commit, push"),
+        "branch" => ("Create a branch", "a new branch from here"),
+        "checkout" => ("Switch branch", "to a branch that exists"),
+        "pull" => ("Pull", "download and merge the remote's commits"),
+        "pull_rebase" => ("Pull with rebase", "put your commits on top of theirs"),
+        "sync" => ("Update from main", "bring main into this branch"),
+        "undo" => ("Undo the last commit", "you'll choose how, next"),
+        "amend" => ("Amend the last commit", "change its message or add files"),
+        "squash" => ("Squash commits", "combine recent commits into one"),
+        "revert" => ("Revert a commit", "a new commit that reverses it"),
+        "unstage" => ("Unstage files", "your edits stay"),
+        "stash" => ("Stash changes", "set them aside for later"),
+        "stash_pop" => ("Restore stashed changes", "bring back what you set aside"),
+        "cleanup" => (
+            "Discard uncommitted changes",
+            "backed up first · you'll choose what",
+        ),
+        "discard_local" => ("Reset to the remote", "drops commits you haven't pushed"),
+        "force_push" => ("Force push", "overwrite the remote branch with yours"),
+        "init" => ("Start a repository here", "git init"),
+        "add_remote" => ("Add a remote", "or change a remote's URL"),
+        "remotes" => ("List remotes", "and their URLs"),
+        "remove_remote" => ("Remove a remote", "the remote's URL is forgotten"),
+        "set_upstream" => ("Track a remote branch", "so push and pull just work"),
+        "find_lost_work" => ("Find lost work", "search for deleted commits"),
+        "delete_repo" => (
+            "Remove Git from this folder",
+            "deletes .git, keeps your files",
+        ),
+        "__reject__" => ("Not a Git request", ""),
+        // In-progress control (asked only mid-operation).
+        "rebase_continue" => ("Continue the rebase", "conflicts are fixed"),
+        "rebase_skip" => ("Skip this commit", "drop it and carry on"),
+        "rebase_abort" => ("Abort the rebase", "back to before it started"),
+        "merge_abort" => ("Abort the merge", "back to before it started"),
+        "cherry_pick_continue" => ("Continue the cherry-pick", "conflicts are fixed"),
+        "cherry_pick_abort" => ("Abort the cherry-pick", "back to before it started"),
+        "revert_continue" => ("Continue the revert", "conflicts are fixed"),
+        "revert_abort" => ("Abort the revert", "back to before it started"),
+        "something_else" => ("Something else", "not about the operation in progress"),
+        _ => return None,
+    })
+}
+
+/// The manual menu when the local model is unreachable.
+pub const MANUAL_MENU_QUESTION: &str =
+    "The local model isn't available — pick what you want to do (type to filter):";
+
 /// Kev was confident the request isn't about Git.
 pub const NOT_A_GIT_REQUEST: &str =
-    "That doesn't look like a Git request. Try rephrasing — e.g. \"show status\" or \"push my commits\".";
+    "That doesn't look like a Git request. Try e.g. \"show status\" or \"push my commits\" — or `gitrust help` for phrases that always work.";
 
 /// Header of the pick-from-candidates ChoiceGate when Kev isn't confident.
 pub const KEV_UNSURE_QUESTION: &str = "I'm not sure which operation you meant. Which one?";
@@ -480,3 +566,22 @@ pub const COMMIT_MESSAGE_ASK: &str = "Commit message:";
 /// An empty commit message was submitted (or --yes had none to submit).
 pub const COMMIT_MESSAGE_REQUIRED: &str = "A commit message is required — nothing was committed. \
 Put one in your request, e.g. commit everything with message 'fix login'.";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_kev_option_has_a_menu_label() {
+        for (op, _) in crate::kev::ops() {
+            let (title, _hint) = op_label(op).unwrap_or_else(|| panic!("no menu label for {op}"));
+            assert!(!title.is_empty() && !title.contains('_'), "{op}: {title}");
+        }
+        for fam in ["rebase", "merge", "cherry_pick", "revert"] {
+            let (_, opts) = crate::kev::in_progress_question(fam).unwrap();
+            for (op, _) in opts {
+                assert!(op_label(&op).is_some(), "no menu label for {op}");
+            }
+        }
+    }
+}

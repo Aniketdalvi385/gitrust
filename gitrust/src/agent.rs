@@ -16,47 +16,36 @@ use crate::recovery::{FileRecoveryManager, RecoveryManager};
 use crate::resolver::{FileResolver, TwoPassResolver};
 use crate::validation::{capture_pre_step_state, DefaultValidator, PostCheckResult, Validator};
 
-/// Print the one-glyph engine indicator showing which path classified the
-/// query — exact fast-path (⚡) vs the local Kev model (✦, with its probability
-/// and latency). ASCII fallback when color is off.
+/// Print what GiTrust understood, before it acts: the engine glyph (⚡ exact
+/// phrase · ✦ the local Kev model · ◇ you picked from a menu) and the
+/// intent's name — "⚡  Show status", "✦  Show history · 0.6s". The model's
+/// probability shows only under GITRUST_DEBUG. A refusal prints nothing here;
+/// its own message says it.
 fn print_engine_marker(result: &crate::commands::IntentResult, elapsed: std::time::Duration) {
     let use_color = crate::danger::use_color();
-    let (glyph, suffix, ansi) = match result.engine {
-        crate::commands::Engine::Fast => {
-            let g = if use_color {
-                crate::copy::ENGINE_FAST_GLYPH
-            } else {
-                crate::copy::ENGINE_FAST_ASCII
-            };
-            (g, "(instant)".to_string(), "\x1b[2;36m") // dim cyan
-        }
-        crate::commands::Engine::Kev => {
-            let g = if use_color {
-                crate::copy::ENGINE_KEV_GLYPH
-            } else {
-                crate::copy::ENGINE_KEV_ASCII
-            };
-            let suffix = format!(
-                "(kev · p={:.2} · {:.1}s)",
-                result.confidence,
-                elapsed.as_secs_f32()
-            );
-            (g, suffix, "\x1b[2;34m") // dim blue
-        }
-        crate::commands::Engine::User => {
-            let g = if use_color {
-                crate::copy::ENGINE_USER_GLYPH
-            } else {
-                crate::copy::ENGINE_USER_ASCII
-            };
-            (g, "(you picked)".to_string(), "\x1b[2;35m") // dim magenta
-        }
+    let debug = std::env::var("GITRUST_DEBUG").is_ok();
+    let Some(line) = crate::ux::engine_line(result, elapsed, !use_color, debug) else {
+        return;
     };
-    if use_color {
-        println!("{}{}\x1b[0m  {}", ansi, glyph, suffix);
-    } else {
-        println!("{}  {}", glyph, suffix);
+    if !use_color {
+        println!("{}", line);
+        return;
     }
+    let ansi = match result.engine {
+        crate::commands::Engine::Fast => "\x1b[36m", // cyan
+        crate::commands::Engine::Kev => "\x1b[34m",  // blue
+        crate::commands::Engine::User => "\x1b[35m", // magenta
+    };
+    // glyph (colored) · title (plain) · suffix (dim)
+    let (glyph, rest) = line.split_once("  ").unwrap_or((&line, ""));
+    let (title, suffix) = match rest.find(" · ").or_else(|| rest.find("  (p=")) {
+        Some(i) => rest.split_at(i),
+        None => (rest, ""),
+    };
+    println!(
+        "{}{}\x1b[0m  {}\x1b[2m{}\x1b[0m",
+        ansi, glyph, title, suffix
+    );
 }
 
 /// Snapshot the set of trash-net backup-dir names that exist right now. Used to
@@ -360,8 +349,7 @@ async fn classify_query(
         Ok(r) => r,
         Err(e) => {
             eprintln!("⚠  {}", e);
-            eprintln!("   Falling back to manual mode.\n");
-            return fallback_interactive_intent();
+            return manual_menu(context, query, gate);
         }
     };
     if std::env::var("GITRUST_DEBUG").is_ok() {
@@ -490,23 +478,37 @@ fn pick_candidate(
     if candidates.is_empty() {
         anyhow::bail!("{}", crate::copy::NOT_A_GIT_REQUEST);
     }
-    let mut options: Vec<crate::commands::ChoiceOption> = candidates
+    // Rows speak the user's language: a title + a short hint (copy::op_label),
+    // never the model's option name or probability (that's GITRUST_DEBUG only).
+    // Ops that can rewrite or discard work carry the ⚠ marker. Backing out is
+    // Esc — not a "none of these" row (design handoff: never a list item).
+    let debug = std::env::var("GITRUST_DEBUG").is_ok();
+    let options: Vec<crate::commands::ChoiceOption> = candidates
         .iter()
-        .map(|(op, p)| crate::commands::ChoiceOption {
-            label: format!("{}  ({:.0}%)", op.replace('_', " "), p * 100.0),
-            consequence: crate::kev::describe(op).to_string(),
+        .map(|(op, p)| {
+            let (title, hint) = crate::copy::op_label(op).unwrap_or((op.as_str(), ""));
+            let mut label = title.to_string();
+            if crate::kev::DESTRUCTIVE_OPS.contains(&op.as_str()) {
+                label.push_str("  ");
+                label.push_str(&crate::danger::colored_marker(
+                    crate::danger::DangerLevel::Caution,
+                ));
+            }
+            if debug {
+                label.push_str(&format!("  ({} {:.0}%)", op, p * 100.0));
+            }
+            crate::commands::ChoiceOption {
+                label,
+                consequence: hint.to_string(),
+            }
         })
         .collect();
-    options.push(crate::commands::ChoiceOption {
-        label: "none of these".to_string(),
-        consequence: "Do nothing — rephrase your request.".to_string(),
-    });
     match gate.prompt(&GateType::ChoiceGate {
         question: question.to_string(),
         options,
     })? {
         GateResponse::Chose(i) if i < candidates.len() => Ok(candidates[i].0.clone()),
-        _ => Err(anyhow::anyhow!("Aborted — nothing was done.")),
+        _ => crate::ux::canceled(),
     }
 }
 
@@ -521,17 +523,12 @@ fn pick_in_progress(
 ) -> anyhow::Result<Option<String>> {
     let options: Vec<crate::commands::ChoiceOption> = menu
         .iter()
-        .map(|(op, _)| crate::commands::ChoiceOption {
-            label: if op == other {
-                "something else".to_string()
-            } else {
-                op.replace('_', " ")
-            },
-            consequence: if op == other {
-                "Not about the operation in progress — continue with my request.".to_string()
-            } else {
-                crate::kev::describe(op).to_string()
-            },
+        .map(|(op, _)| {
+            let (title, hint) = crate::copy::op_label(op).unwrap_or((op.as_str(), ""));
+            crate::commands::ChoiceOption {
+                label: title.to_string(),
+                consequence: hint.to_string(),
+            }
         })
         .collect();
     match gate.prompt(&GateType::ChoiceGate {
@@ -541,7 +538,7 @@ fn pick_in_progress(
         GateResponse::Chose(i) if i < menu.len() => {
             Ok((menu[i].0 != other).then(|| menu[i].0.clone()))
         }
-        _ => Err(anyhow::anyhow!("Aborted — nothing was done.")),
+        _ => crate::ux::canceled(),
     }
 }
 
@@ -1828,13 +1825,10 @@ async fn reconcile_flow(
             label: "Merge".to_string(),
             consequence: crate::copy::RECONCILE_MERGE_CONSEQUENCE.to_string(),
         },
-        crate::commands::ChoiceOption {
-            label: "Abort".to_string(),
-            consequence: crate::copy::RECONCILE_ABORT_CONSEQUENCE.to_string(),
-        },
+        // Backing out is Esc (one calm cancel), not an "Abort" row.
     ];
     let question = format!(
-        "Your branch and {} have diverged (ahead {}, behind {}). How should GiTrust reconcile?",
+        "Your branch and {} have diverged (↑{} ↓{}). Rebase or merge?",
         target_ref, ahead, behind
     );
     let choice = match gate.prompt(&GateType::ChoiceGate { question, options })? {
@@ -2782,112 +2776,57 @@ pub fn execute_recovery() -> anyhow::Result<()> {
 // Fallback interactive mode
 // =============================================================================
 
-/// Fallback to manual interactive mode when LLM is unavailable or fails.
-pub fn fallback_interactive_intent() -> anyhow::Result<crate::commands::IntentResult> {
-    use crate::commands::IntentResult;
-
-    println!("  The Kev model is unavailable. Entering manual mode.");
-    println!("  What would you like to do?");
-
-    let options = vec![
-        "git init",
-        "git remote add",
-        "git remote remove",
-        "delete repository (.git)",
-        "git status",
-        "git remote -v",
-        "git branch --list",
-        "git config (user)",
-        "git add (stage files)",
-        "git commit",
-        "git push",
-        "git pull",
-        "git log",
-        "git diff",
-        "git branch (create)",
-        "git checkout",
-        "git stash / stash pop",
-        "git reset",
-    ];
-
-    let selection = inquire::Select::new("Select operation:", options)
-        .with_starting_cursor(0)
-        .prompt()
-        .context("Operation selection failed")?;
-
-    let intent = match selection {
-        "git init" => IntentType::ScopedWrite(ScopedWriteOp::Init),
-        "git status" => IntentType::ReadOnly(ReadOnlyOp::Status),
-        "git remote -v" => IntentType::ReadOnly(ReadOnlyOp::Remotes),
-        "git remote add" => {
-            let name = Text::new("Remote name (e.g. origin):").prompt()?;
-            let url = Text::new("Remote URL:").prompt()?;
-            IntentType::ScopedWrite(ScopedWriteOp::AddRemote { name, url })
-        }
-        "git remote remove" => {
-            let name = Text::new("Remote name to remove:").prompt()?;
-            IntentType::ScopedWrite(ScopedWriteOp::RemoveRemote { name })
-        }
-        "delete repository (.git)" => IntentType::ScopedWrite(ScopedWriteOp::DeleteRepo),
-        "git branch --list" => IntentType::ReadOnly(ReadOnlyOp::Branches),
-        "git config (user)" => IntentType::ReadOnly(ReadOnlyOp::Config),
-        "git log" => IntentType::ReadOnly(ReadOnlyOp::Log { count: 10 }),
-        "git diff" => IntentType::ReadOnly(ReadOnlyOp::Diff { path: None }),
-        "git add (stage files)" => IntentType::ScopedWrite(ScopedWriteOp::Add {
-            files: crate::commands::FileSelection::All,
-        }),
-        "git commit" => {
-            let msg = Text::new("Commit message:").prompt()?;
-            IntentType::ScopedWrite(ScopedWriteOp::Commit {
-                message: CommitMessage::Provided(msg),
-            })
-        }
-        "git push" => IntentType::FeaturePipeline(FeaturePipelineOp::CommitPush {
-            message: CommitMessage::Draft("update".to_string()),
-            stage_first: None,
-        }),
-        "git pull" => IntentType::ScopedWrite(ScopedWriteOp::Pull {
-            remote: "origin".to_string(),
-        }),
-        "git branch (create)" => {
-            let name = Text::new("Branch name:").prompt()?;
-            IntentType::ScopedWrite(ScopedWriteOp::Branch { name })
-        }
-        "git checkout" => {
-            let target = Text::new("Branch/commit to checkout:").prompt()?;
-            IntentType::ScopedWrite(ScopedWriteOp::Checkout { target })
-        }
-        "git stash / stash pop" => {
-            let opts = vec!["stash", "stash pop"];
-            let choice = inquire::Select::new("Stash or stash pop?", opts)
-                .with_starting_cursor(0)
-                .prompt()?;
-            if choice == "stash pop" {
-                IntentType::ScopedWrite(ScopedWriteOp::StashPop)
-            } else {
-                IntentType::ScopedWrite(ScopedWriteOp::Stash)
+/// Kev is unreachable: offer every operation by name. It goes through the same
+/// gate as any menu (so `--yes` refuses — it can't pick for you) and the same
+/// deterministic builder as a Kev route: arguments are captured from the
+/// request or asked for, and destructive ops still meet their own gates (undo
+/// → the undo gate, clean-up → the clean-up gate). The old manual menu listed
+/// raw `git …` commands, mislabeled commit+push as "git push", and offered a
+/// hard reset past every gate.
+fn manual_menu(
+    context: &crate::context::RepoContext,
+    query: &str,
+    gate: &dyn ConfirmationGate,
+) -> anyhow::Result<crate::commands::IntentResult> {
+    use crate::commands::{ChoiceOption, Engine, IntentResult};
+    let mut ops: Vec<&str> = crate::kev::ops()
+        .iter()
+        .map(|(o, _)| o.as_str())
+        .filter(|o| *o != crate::kev::REJECT)
+        .collect();
+    // Keep commit-and-push next to commit-everything.
+    if let Some(i) = ops.iter().position(|o| *o == "commit_push") {
+        let cp = ops.remove(i);
+        let at = ops
+            .iter()
+            .position(|o| *o == "add_commit")
+            .map_or(ops.len(), |j| j + 1);
+        ops.insert(at, cp);
+    }
+    let options: Vec<ChoiceOption> = ops
+        .iter()
+        .map(|op| {
+            let (title, hint) = crate::copy::op_label(op).unwrap_or((op, ""));
+            ChoiceOption {
+                label: title.to_string(),
+                consequence: hint.to_string(),
             }
-        }
-        "git reset" => {
-            let modes = vec!["soft", "mixed", "hard"];
-            let mode_str = inquire::Select::new("Reset mode:", modes)
-                .with_starting_cursor(0)
-                .prompt()?;
-            let mode = match mode_str {
-                "hard" => ResetMode::Hard,
-                "mixed" => ResetMode::Mixed,
-                _ => ResetMode::Soft,
-            };
-            IntentType::ScopedWrite(ScopedWriteOp::Reset { mode })
-        }
-        _ => IntentType::ReadOnly(ReadOnlyOp::Status),
+        })
+        .collect();
+    let op = match gate.prompt(&GateType::ChoiceGate {
+        question: crate::copy::MANUAL_MENU_QUESTION.to_string(),
+        options,
+    })? {
+        GateResponse::Chose(i) if i < ops.len() => ops[i],
+        _ => return crate::ux::canceled(),
     };
-
+    let mut ask = |kind: ArgKind| ask_argument(kind, gate);
+    let intent = crate::intent::build_from_op(op, query, context, &mut ask)?;
     Ok(IntentResult {
         intent,
         confidence: 1.0,
-        raw_query: "[manual]".to_string(),
-        engine: crate::commands::Engine::Fast,
+        raw_query: query.to_string(),
+        engine: Engine::User,
     })
 }
 
@@ -3032,28 +2971,23 @@ fn build_undo_intent(
     // The four semantics. Each is a (label, consequence, builder).
     use crate::commands::{ChoiceOption, ResetMode};
     let keep_staged = ChoiceOption {
-        label: "Keep them staged".to_string(),
+        label: crate::copy::UNDO_KEEP_STAGED_LABEL.to_string(),
         consequence: crate::copy::UNDO_KEEP_STAGED_CONSEQUENCE.to_string(),
     };
     let keep_in_files = ChoiceOption {
-        label: "Keep them in files".to_string(),
+        label: crate::copy::UNDO_KEEP_IN_FILES_LABEL.to_string(),
         consequence: crate::copy::UNDO_KEEP_IN_FILES_CONSEQUENCE.to_string(),
     };
-    let revert_consequence = if pushed {
-        format!(
-            "{}{}",
-            crate::copy::UNDO_PUSHED_WHY,
-            crate::copy::UNDO_REVERT_CONSEQUENCE
-        )
-    } else {
-        crate::copy::UNDO_REVERT_CONSEQUENCE.to_string()
-    };
     let revert = ChoiceOption {
-        label: "Make an inverse commit (revert)".to_string(),
-        consequence: revert_consequence,
+        label: crate::copy::UNDO_REVERT_LABEL.to_string(),
+        consequence: crate::copy::UNDO_REVERT_CONSEQUENCE.to_string(),
     };
     let discard = ChoiceOption {
-        label: "Discard completely".to_string(),
+        label: format!(
+            "{}  {}",
+            crate::copy::UNDO_DISCARD_LABEL,
+            crate::danger::colored_marker(crate::danger::DangerLevel::Destructive)
+        ),
         consequence: crate::copy::UNDO_DISCARD_CONSEQUENCE.to_string(),
     };
 
@@ -3087,7 +3021,9 @@ fn build_undo_intent(
         )
     };
 
-    let question = crate::copy::undo_gate_question(&undone_sha, &undone_summary);
+    // Why revert is first when pushed goes in the question, once — not
+    // prepended to an option's description.
+    let question = crate::copy::undo_gate_question(&undone_sha, &undone_summary, pushed);
     let choice = match gate.prompt(&GateType::ChoiceGate { question, options })? {
         GateResponse::Chose(i) => i,
         _ => {
@@ -3169,36 +3105,31 @@ fn build_cleanup_intent(
         Tracked,
         Untracked,
         Both,
-        Abort,
     }
     let mut options: Vec<ChoiceOption> = Vec::new();
     let mut semantics: Vec<CleanupChoice> = Vec::new();
+    // Backing out is Esc (one calm cancel), not an "Abort" row.
     if tracked > 0 {
         options.push(ChoiceOption {
-            label: "Discard tracked changes".to_string(),
-            consequence: crate::copy::cleanup_tracked_consequence(tracked),
+            label: crate::copy::cleanup_tracked_label(tracked),
+            consequence: crate::copy::CLEANUP_TRACKED_CONSEQUENCE.to_string(),
         });
         semantics.push(CleanupChoice::Tracked);
     }
     if untracked > 0 {
         options.push(ChoiceOption {
-            label: "Delete untracked files".to_string(),
-            consequence: crate::copy::cleanup_untracked_consequence(untracked),
+            label: crate::copy::cleanup_untracked_label(untracked),
+            consequence: crate::copy::CLEANUP_UNTRACKED_CONSEQUENCE.to_string(),
         });
         semantics.push(CleanupChoice::Untracked);
     }
     if tracked > 0 && untracked > 0 {
         options.push(ChoiceOption {
-            label: "Both".to_string(),
+            label: crate::copy::CLEANUP_BOTH_LABEL.to_string(),
             consequence: crate::copy::CLEANUP_BOTH_CONSEQUENCE.to_string(),
         });
         semantics.push(CleanupChoice::Both);
     }
-    options.push(ChoiceOption {
-        label: "Abort".to_string(),
-        consequence: crate::copy::CLEANUP_ABORT_CONSEQUENCE.to_string(),
-    });
-    semantics.push(CleanupChoice::Abort);
 
     let choice = match gate.prompt(&GateType::ChoiceGate {
         question: crate::copy::CLEANUP_GATE_QUESTION.to_string(),
@@ -3228,7 +3159,6 @@ fn build_cleanup_intent(
             },
             PipelineStep::Clean { trash_net: true },
         ],
-        CleanupChoice::Abort => return crate::ux::canceled(),
     };
     Ok(steps)
 }
@@ -3993,10 +3923,12 @@ fn ensure_git_identity(
     };
 
     if name.is_none() {
-        let n = Text::new("Your name:")
-            .with_help_message("Will be saved to ~/.gitconfig globally")
-            .prompt()
-            .map_err(|e| anyhow::anyhow!("Aborted: {}", e))?;
+        let n = crate::ux::prompt_result(
+            Text::new("Your name:")
+                .with_help_message("Saved to ~/.gitconfig · Esc to cancel")
+                .prompt(),
+            "Name prompt",
+        )?;
         let n = n.trim();
         if n.is_empty() {
             return Err(anyhow::anyhow!("Name cannot be empty."));
@@ -4007,10 +3939,12 @@ fn ensure_git_identity(
         println!("  ✓ user.name = {}", n);
     }
     if email.is_none() {
-        let e = Text::new("Your email:")
-            .with_help_message("Will be saved to ~/.gitconfig globally")
-            .prompt()
-            .map_err(|err| anyhow::anyhow!("Aborted: {}", err))?;
+        let e = crate::ux::prompt_result(
+            Text::new("Your email:")
+                .with_help_message("Saved to ~/.gitconfig · Esc to cancel")
+                .prompt(),
+            "Email prompt",
+        )?;
         let e = e.trim();
         if e.is_empty() {
             return Err(anyhow::anyhow!("Email cannot be empty."));
@@ -4752,12 +4686,22 @@ mod phase13_repair_tests {
     // -- Cancel semantics (ux.rs): backing out is Err(Canceled) → exit 1, never
     //    a silent Ok (exit 0) for a not-done operation.
     #[test]
-    fn choosing_abort_at_the_cleanup_gate_is_a_cancel() {
+    fn escaping_the_cleanup_gate_is_a_cancel_and_it_has_no_abort_row() {
         let (repo, d) = repo_with_commits(1);
         std::fs::write(d.path().join("f0.txt"), "edited\n").unwrap();
-        // One tracked change → options [Discard tracked, Abort]; pick Abort.
-        let gate = ScriptedGate::new(1);
-        let err = build_cleanup_intent(&repo, &gate).unwrap_err();
+        // One tracked change → exactly one option; backing out is Esc, not a row.
+        let gate = ScriptedGate::new(0);
+        let _ = build_cleanup_intent(&repo, &gate).unwrap();
+        assert_eq!(gate.last_choice_options.get(), 1);
+        assert!(gate
+            .last_choice_labels
+            .borrow()
+            .iter()
+            .all(|l| !l.contains("Abort")));
+        let esc = crate::confirm::MockGate {
+            response: GateResponse::Aborted,
+        };
+        let err = build_cleanup_intent(&repo, &esc).unwrap_err();
         assert!(crate::ux::is_canceled(&err), "got: {err}");
     }
 
@@ -5714,6 +5658,12 @@ mod kev_layer1_tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("--yes"), "got: {}", err);
+        // The refusal says what the choices were, in user terms.
+        assert!(
+            err.to_string().contains("Push only some changes"),
+            "got: {}",
+            err
+        );
     }
 
     #[tokio::test]
@@ -5726,8 +5676,15 @@ mod kev_layer1_tests {
         assert_eq!(r.engine, Engine::User);
         assert_eq!(
             gate.last_choice_options.get(),
-            4,
-            "3 candidates + none of these"
+            3,
+            "3 candidates — Esc cancels, no 'none' row"
+        );
+        let labels = gate.last_choice_labels.borrow().clone();
+        assert_eq!(labels[0], "Push");
+        assert_eq!(labels[1], "Push only some changes");
+        assert!(
+            labels.iter().all(|l| !l.contains('%') && !l.contains('_')),
+            "{labels:?}"
         );
         match r.intent {
             IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush { feature_hint }) => {
@@ -5801,7 +5758,11 @@ mod kev_layer1_tests {
             .await
             .unwrap();
         assert_eq!(r.engine, Engine::User);
-        assert_eq!(gate.last_choice_options.get(), 3, "scoped_push, push, none");
+        assert_eq!(
+            gate.last_choice_options.get(),
+            2,
+            "scoped_push, push — Esc cancels"
+        );
         match r.intent {
             IntentType::FeaturePipeline(FeaturePipelineOp::AddCommitPush { feature_hint }) => {
                 assert_eq!(feature_hint, "api")
@@ -5882,7 +5843,8 @@ mod kev_layer1_tests {
         assert_eq!(r.engine, Engine::User);
         let labels = gate.last_choice_labels.borrow().clone();
         assert!(
-            labels[0].starts_with("undo") && labels[1].starts_with("revert"),
+            labels[0].starts_with("Undo the last commit")
+                && labels[1].starts_with("Revert a commit"),
             "{:?}",
             labels
         );
@@ -5926,6 +5888,68 @@ mod kev_layer1_tests {
             IntentType::ScopedWrite(ScopedWriteOp::RebaseContinue)
         ));
         assert_eq!(k.main_calls.load(Ordering::SeqCst), 0);
+    }
+
+    /// A classifier whose server is down.
+    struct Down;
+    impl IntentClassifier for Down {
+        async fn rank(
+            &self,
+            _state: serde_json::Value,
+            _instructions: &str,
+            _options: &[(String, String)],
+            _config: &Config,
+        ) -> anyhow::Result<Vec<(String, f32)>> {
+            anyhow::bail!("The Kev model server isn't running")
+        }
+    }
+
+    #[tokio::test]
+    async fn with_kev_down_the_manual_menu_uses_the_normal_safe_path() {
+        // The old manual menu listed raw git commands, mislabeled commit+push as
+        // "git push", offered a raw hard reset past every gate, and reported ⚡.
+        let gate = ScriptedGate::new(0);
+        let r = classify_query(
+            &Down,
+            &ctx(),
+            "show me the history",
+            &Config::default(),
+            &gate,
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.engine, Engine::User);
+        let labels = gate.last_choice_labels.borrow().clone();
+        assert!(labels.iter().all(|l| !l.starts_with("git ")), "{labels:?}");
+        assert!(
+            labels.contains(&"Push".to_string())
+                && labels.contains(&"Undo the last commit".to_string())
+        );
+        assert!(matches!(r.intent, IntentType::ReadOnly(ReadOnlyOp::Status)));
+        // Picking Undo reaches the undo gate's intent, never a raw reset.
+        let undo_idx = labels
+            .iter()
+            .position(|l| l == "Undo the last commit")
+            .unwrap();
+        let r = classify_query(
+            &Down,
+            &ctx(),
+            "x",
+            &Config::default(),
+            &ScriptedGate::new(undo_idx),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            r.intent,
+            IntentType::ScopedWrite(ScopedWriteOp::UndoIntent)
+        ));
+        // --yes can't pick for you.
+        assert!(
+            classify_query(&Down, &ctx(), "x", &Config::default(), &AutoConfirmGate)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
