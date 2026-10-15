@@ -2,11 +2,11 @@
 name = "gitrust"
 version = "0.4.1"
 edition = "2021"
-description = "Agentic Git CLI — natural language interface for Git, routed by a local decision model (Kev)"
+description = "A safety layer for Git: plain-English Git operations with deterministic guardrails, undo protection and lost-work recovery, routed by a local decision model (Kev)"
 license = "MIT"
 repository = "https://github.com/Aniketdalvi385/gitrust"
 readme = "README.md"
-keywords = ["git", "cli", "llm", "ollama", "safety"]
+keywords = ["git", "cli", "safety", "recovery", "local-model"]
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]

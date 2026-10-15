@@ -1,5 +1,11 @@
 # Intent-classifier redesign — research notes (routing robustness)
 
+> **Superseded (2026-10).** The embedding router this research led to shipped in v0.3.0 and was
+> removed in v0.4.0, when the qwen LLM and the router were both replaced by Kev, a local decision
+> model (70% stock, 41/44 fine-tuned on the same 44-case set this document built). Its central
+> rule — erring toward "ask" is always safe — carried over as Kev's confidence bars. See
+> `docs/kev_migration_research.md`.
+
 **Status:** research only, no code changes. Decision deferred to the user.
 **Date:** 2026-08-10 · **Trigger:** the v0.3.0 phrasing/scope variant run
 (M-03/04/10/19/20) exposed that the same behavior asked different ways gives

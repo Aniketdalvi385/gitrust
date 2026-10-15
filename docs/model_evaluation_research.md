@@ -1,9 +1,13 @@
 # SLM model evaluation — is there a better local model than qwen2.5:3b?
 
+> **Follow-up (2026-10).** The answer here — no better *generative* model fits 8 GB — still
+> stands. What it didn't consider was a model that doesn't generate: Kev-0.8B, a decision model,
+> replaced qwen2.5:3b in v0.4 (`docs/kev_migration_research.md`). The methodology lessons below
+> applied again there.
+
 **Status:** research, concluded. **Date:** 2026-08-11.
 **Baseline:** qwen2.5:3b (1.9 GB) — the configured/installed model.
-**Machine:** Apple M2, **8 GB RAM** (the binding constraint — see
-[[glit-runtime-constraints]]).
+**Machine:** Apple M2, **8 GB RAM** (the binding constraint).
 
 ## Question
 

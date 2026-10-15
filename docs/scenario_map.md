@@ -2,6 +2,23 @@
 
 **Coverage audit, verified potholes, and the build path to "the teammate who fixes git"**
 
+> **Status note (2026-10, v0.4.1).** This audit was written in July 2026 against the qwen-era
+> design and is kept as written. What has changed since:
+> - **Layer 1 is no longer an LLM.** Wherever this map says "the LLM path" or "qwen2.5:3b",
+>   read: ⚡ exact or learned phrases, then **Kev**, a local decision model that ranks GiTrust's
+>   36 operations and never generates text, then a menu when it isn't confident
+>   (`docs/kev_migration_research.md`). The invariant holds more strictly: the model no longer
+>   supplies arguments or drafts commit messages either (S-rows that discuss "draft quality"
+>   no longer apply — the user writes the message).
+> - **S58 (model down):** a warning plus a menu of every operation, through the normal gates;
+>   `--yes` and runs without a terminal refuse with exit 1.
+> - **File scoping (S3/S5):** pass 2 asks Kev one yes/no question per file and bands the answer
+>   (related / your call / unrelated), instead of one LLM call over all diffs.
+> - **Tier-2 progress:** #11 interpretation-echo — **done** (the first line of every run names
+>   what was understood, v0.4 UX pass); #15 SquashLastN — **done**; #19 force-with-lease default
+>   — **done**; #12 RemoteRewritten and #20 index.lock — **detected** as repo situations, the
+>   full response flows are still open; the rest are open (see `gitrust/CLAUDE.md`, Status).
+
 This document maps the full space of git situations GiTrust should address, grades the current design (blueprint v2 + CLAUDE.md) against each, and specifies concrete fixes. Three findings were **empirically verified** in a live test environment (marked ⚗️): they are facts about git/libgit2 behavior, not opinions.
 
 ---

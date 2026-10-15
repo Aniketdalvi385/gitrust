@@ -1,8 +1,0 @@
-# OPTIONAL — only needed if you want to use a local GGUF instead of the
-# Ollama registry model. Default flow: `gitrust setup` pulls qwen2.5:3b
-# from the registry; this file is unused unless you run:
-#   ollama create gitrust-qwen --file Modelfile
-#   gitrust --model gitrust-qwen "..."
-FROM ./qwen2.5-3b-instruct-q4_k_m.gguf
-PARAMETER temperature 0
-PARAMETER num_ctx 4096

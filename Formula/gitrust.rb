@@ -1,28 +1,28 @@
 class Gitrust < Formula
-  desc "Agentic Git CLI — natural language interface for Git"
-  homepage "https://github.com/YOUR_ORG/gitrust"
-  version "0.4.0"
+  desc "Safety layer for Git: plain-English operations, guarded by a local decision model"
+  homepage "https://github.com/Aniketdalvi385/gitrust"
+  version "0.4.1"
 
   depends_on "uv" # runs the local Kev decision model (gitrust setup installs it)
 
   on_macos do
     on_arm do
-      url "https://github.com/YOUR_ORG/gitrust/releases/download/v#{version}/gitrust-macos-aarch64"
+      url "https://github.com/Aniketdalvi385/gitrust/releases/download/v#{version}/gitrust-macos-aarch64"
       sha256 "PLACEHOLDER_SHA256_AARCH64"
     end
     on_intel do
-      url "https://github.com/YOUR_ORG/gitrust/releases/download/v#{version}/gitrust-macos-x86_64"
+      url "https://github.com/Aniketdalvi385/gitrust/releases/download/v#{version}/gitrust-macos-x86_64"
       sha256 "PLACEHOLDER_SHA256_X86_64"
     end
   end
 
   on_linux do
     on_arm do
-      url "https://github.com/YOUR_ORG/gitrust/releases/download/v#{version}/gitrust-linux-aarch64"
+      url "https://github.com/Aniketdalvi385/gitrust/releases/download/v#{version}/gitrust-linux-aarch64"
       sha256 "PLACEHOLDER_SHA256_LINUX_AARCH64"
     end
     on_intel do
-      url "https://github.com/YOUR_ORG/gitrust/releases/download/v#{version}/gitrust-linux-x86_64"
+      url "https://github.com/Aniketdalvi385/gitrust/releases/download/v#{version}/gitrust-linux-x86_64"
       sha256 "PLACEHOLDER_SHA256_LINUX_X86_64"
     end
   end
@@ -38,10 +38,12 @@ class Gitrust < Formula
 
       This will:
         • Clone Kev (github.com/jaredpalmer/kev, pinned) into ~/.gitrust/kev
-        • Install its environment with uv and download Kev-0.8B
+        • Install its environment with uv and download the GiTrust model
+          (huggingface.co/AniketDalvi385/gitrust-kev-0.8b)
         • Start the model server in the background and smoke-test it
 
-      The server uses ~3 GB while running. Stop it with: pkill -f kev.serve
+      The server uses ~3 GB while running and stops itself after 15 idle
+      minutes (kev_idle_minutes in ~/.gitrust.toml).
     EOS
   end
 

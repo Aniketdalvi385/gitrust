@@ -1,11 +1,14 @@
 # GiTrust — Project History
 
-*How this was built, what it changed at each stage, what it found, and why it
-concluded. Written at the point of deliberately parking the project.*
+*How this was built, what it changed at each stage, what it found, why it was
+parked — and how it came back. Sections 1–5 were written on 2026-08-11, when the
+project was deliberately parked, and are kept as written; section 6 covers the
+October 2026 revival (v0.4), which changed the conclusion.*
 
-**Active span:** 2026-07-13 → 2026-08-11 (~4 weeks). ~20,000 lines of Rust across
-23 modules, ~197 tests, 16 commits, one language-model swap that never happened,
-and one genuinely useful negative result.
+**Active span:** 2026-07-13 → 2026-08-11 (~4 weeks), then 2026-10-13 → 2026-10-15.
+Today: ~23,000 lines of Rust across 24 modules, 287 tests, v0.4.1. In August: one
+language-model swap that never happened and one genuinely useful negative result.
+In October: the swap that did happen — to a different *kind* of model.
 
 ---
 
@@ -181,7 +184,7 @@ hardware, benchmark bugs masquerade convincingly as model-quality results.
 
 ---
 
-## 4. Why the project concluded here
+## 4. Why the project was parked here (August 2026)
 
 The tool works, it's well-tested, and every safety invariant it set out to build
 was built. But the honest assessment at conclusion is this:
@@ -207,6 +210,8 @@ conclusion, so the project is parked here, deliberately, as a finished piece wit
 a finding.
 
 ### What it would take to revisit
+
+*(As written in August. What actually brought it back was none of these — see §6.)*
 
 - **A bigger memory target (16 GB+).** The one context where a 4B (or 7B) model
   could pay off. The eval harness is built and the methodology bugs are fixed —
@@ -236,6 +241,70 @@ than "the model worked great." Specifically it demonstrates:
   out to be methodology artifacts.
 - **Knowing when to stop.** Concluding a project on a finding, rather than
   polishing past the point of value.
+- **Knowing when to start again** (§6): coming back when a genuinely different
+  option appeared, and measuring it with the same harness before believing it.
+
+---
+
+## 6. The revival — a decision model instead of a language model (October 2026)
+
+### What changed the question
+
+The August conclusion was "a 3B model is the wrong tool on 8 GB, and a bigger one
+doesn't fit." What it never considered was a model that doesn't *generate* at all.
+[Kev](https://github.com/jaredpalmer/kev) is a **decision model**: given a request
+and a fixed list of options it returns a calibrated probability for each — no
+text, no JSON to parse, no prompt engineering. Kev-0.8B fits the 8 GB machine
+(~3 GB while serving).
+
+### What was measured (same 44-case harness, fast-path bypassed)
+
+| | qwen2.5:3b LLM | embedding router | Kev-0.8B stock | **Kev-0.8B fine-tuned** |
+|---|---|---|---|---|
+| Routing accuracy | 41% | 64% | 70% | **41/44 (93%)** |
+| Out-of-scope rejection | 4/4 | 0/4 | 4/4 | 4/4 |
+| Median latency | ~10 s | ~270 ms | ~0.5 s | ~0.5 s |
+
+The fine-tune (`gitrust-v2`) took two Colab runs on a free T4: ~1,500 synthetic
+requests over GiTrust's 36 operations, with every evaluation phrasing (and
+anything close to one) kept out of training. On a second held-out set of 68
+requests written by the owner, run through the whole binary, it acted correctly
+48 times, asked with a menu for the rest, and made **no wrong action that changes
+anything**. It is published as
+[`AniketDalvi385/gitrust-kev-0.8b`](https://huggingface.co/AniketDalvi385/gitrust-kev-0.8b)
+and is the default. Full record: `docs/kev_migration_research.md`.
+
+### What changed in the code (v0.4.0)
+
+- **Ollama, `qwen2.5:3b`, the 5,800-token prompt and the embedding router are
+  gone.** Layer 1 is now ⚡ exact phrases → learned phrases → ✦ Kev → ◇ a menu.
+- **The model chooses an operation and nothing else.** Arguments (branch names,
+  counts, files, URLs) are captured from the request or asked for; commit
+  messages are written by the user, never drafted.
+- **Kev's answer is checked deterministically:** it acts only above a confidence
+  bar (higher for anything that discards or rewrites work); the request's own
+  words can veto it ("push the login changes" is never a plain push); destructive
+  routes are re-asked with the options reversed. Calibration can't see a
+  *confident* confusion — these checks can.
+- **Problem B has an approach, not yet a proof:** file scoping asks Kev one
+  yes/no question per changed file and bands the probability — confident yes
+  pre-selected, confident no left out, the middle shown to the user as "your
+  call". It has only been checked on a 16-file smoke test (12–13 right, 0 wrong);
+  a realistic multi-feature diff is still untested.
+- **A UX pass**, done by driving the binary in a pseudo-terminal and reading the
+  screen (`docs/ux/README.md`): plain-language menus, a line saying what was
+  understood, a spinner, a one-key plan prompt, every cancel exiting 1, phrases
+  learned from menu picks, and a dozen messages that had been wrong.
+
+### How it changes the conclusion
+
+The August finding holds and gets sharper: **the intelligence belongs in the
+deterministic layers around the model**, and the safety machinery is still what
+makes the tool safe — Kev is not safe alone either. What was wrong was the
+implied corollary that no local model could do better. **Model type mattered
+more than size**: a 0.8B model that ranks a closed list beat a 3B model that
+writes text, at a twentieth of the latency on the same laptop, and a cheap
+fine-tune made it good enough that most requests no longer need a menu.
 
 ---
 
@@ -259,9 +328,19 @@ than "the model worked great." Specifically it demonstrates:
 | 14 | `209f964` fix 2 passed-with-defects | 2026-08-07 | M-13 staging; M-21 failure-masked-as-success. |
 | 15 | `bc46cb1` **embedding router** | 2026-08-10 | Layer 1.25 + eval harness + research doc. The architectural turn. |
 | 16 | `ff98ebe` final paraphrase captures | 2026-08-10 | Last 3 variant misroutes closed deterministically. |
+| 17 | `5f56525` public-readiness docs | 2026-08-11 | README, this history, license; v0.3.0 released and parked. |
+| 18 | `92931df` **qwen → Kev** | 2026-10-13 | Ollama, the LLM prompt and the router replaced by the Kev decision model. |
+| 19 | `249d605` harden Layer 1 | 2026-10-13 | Second opinions, the 0.9 refusal bar, idle shutdown of the model server. |
+| 20 | `b9dbad9` `commit_push` | 2026-10-14 | 36th operation; round-2 fine-tune data and notebook. |
+| 21 | `077967b` gitrust-v2 results | 2026-10-15 | Round-2 fine-tune measured: 41/44, 0 harmful wrong actions. |
+| 22 | `7b947ca`…`85b7b8a` UX pass | 2026-10-15 | Nine commits: wrong messages fixed, plain menus, spinner, plan keys, learned phrases. |
+| 23 | `d07390e` fine-tune is the default | 2026-10-15 | Published to Hugging Face; v0.4.0 released. |
+| 24 | `2f3de3f` no-terminal message | 2026-10-15 | v0.4.1. |
 
 Deeper references, all in-repo: `gitrust/CLAUDE.md` (architecture),
 `docs/Build_phases_v3.md` (the phase plan), `docs/scenario_map.md` (the *why*
 behind each scenario), `docs/classifier_redesign_research.md` (the router
 research + eval), `docs/model_evaluation_research.md` (the model-swap negative
-result), `docs/slm_classification_notes.md` (the 3B-can't-do-this measurement).
+result), `docs/slm_classification_notes.md` (the 3B-can't-do-this measurement),
+`docs/kev_migration_research.md` (the move to Kev, the fine-tunes, every
+measurement since), `docs/ux/README.md` (the UX pass).

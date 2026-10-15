@@ -1,5 +1,9 @@
 # GiTrust Build Phases v3 — Phases 9–14
 
+> **Historical record (2026-07).** Phases 9–14 are complete and shipped in v0.2–v0.3. Since then
+> Layer 1 moved from qwen2.5:3b to the Kev decision model (v0.4, `kev_migration_research.md`);
+> current architecture: `gitrust/CLAUDE.md`.
+
 Continues the blueprint's Section 14 (phases 1–8, complete). Source of truth for _why_: `docs/scenario_map.md` (S-numbers and P-numbers below refer to it). Same iron rule as v2: **do not start a phase until the previous phase's verification passes.**
 
 Three findings driving Phase 9 were empirically verified against live git/libgit2 behavior; they are bugs, not features to consider.

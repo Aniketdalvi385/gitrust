@@ -824,12 +824,14 @@ local run (54 / 52 top-1, policy routes 48 / 47 all right, in-progress 8/10, S07
   **Done (§12.9–12.10):** `gitrust-v2` trained and measured. Round 3 candidates: undo vs revert for
   "roll back …", casual status ("whats goin on", "where am i"), typo robustness beyond templates, a
   "show conflicts" request mid-operation.
-- **Manual acceptance suite** (`GiTrust-test`) needs a v0.4.0 pass. Ollama-specific cases (e.g.
-  M-01 "Ollama OFF", `T_OLLAMA` fields, M-02 "LLM-path classification") must be rewritten for Kev,
-  and commit tests now require the user to type the message.
+- **Manual acceptance suite:** the in-repo `docs/MANUAL_TEST_SUITE.md` was updated for v0.4
+  (2026-10-15: model-down, commit-message and engine-line expectations rewritten, verified on the
+  binary). The automated runner in the separate `GiTrust-test` repo is still qwen-era (`T_OLLAMA`
+  fields, Ollama checks) and needs the same rewrite before a v0.4 run.
 - Eval coverage for the 6 added ops and in-progress phrasings (§8.3); a realistic-diff Problem B
   fixture set (§8.1).
-- `Formula/gitrust.rb` is still a placeholder (no release binaries published).
+- `Formula/gitrust.rb` is still a template (real repo URL and version, but placeholder sha256s:
+  releases carry no binaries yet — see `docs/PUBLISH_CHECKLIST.md`).
 - Kev-4B would likely help (index 38 vs 23) but needs a 16–32 GB machine — the same "re-run on
   bigger hardware" item the paper already lists.
 

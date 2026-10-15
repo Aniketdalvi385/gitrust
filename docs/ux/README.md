@@ -7,7 +7,7 @@ pseudo-terminal and reading the rendered screen — not by reading the code. The
 [`../../design_handoff_gitrust_ux/README.md`](../../design_handoff_gitrust_ux/README.md) (written for
 the qwen era; the Kev-era menus it doesn't cover follow its principles).
 
-Five commits on `v0.4.0-kev`: `7b947ca` (wrong things), `ac5f0f9` (menus), `b281665` (spinner),
+Released in v0.4.0. Five commits on `v0.4.0-kev`: `7b947ca` (wrong things), `ac5f0f9` (menus), `b281665` (spinner),
 `a3c1123` (file picker + plan), and the help/docs commit. Tests 244 → 270; every behaviour change was
 written test-first, and each new test was seen failing first.
 

@@ -1,5 +1,21 @@
 # Handoff: GiTrust UX redesign
 
+> **Status note (2026-10, v0.4.1).** Written in July 2026 for the qwen2.5:3b / Ollama design and
+> kept as written. Since v0.4 the model is **Kev**, a local decision model that ranks GiTrust's
+> 36 operations with calibrated probabilities — so read `◉ LLM` as **`✦ Kev`** (~0.5–1 s, ~25 s
+> on a cold start), "the LLM picks from a fixed enum" as literally true, and the qwen accuracy
+> and latency figures as historical. The principles, copy, glyphs and keymaps still govern; what
+> was built, and where the implementation deliberately differs, is recorded in
+> [`../docs/ux/README.md`](../docs/ux/README.md):
+> - **Built:** the engine line (M1 + interpretation echo), plain-language menus, stage labels as
+>   a spinner (M2), honest help (M6), Rust-only reasoning text (M7), per-repo aliases learned from
+>   menu picks (M8, `.git/gitrust/aliases.toml`), the one-key plan prompt, numbered menus.
+> - **Narrower on purpose:** plan keys are Enter / `q` / `e` (edit message) / `s` (don't push),
+>   not Variant C's skip-any-step; there is no post-run `[w]rong?` prompt (aliases are learned
+>   from menu picks instead); no per-group toggles in the file picker.
+> - **Exit codes:** every back-out (Esc, Ctrl-C, `q`, a declined plan) exits 1 with
+>   `↪ Canceled — nothing was done.`
+
 ## Overview
 
 This handoff documents a UX pass on **GiTrust**, an agentic CLI that wraps Git in natural language (Rust, single binary, qwen2.5:3b via Ollama for intent classification). The package covers:

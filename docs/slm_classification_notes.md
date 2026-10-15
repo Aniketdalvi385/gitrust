@@ -1,5 +1,9 @@
 # Small-model intent classification — design notes
 
+> **Follow-up (2026-10).** "Deterministic-first" still holds; the LLM fallback described here
+> was replaced in v0.4 by Kev, a local decision model that ranks a closed list of operations
+> instead of generating JSON (`docs/kev_migration_research.md`).
+
 GiTrust classifies natural-language intent on a **local 3B model** (qwen2.5:3b via
 Ollama). This note records why the classification architecture is
 *deterministic-first with an LLM fallback*, backed by both direct measurement and

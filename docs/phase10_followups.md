@@ -1,5 +1,8 @@
 # Phase 10 follow-ups (code-review backlog)
 
+> **Historical record (2026-07).** A Phase 10 review backlog, kept as written. Current
+> architecture and open work: `gitrust/CLAUDE.md` and `docs/PUBLISH_CHECKLIST.md`.
+
 Findings from the Phase 10 code review (state machine: `RepoSituation`,
 `detect_situation`, `situation_gate`). Fixed in the review pass: fail-open on
 `build_context` error, exit-0 on state refusal, and the matrix-test coverage gap
