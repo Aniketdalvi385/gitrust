@@ -275,6 +275,9 @@ pub struct IntentResult {
     pub confidence: f32,
     pub raw_query: String,
     pub engine: Engine,
+    /// The "what GiTrust understood" line was already printed (before an
+    /// argument question) — don't print it again.
+    pub echoed: bool,
 }
 
 // =============================================================================

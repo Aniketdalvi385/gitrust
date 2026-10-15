@@ -371,6 +371,35 @@ pub fn branch_invalid_intro(name: &str) -> String {
 /// Label of the pre-filled branch-name prompt after an invalid name.
 pub const BRANCH_NAME_SUGGESTED: &str = "Branch name (suggested — Enter to use, or edit):";
 
+/// How old status's view of the remote is (ahead/behind come from the last
+/// fetch). `secs` = age of .git/FETCH_HEAD; `None` = never fetched.
+pub fn fetch_age_note(secs: Option<u64>) -> String {
+    let Some(s) = secs else {
+        return "Remote state: never fetched — gitrust \"fetch\" checks the remote.".to_string();
+    };
+    let age = match s {
+        0..=59 => "just now".to_string(),
+        60..=3599 => format!("{} min ago", s / 60),
+        3600..=86399 => {
+            let h = s / 3600;
+            format!("{} hour{} ago", h, if h == 1 { "" } else { "s" })
+        }
+        _ => {
+            let d = s / 86400;
+            format!("{} day{} ago", d, if d == 1 { "" } else { "s" })
+        }
+    };
+    format!(
+        "Remote state as of the last fetch, {} — gitrust \"fetch\" refreshes it.",
+        age
+    )
+}
+
+/// Older than 10 minutes (or never): status shows the note in yellow.
+pub fn fetch_is_stale(secs: Option<u64>) -> bool {
+    secs.map_or(true, |s| s > 10 * 60)
+}
+
 /// Status suggestion when HEAD is detached outside any operation.
 pub const DETACHED_SUGGESTION: &str =
     "You're not on a branch — new commits here are easy to lose. Save your spot: gitrust \"create branch <name>\"";
@@ -643,6 +672,28 @@ Put one in your request, e.g. commit everything with message 'fix login'.";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fetch_age_note_says_how_old_the_remote_view_is() {
+        assert_eq!(
+            fetch_age_note(None),
+            "Remote state: never fetched — gitrust \"fetch\" checks the remote."
+        );
+        assert_eq!(
+            fetch_age_note(Some(30)),
+            "Remote state as of the last fetch, just now — gitrust \"fetch\" refreshes it."
+        );
+        assert_eq!(
+            fetch_age_note(Some(8 * 60)),
+            "Remote state as of the last fetch, 8 min ago — gitrust \"fetch\" refreshes it."
+        );
+        assert!(fetch_age_note(Some(3 * 3600)).contains("3 hours ago"));
+        assert!(fetch_age_note(Some(2 * 86400)).contains("2 days ago"));
+        // Older than 10 minutes → worth flagging (status colors it).
+        assert!(
+            !fetch_is_stale(Some(9 * 60)) && fetch_is_stale(Some(11 * 60)) && fetch_is_stale(None)
+        );
+    }
 
     #[test]
     fn every_help_phrase_is_instant() {

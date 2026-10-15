@@ -150,6 +150,37 @@ pub fn describe_situation(s: &RepoSituation) -> Option<String> {
     }
 }
 
+/// Seconds since GiTrust last learned the remote's state: the newest of
+/// .git/FETCH_HEAD and the remote-tracking reflogs (clone, fetch and push all
+/// write those; a fresh clone has no FETCH_HEAD). `None` if neither exists.
+pub fn last_fetch_age_secs(repo: &Repository) -> Option<u64> {
+    fn newest(dir: &std::path::Path, best: &mut Option<std::time::SystemTime>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                newest(&p, best);
+            } else if let Ok(m) = e.metadata().and_then(|m| m.modified()) {
+                if best.map_or(true, |b| m > b) {
+                    *best = Some(m);
+                }
+            }
+        }
+    }
+    let mut best = std::fs::metadata(repo.path().join("FETCH_HEAD"))
+        .and_then(|m| m.modified())
+        .ok();
+    newest(&repo.path().join("logs/refs/remotes"), &mut best);
+    best.map(|t| {
+        std::time::SystemTime::now()
+            .duration_since(t)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    })
+}
+
 /// Deterministically classify the repository into a `RepoSituation` (Layer 0
 /// state machine, §12). **No LLM anywhere** — only `repo.state()`, index
 /// inspection, reflog/ancestor tests, and file mtimes. Checked in a fixed

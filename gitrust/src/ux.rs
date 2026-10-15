@@ -217,10 +217,30 @@ pub fn engine_line(
     plain: bool,
     debug: bool,
 ) -> Option<String> {
+    let title = intent_title(&r.intent)?;
+    Some(echo_line(
+        &title,
+        r.engine,
+        elapsed,
+        Some(r.confidence),
+        plain,
+        debug,
+    ))
+}
+
+/// Format one echo line for a title (shared by the early echo printed before
+/// an argument question, which only knows the op's title).
+pub fn echo_line(
+    title: &str,
+    engine: crate::commands::Engine,
+    elapsed: std::time::Duration,
+    confidence: Option<f32>,
+    plain: bool,
+    debug: bool,
+) -> String {
     use crate::commands::Engine;
     use crate::copy::*;
-    let title = intent_title(&r.intent)?;
-    let (glyph, suffix) = match r.engine {
+    let (glyph, suffix) = match engine {
         Engine::Fast => (
             if plain {
                 ENGINE_FAST_ASCII
@@ -246,12 +266,11 @@ pub fn engine_line(
             " · your choice".to_string(),
         ),
     };
-    let dbg = if debug && r.engine == Engine::Kev {
-        format!("  (p={:.2})", r.confidence)
-    } else {
-        String::new()
+    let dbg = match confidence {
+        Some(p) if debug && engine == Engine::Kev => format!("  (p={:.2})", p),
+        _ => String::new(),
     };
-    Some(format!("{}  {}{}{}", glyph, title, suffix, dbg))
+    format!("{}  {}{}{}", glyph, title, suffix, dbg)
 }
 
 // =============================================================================
@@ -353,6 +372,55 @@ pub fn spinner_relabel(label: &str) -> bool {
     }
 }
 
+/// Wrap `text` to `width` columns: the first line starts with `lead`, the rest
+/// are indented to line up under the text. Words longer than the width are
+/// kept whole.
+pub fn wrap_hanging(lead: &str, text: &str, width: usize) -> Vec<String> {
+    let indent = " ".repeat(display_width(lead));
+    let mut lines = Vec::new();
+    let mut cur = lead.to_string();
+    let mut cur_len = display_width(lead);
+    let mut empty = true;
+    for word in text.split_whitespace() {
+        let w = display_width(word);
+        if !empty && cur_len + 1 + w > width {
+            lines.push(cur);
+            cur = indent.clone();
+            cur_len = indent.chars().count();
+            empty = true;
+        }
+        if !empty {
+            cur.push(' ');
+            cur_len += 1;
+        }
+        cur.push_str(word);
+        cur_len += w;
+        empty = false;
+    }
+    lines.push(cur);
+    lines
+}
+
+/// Columns a string takes on screen: ANSI codes take none; emoji-style
+/// symbols (⛔, 🔒, …) take two. Good enough for our own copy.
+pub fn display_width(s: &str) -> usize {
+    strip_ansi(s)
+        .chars()
+        .map(|c| match c as u32 {
+            0x26D4 | 0x2705 | 0x274C | 0x1F000..=0x1FAFF => 2,
+            _ => 1,
+        })
+        .sum()
+}
+
+/// Terminal width for wrapping: the real width, capped at 100, 80 if unknown.
+pub fn term_width() -> usize {
+    crossterm::terminal::size()
+        .map(|(c, _)| c as usize)
+        .unwrap_or(80)
+        .clamp(40, 100)
+}
+
 /// Remove ANSI color sequences (labels carry colored markers on a TTY).
 pub fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -393,6 +461,7 @@ mod tests {
             confidence,
             raw_query: "q".into(),
             engine,
+            echoed: false,
         };
         let ms = std::time::Duration::from_millis(600);
         let fast = engine_line(
@@ -467,6 +536,33 @@ mod tests {
         for w in ["status", "quit the rebase", "exit the merge"] {
             assert!(!is_repl_exit(w), "{w}");
         }
+    }
+
+    #[test]
+    fn wrap_hangs_continuation_lines_under_the_text() {
+        let lines = wrap_hanging("     Risks:    ", "Anyone who fetched the old version will need to reset. Their commits made on top are abandoned.", 60);
+        assert_eq!(
+            lines[0],
+            "     Risks:    Anyone who fetched the old version will need"
+        );
+        assert!(
+            lines[1].starts_with("               to reset."),
+            "{:?}",
+            lines
+        );
+        assert!(lines.iter().all(|l| l.chars().count() <= 60), "{:?}", lines);
+        // ⛔ is two columns wide: the lead counts it as such.
+        assert_eq!(display_width("  ⛔ x"), 6);
+        assert_eq!(display_width("\x1b[31m⚠\x1b[0m"), 1);
+        // A word longer than the width is kept whole, not split.
+        let long = wrap_hanging(
+            "  ",
+            "see ~/.gitrust/trash/20261015-123839/some/very/long/path",
+            20,
+        );
+        assert!(long
+            .iter()
+            .any(|l| l.contains("~/.gitrust/trash/20261015-123839/some/very/long/path")));
     }
 
     #[test]

@@ -9,6 +9,12 @@ pub struct FileManifest {
     pub change_type: ChangeType,
     pub diff_snippet: String,
     pub line_count: usize,
+    /// Lines added / removed vs HEAD (staged + unstaged; a new file's lines
+    /// are all additions). Shown as "+N −M" in the file picker.
+    #[serde(default)]
+    pub added: usize,
+    #[serde(default)]
+    pub removed: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +35,7 @@ pub fn build_manifest(
         .statuses(None)
         .context("Failed to read repository status")?;
 
+    let stats = line_stats(repo);
     let mut manifests = Vec::new();
 
     for entry in statuses.iter() {
@@ -52,15 +59,47 @@ pub fn build_manifest(
             get_whitespace_ignored_diff(repo, &path, max_lines_per_file).unwrap_or_default();
         let line_count = snippet.lines().count();
 
+        let (added, removed) = stats.get(&path).copied().unwrap_or((0, 0));
         manifests.push(FileManifest {
             path,
             change_type,
             diff_snippet: snippet,
             line_count,
+            added,
+            removed,
         });
     }
 
     Ok(manifests)
+}
+
+/// Per-file (added, removed) line counts, HEAD → working tree (through the
+/// index), untracked files included with their content. Best effort: an
+/// unreadable diff yields an empty map (the picker then shows no counts).
+fn line_stats(repo: &Repository) -> std::collections::HashMap<String, (usize, usize)> {
+    let mut out = std::collections::HashMap::new();
+    let head_tree = repo.head().ok().and_then(|h| h.peel_to_tree().ok());
+    let mut opts = git2::DiffOptions::new();
+    opts.include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .show_untracked_content(true);
+    let Ok(diff) = repo.diff_tree_to_workdir_with_index(head_tree.as_ref(), Some(&mut opts)) else {
+        return out;
+    };
+    for i in 0..diff.deltas().len() {
+        if let Ok(Some(patch)) = git2::Patch::from_diff(&diff, i) {
+            let delta = patch.delta();
+            let path = delta
+                .new_file()
+                .path()
+                .or_else(|| delta.old_file().path())
+                .map(|p| p.to_string_lossy().into_owned());
+            if let (Some(path), Ok((_, add, del))) = (path, patch.line_stats()) {
+                out.insert(path, (add, del));
+            }
+        }
+    }
+    out
 }
 
 /// Get a diff snippet with whitespace changes ignored.
@@ -214,6 +253,23 @@ mod tests {
     }
 
     #[test]
+    fn test_manifest_carries_line_counts_for_edited_and_new_files() {
+        // The file picker shows "+N −M" per file; new (untracked) files count
+        // their lines as additions.
+        let dir = TempDir::new().unwrap();
+        let repo = init_repo_with_commit(&dir); // test.txt = "hello"
+        std::fs::write(dir.path().join("test.txt"), "hello\nworld\nagain\n").unwrap();
+        std::fs::write(dir.path().join("new_file.rs"), "fn a() {}\nfn b() {}\n").unwrap();
+        let m = build_manifest(&repo, 25).unwrap();
+        let get = |p: &str| m.iter().find(|f| f.path == p).unwrap();
+        assert_eq!((get("test.txt").added, get("test.txt").removed), (3, 1));
+        assert_eq!(
+            (get("new_file.rs").added, get("new_file.rs").removed),
+            (2, 0)
+        );
+    }
+
+    #[test]
     fn test_build_manifest_empty_repo() {
         let dir = TempDir::new().unwrap();
         let repo = Repository::init(dir.path()).unwrap();
@@ -229,6 +285,8 @@ mod tests {
                 change_type: ChangeType::Modified,
                 diff_snippet: "+one\n+two\n+three".to_string(),
                 line_count: 3,
+                added: 0,
+                removed: 0,
             },
             FileManifest {
                 path: "large.rs".to_string(),
@@ -238,6 +296,8 @@ mod tests {
                     .collect::<Vec<_>>()
                     .join("\n"),
                 line_count: 100,
+                added: 0,
+                removed: 0,
             },
         ];
 
@@ -257,12 +317,16 @@ mod tests {
                 change_type: ChangeType::Modified,
                 diff_snippet: "lots of lines".to_string(),
                 line_count: 50,
+                added: 0,
+                removed: 0,
             },
             FileManifest {
                 path: "tiny.rs".to_string(),
                 change_type: ChangeType::Added,
                 diff_snippet: "+one".to_string(),
                 line_count: 1,
+                added: 0,
+                removed: 0,
             },
         ];
 

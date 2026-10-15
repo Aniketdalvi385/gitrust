@@ -22,30 +22,41 @@ use crate::validation::{capture_pre_step_state, DefaultValidator, PostCheckResul
 /// probability shows only under GITRUST_DEBUG. A refusal prints nothing here;
 /// its own message says it.
 fn print_engine_marker(result: &crate::commands::IntentResult, elapsed: std::time::Duration) {
+    if result.echoed {
+        return; // already said, before an argument question
+    }
+    if let Some(title) = crate::ux::intent_title(&result.intent) {
+        print_echo(&title, result.engine, elapsed, Some(result.confidence));
+    }
+}
+
+/// One "what GiTrust understood" line: colored engine glyph · title · dim
+/// suffix (latency / "your choice" / debug probability).
+fn print_echo(
+    title: &str,
+    engine: crate::commands::Engine,
+    elapsed: std::time::Duration,
+    confidence: Option<f32>,
+) {
     let use_color = crate::danger::use_color();
     let debug = std::env::var("GITRUST_DEBUG").is_ok();
-    let Some(line) = crate::ux::engine_line(result, elapsed, !use_color, debug) else {
-        return;
-    };
+    let line = crate::ux::echo_line(title, engine, elapsed, confidence, !use_color, debug);
     if !use_color {
         println!("{}", line);
         return;
     }
-    let ansi = match result.engine {
+    let ansi = match engine {
         crate::commands::Engine::Fast => "\x1b[36m", // cyan
         crate::commands::Engine::Kev => "\x1b[34m",  // blue
         crate::commands::Engine::User => "\x1b[35m", // magenta
     };
-    // glyph (colored) · title (plain) · suffix (dim)
     let (glyph, rest) = line.split_once("  ").unwrap_or((&line, ""));
-    let (title, suffix) = match rest.find(" · ").or_else(|| rest.find("  (p=")) {
-        Some(i) => rest.split_at(i),
-        None => (rest, ""),
-    };
-    println!(
-        "{}{}\x1b[0m  {}\x1b[2m{}\x1b[0m",
-        ansi, glyph, title, suffix
-    );
+    let split_at = rest
+        .find(" · ")
+        .or_else(|| rest.find("  (p="))
+        .unwrap_or(rest.len());
+    let (t, suffix) = rest.split_at(split_at);
+    println!("{}{}\x1b[0m  {}\x1b[2m{}\x1b[0m", ansi, glyph, t, suffix);
 }
 
 /// Snapshot the set of trash-net backup-dir names that exist right now. Used to
@@ -246,6 +257,7 @@ async fn classify_query(
 ) -> anyhow::Result<crate::commands::IntentResult> {
     use crate::commands::{Engine, IntentResult};
     use crate::kev::KevDecision;
+    let started = std::time::Instant::now();
 
     if let Some(intent) = crate::intent::try_canonical(query) {
         if std::env::var("GITRUST_DEBUG").is_ok() {
@@ -256,6 +268,7 @@ async fn classify_query(
             confidence: 1.0,
             raw_query: query.to_string(),
             engine: Engine::Fast,
+            echoed: false,
         });
     }
 
@@ -271,6 +284,7 @@ async fn classify_query(
             confidence: 1.0,
             raw_query: query.to_string(),
             engine: Engine::Fast,
+            echoed: false,
         });
     }
 
@@ -330,6 +344,7 @@ async fn classify_query(
                             confidence: p,
                             raw_query: query.to_string(),
                             engine,
+                            echoed: false,
                         });
                     }
                 }
@@ -422,6 +437,7 @@ async fn classify_query(
                 confidence: p,
                 raw_query: query.to_string(),
                 engine: Engine::Kev,
+                echoed: false,
             });
         }
         KevDecision::Ask { candidates } => {
@@ -430,14 +446,41 @@ async fn classify_query(
         }
     };
 
-    let mut ask = |kind: ArgKind| ask_argument(kind, gate);
-    let intent = crate::intent::build_from_op(&op, query, context, &mut ask)?;
+    let (intent, echoed) = build_with_echo(&op, query, context, gate, engine, started)?;
     Ok(IntentResult {
         intent,
         confidence,
         raw_query: query.to_string(),
         engine,
+        echoed,
     })
+}
+
+/// Build the intent for a routed or picked op. If an argument has to be asked
+/// (e.g. a branch name), first say what GiTrust understood — "✦  Create a
+/// branch · 1.4s" — so the question never appears without context. Returns
+/// whether that line was printed (the caller then skips the usual one).
+fn build_with_echo(
+    op: &str,
+    query: &str,
+    context: &crate::context::RepoContext,
+    gate: &dyn ConfirmationGate,
+    engine: crate::commands::Engine,
+    started: std::time::Instant,
+) -> anyhow::Result<(IntentType, bool)> {
+    let mut echoed = false;
+    let intent = {
+        let mut ask = |kind: ArgKind| {
+            if !echoed {
+                let title = crate::copy::op_label(op).map_or(op, |(t, _)| t);
+                print_echo(title, engine, started.elapsed(), None);
+                echoed = true;
+            }
+            ask_argument(kind, gate)
+        };
+        crate::intent::build_from_op(op, query, context, &mut ask)?
+    };
+    Ok((intent, echoed))
 }
 
 /// Kev's top op when the same question is asked with the options reversed
@@ -587,7 +630,13 @@ fn handle_read_only(
             // Show this whenever an upstream exists — counts could be wrong
             // regardless of whether they're currently zero.
             if ctx.upstream.is_some() {
-                println!("\n(Remote state from last fetch — run `gitrust \"fetch\"` to refresh.)");
+                let age = crate::context::last_fetch_age_secs(repo);
+                let note = crate::copy::fetch_age_note(age);
+                if crate::copy::fetch_is_stale(age) && crate::danger::use_color() {
+                    println!("\n\x1b[33m{}\x1b[0m", note); // yellow: stale
+                } else {
+                    println!("\n{}", note);
+                }
             }
         }
         ReadOnlyOp::Log { count } => {
@@ -2822,13 +2871,20 @@ fn manual_menu(
         GateResponse::Chose(i) if i < ops.len() => ops[i],
         _ => return crate::ux::canceled(),
     };
-    let mut ask = |kind: ArgKind| ask_argument(kind, gate);
-    let intent = crate::intent::build_from_op(op, query, context, &mut ask)?;
+    let (intent, echoed) = build_with_echo(
+        op,
+        query,
+        context,
+        gate,
+        Engine::User,
+        std::time::Instant::now(),
+    )?;
     Ok(IntentResult {
         intent,
         confidence: 1.0,
         raw_query: query.to_string(),
         engine: Engine::User,
+        echoed,
     })
 }
 
@@ -5870,6 +5926,25 @@ mod kev_layer1_tests {
             .await
             .unwrap();
         assert_eq!(k.main_calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn the_interpretation_is_echoed_before_an_argument_is_asked() {
+        // A branch name had to be asked: the "✦ Create a branch" line is shown
+        // BEFORE the question (then not repeated). No question → no early echo.
+        let k = Fixed::main(&[("branch", 0.8)]);
+        let typed = crate::confirm::MockGate {
+            response: GateResponse::TextProvided("feat-x".into()),
+        };
+        let r = classify(&k, &ctx(), "make me a new branch", &typed)
+            .await
+            .unwrap();
+        assert!(r.echoed);
+        let k = Fixed::main(&[("log", 0.9)]);
+        let r = classify(&k, &ctx(), "show me the history", &AutoConfirmGate)
+            .await
+            .unwrap();
+        assert!(!r.echoed);
     }
 
     #[tokio::test]

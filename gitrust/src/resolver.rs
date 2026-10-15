@@ -63,11 +63,11 @@ impl FileResolver for TwoPassResolver {
                 let change = manifests
                     .iter()
                     .find(|m| &m.path == path)
-                    .map(|m| m.change_type.clone())
-                    .unwrap_or(crate::manifest::ChangeType::Modified);
+                    .map(|m| (m.change_type.clone(), (m.added, m.removed)))
+                    .unwrap_or((crate::manifest::ChangeType::Modified, (0, 0)));
                 ClassifiedFile {
                     path: path.clone(),
-                    reason: file_reason(Why::NameMatch, feature_hint, &change, None),
+                    reason: file_reason(Why::NameMatch, feature_hint, &change.0, change.1, None),
                 }
             })
             .collect();
@@ -164,7 +164,13 @@ async fn classify_manifest_via_kev(
         for (f, p) in chunk.iter().zip(probs) {
             let file = ClassifiedFile {
                 path: f.path.clone(),
-                reason: file_reason(Why::Band(band(p)), feature, &f.change_type, Some(p)),
+                reason: file_reason(
+                    Why::Band(band(p)),
+                    feature,
+                    &f.change_type,
+                    (f.added, f.removed),
+                    Some(p),
+                ),
             };
             match band(p) {
                 Band::Related => result.related.push(file),
@@ -190,6 +196,7 @@ fn file_reason(
     why: Why,
     feature: &str,
     change: &crate::manifest::ChangeType,
+    (added, removed): (usize, usize),
     p: Option<f32>,
 ) -> String {
     use crate::manifest::ChangeType as C;
@@ -209,7 +216,15 @@ fn file_reason(
         Some(p) if std::env::var("GITRUST_DEBUG").is_ok() => format!("  (p={:.2})", p),
         _ => String::new(),
     };
-    format!("{} · {}{}", what, because, dbg)
+    let stat = match (added, removed) {
+        (0, 0) => String::new(),
+        (a, 0) => format!("+{}", a),
+        (0, r) => format!("−{}", r),
+        (a, r) => format!("+{} −{}", a, r),
+    };
+    // Pad by characters ("−" is multi-byte), so the words line up.
+    let pad = 8usize.saturating_sub(stat.chars().count());
+    format!("{}{}  {} · {}{}", stat, " ".repeat(pad), what, because, dbg)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -307,6 +322,8 @@ mod tests {
             change_type: ChangeType::Modified,
             diff_snippet: snippet.to_string(),
             line_count: snippet.lines().count(),
+            added: 0,
+            removed: 0,
         }
     }
 
@@ -400,37 +417,39 @@ mod tests {
 
     #[test]
     fn test_file_reasons_are_plain_language() {
-        // The picker used to show "kev p=0.77" — a model internal.
+        // The picker used to show "kev p=0.77" — a model internal. "+N −M"
+        // comes first, padded so the words line up.
+        let r = |w, c, n, p| file_reason(w, "login", c, n, p);
         assert_eq!(
-            file_reason(Why::NameMatch, "login", &ChangeType::Modified, None),
-            "edited · name matches “login”"
+            r(Why::NameMatch, &ChangeType::Modified, (3, 1), None),
+            "+3 −1     edited · name matches “login”"
         );
         assert_eq!(
-            file_reason(
+            r(
                 Why::Band(Band::Related),
-                "login",
                 &ChangeType::Added,
+                (12, 0),
                 Some(0.77)
             ),
-            "new · likely part of “login”"
+            "+12       new · likely part of “login”"
         );
         assert_eq!(
-            file_reason(
+            r(
                 Why::Band(Band::Uncertain),
-                "login",
                 &ChangeType::Modified,
+                (120, 34),
                 Some(0.63)
             ),
-            "edited · might be part of “login” — your call"
+            "+120 −34  edited · might be part of “login” — your call"
         );
         assert_eq!(
-            file_reason(
+            r(
                 Why::Band(Band::Unrelated),
-                "login",
                 &ChangeType::Deleted,
+                (0, 7),
                 Some(0.1)
             ),
-            "deleted · looks unrelated"
+            "−7        deleted · looks unrelated"
         );
     }
 

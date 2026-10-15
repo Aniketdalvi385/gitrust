@@ -299,18 +299,27 @@ fn print_explanation_block(danger: crate::danger::DangerLevel, exp: &crate::expl
     let marker = crate::danger::colored_marker(danger);
     let label_text = crate::danger::label(danger);
     let label_colored = crate::danger::colorize(danger, label_text);
+    // Wrapped to the terminal with a hanging indent, so continuation lines sit
+    // under the text instead of starting at column 0.
+    let width = crate::ux::term_width();
+    let say = |lead: &str, text: &str| {
+        for l in crate::ux::wrap_hanging(lead, text, width) {
+            println!("{}", l);
+        }
+    };
     println!();
-    if marker.is_empty() {
-        println!("  {}: {}", label_colored, exp.what);
+    let head = if marker.is_empty() {
+        format!("  {}: ", label_colored)
     } else {
-        println!("  {} {}: {}", marker, label_colored, exp.what);
-    }
-    println!("     Risks:    {}", exp.risks);
+        format!("  {} {}: ", marker, label_colored)
+    };
+    say(&head, &exp.what.to_string());
+    say("     Risks:    ", &exp.risks.to_string());
     if let Some(r) = &exp.recovery {
-        println!("     Recovery: {}", r);
+        say("     Recovery: ", &r.to_string());
     }
     if let Some(s) = &exp.safety {
-        println!("     Safety:   {}", s);
+        say("     Safety:   ", &s.to_string());
     }
     println!();
 }
