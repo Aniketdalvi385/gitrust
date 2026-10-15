@@ -1,6 +1,6 @@
 [package]
 name = "gitrust"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "Agentic Git CLI — natural language interface for Git, routed by a local decision model (Kev)"
 license = "MIT"
