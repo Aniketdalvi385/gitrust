@@ -519,6 +519,12 @@ pub fn op_label(op: &str) -> Option<(&'static str, &'static str)> {
     })
 }
 
+// Spinner labels (stderr, terminal only — ux::Spinner).
+pub const SPINNER_UNDERSTANDING: &str = "Understanding your request…";
+pub const SPINNER_MATCHING_FILES: &str = "Matching files to your request…";
+pub const SPINNER_COLD_START: &str =
+    "Starting the local model (about 25 s after it has been idle)…";
+
 /// The manual menu when the local model is unreachable.
 pub const MANUAL_MENU_QUESTION: &str =
     "The local model isn't available — pick what you want to do (type to filter):";

@@ -150,7 +150,10 @@ async fn classify_manifest_via_kev(
                 )
             })
             .collect();
-        let probs = crate::kev::ask_nouls(config, state, &questions).await?;
+        let probs = {
+            let _spin = crate::ux::Spinner::start(crate::copy::SPINNER_MATCHING_FILES);
+            crate::kev::ask_nouls(config, state, &questions).await?
+        };
         for (f, p) in chunk.iter().zip(probs) {
             let file = ClassifiedFile {
                 path: f.path.clone(),

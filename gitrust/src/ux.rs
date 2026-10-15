@@ -254,6 +254,101 @@ pub fn engine_line(
     Some(format!("{}  {}{}{}", glyph, title, suffix, dbg))
 }
 
+// =============================================================================
+// Spinner — feedback while the local model works (design handoff §M2)
+// =============================================================================
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+
+/// The label of the spinner currently on screen, if any — so a deeper layer
+/// (e.g. a cold start inside a model call) can say what's really happening.
+static ACTIVE: Mutex<Option<Arc<Mutex<String>>>> = Mutex::new(None);
+
+/// A one-line spinner on stderr: "⠋ Understanding your request… · 4s". Only on
+/// a terminal (a no-op when piped or under tests). Dropping it erases the line,
+/// so a prompt never shares a line with it. Elapsed seconds appear after 2 s.
+pub struct Spinner {
+    stop: Arc<AtomicBool>,
+    handle: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Spinner {
+    pub fn start(label: &str) -> Spinner {
+        use std::io::IsTerminal;
+        let stop = Arc::new(AtomicBool::new(false));
+        if !std::io::stderr().is_terminal() || ACTIVE.lock().map(|a| a.is_some()).unwrap_or(true) {
+            return Spinner { stop, handle: None };
+        }
+        let text = Arc::new(Mutex::new(label.to_string()));
+        if let Ok(mut a) = ACTIVE.lock() {
+            *a = Some(text.clone());
+        }
+        let plain = !crate::danger::use_color();
+        let frames: &[&str] = if plain {
+            &["|", "/", "-", "\\"]
+        } else {
+            &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+        };
+        let stop2 = stop.clone();
+        let started = std::time::Instant::now();
+        let handle = std::thread::spawn(move || {
+            use std::io::Write;
+            let mut i = 0usize;
+            // Don't flash a spinner for a fast answer.
+            std::thread::sleep(std::time::Duration::from_millis(150));
+            while !stop2.load(Ordering::Relaxed) {
+                let label = text.lock().map(|t| t.clone()).unwrap_or_default();
+                let secs = started.elapsed().as_secs();
+                let elapsed = if secs >= 2 { format!(" · {}s", secs) } else { String::new() };
+                let line = format!("{} {}{}", frames[i % frames.len()], label, elapsed);
+                let mut err = std::io::stderr();
+                if plain {
+                    let _ = write!(err, "\r\x1b[2K{}", line);
+                } else {
+                    let _ = write!(err, "\r\x1b[2K\x1b[2m{}\x1b[0m", line);
+                }
+                let _ = err.flush();
+                i += 1;
+                std::thread::sleep(std::time::Duration::from_millis(80));
+            }
+            let mut err = std::io::stderr();
+            let _ = write!(err, "\r\x1b[2K");
+            let _ = err.flush();
+        });
+        Spinner {
+            stop,
+            handle: Some(handle),
+        }
+    }
+}
+
+impl Drop for Spinner {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(h) = self.handle.take() {
+            let _ = h.join();
+            if let Ok(mut a) = ACTIVE.lock() {
+                *a = None;
+            }
+        }
+    }
+}
+
+/// Change what the on-screen spinner says (no-op when none is running).
+/// Returns false when there is no spinner, so the caller can print instead.
+pub fn spinner_relabel(label: &str) -> bool {
+    match ACTIVE.lock().ok().and_then(|a| a.clone()) {
+        Some(t) => {
+            if let Ok(mut t) = t.lock() {
+                *t = label.to_string();
+            }
+            true
+        }
+        None => false,
+    }
+}
+
 /// Remove ANSI color sequences (labels carry colored markers on a TTY).
 pub fn strip_ansi(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -368,6 +463,16 @@ mod tests {
         for w in ["status", "quit the rebase", "exit the merge"] {
             assert!(!is_repl_exit(w), "{w}");
         }
+    }
+
+    #[test]
+    fn spinner_is_silent_off_a_terminal() {
+        // cargo test's stderr is not a TTY: no thread, nothing printed, and a
+        // relabel with no spinner says so (the caller then prints instead).
+        let s = Spinner::start("Understanding your request…");
+        assert!(s.handle.is_none());
+        drop(s);
+        assert!(!spinner_relabel("Starting the local model…"));
     }
 
     #[test]

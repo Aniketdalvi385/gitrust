@@ -303,7 +303,16 @@ pub async fn ensure_running(config: &Config) -> anyhow::Result<()> {
         .next()
         .and_then(|p| p.trim_end_matches('/').parse::<u16>().ok())
         .unwrap_or(8009);
-    eprintln!("  Starting the local Kev model in the background (first run takes ~25 s)…");
+    // Say it on the spinner that's already running, or start one (setup).
+    let _own_spin = if crate::ux::spinner_relabel(crate::copy::SPINNER_COLD_START) {
+        None
+    } else {
+        use std::io::IsTerminal;
+        if !std::io::stderr().is_terminal() {
+            eprintln!("  {}", crate::copy::SPINNER_COLD_START);
+        }
+        Some(crate::ux::Spinner::start(crate::copy::SPINNER_COLD_START))
+    };
     spawn_server(dir, &config.kev_run, port, config.kev_idle_minutes)?;
     for _ in 0..120 {
         tokio::time::sleep(Duration::from_millis(500)).await;

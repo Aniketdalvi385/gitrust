@@ -30,6 +30,7 @@ impl IntentClassifier for KevClassifier {
         options: &[(String, String)],
         config: &Config,
     ) -> anyhow::Result<Vec<(String, f32)>> {
+        let _spin = crate::ux::Spinner::start(crate::copy::SPINNER_UNDERSTANDING);
         crate::kev::ask_choice(config, state, instructions, options).await
     }
 }
