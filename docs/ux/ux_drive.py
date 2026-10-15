@@ -209,6 +209,20 @@ def _(): return [BIN, "put my work up on github"], [("Esc cancel", b"2", "menu")
 @scenario("menu_arrows", repo="clean")
 def _(): return [BIN, "undo"], [("Esc cancel", DOWN, "menu"), (None, DOWN, "after ↓"), (None, ESC, "after ↓↓"), (None, None, "after Esc")]
 
+@scenario("plan_skip_push")
+def _(): return [BIN, "push the login changes"], [("Stage which files", ENTER, "picker"),
+                                                  ("Commit message", b"Add logout" + ENTER, "message"),
+                                                  ("[s] don't push", b"s", "plan"),
+                                                  ("Not pushing", ENTER, "after s"),
+                                                  ("Done", None, "done")]
+
+@scenario("plan_edit_message")
+def _(): return [BIN, "commit everything"], [("Commit message", b"wip" + ENTER, "message"),
+                                             ("[e] edit message", b"e", "plan"),
+                                             ("Commit message", b" logout flow" + ENTER, "editing"),
+                                             ("wip logout flow", ENTER, "plan again"),
+                                             ("Done", None, "done")]
+
 @scenario("maybe_not_git")
 def _(): return [BIN, "where am i right now"], [("?", None, "menu shown"), (None, DOWN + ENTER, "pick 2nd")]
 

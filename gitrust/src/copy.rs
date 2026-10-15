@@ -38,6 +38,23 @@ pub const TIMELINE_CONNECTOR_ASCII: &str = "|";
 // the dishonesty of advertising unwired keys.
 pub const PLAN_KEYMAP_LEGEND: &str = "[Enter] run · [q] cancel";
 
+/// Said when `s` drops the plan's trailing push.
+pub const PLAN_PUSH_SKIPPED: &str =
+    "↳ Not pushing this time — the commit stays local. Push later with gitrust \"push\".";
+
+/// The plan prompt's legend: only the keys that do something for this plan.
+pub fn plan_legend(can_edit_message: bool, can_skip_push: bool) -> String {
+    let mut keys = vec!["[Enter] run"];
+    if can_edit_message {
+        keys.push("[e] edit message");
+    }
+    if can_skip_push {
+        keys.push("[s] don't push");
+    }
+    keys.push("[q] cancel");
+    keys.join(" · ")
+}
+
 /// Highlight `[key]` labels in a legend (accent yellow, design handoff colour
 /// table) when color is on; plain text otherwise.
 pub fn style_keys(legend: &str) -> String {

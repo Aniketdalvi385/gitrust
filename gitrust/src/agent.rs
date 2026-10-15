@@ -2364,7 +2364,57 @@ async fn execute_pipeline(
     // Confirmation gate: one keypress, exactly as the legend says (Enter runs,
     // q/Esc cancels). Variant C's focus/edit/skip keys are not wired, so they
     // are not advertised.
-    let proceed = gate.prompt(&GateType::RunPlan)?;
+    // `e` edits the commit message and `s` drops a trailing push (commit now,
+    // push later); either shows the updated plan and asks again. Only those
+    // two — skipping an arbitrary step could change what later steps do.
+    let mut steps = steps;
+    let proceed = loop {
+        let can_edit_message = steps
+            .iter()
+            .any(|s| matches!(s, PipelineStep::Commit { .. }));
+        let can_skip_push =
+            steps.len() > 1 && matches!(steps.last(), Some(PipelineStep::Push { .. }));
+        match gate.prompt(&GateType::RunPlan {
+            can_edit_message,
+            can_skip_push,
+        })? {
+            GateResponse::PlanEditMessage => {
+                let current = steps
+                    .iter()
+                    .find_map(|s| match s {
+                        PipelineStep::Commit { message } => Some(message.clone()),
+                        _ => None,
+                    })
+                    .unwrap_or_default();
+                if let GateResponse::TextProvided(m) = gate.prompt(&GateType::EditableText {
+                    initial: current,
+                    label: crate::copy::COMMIT_MESSAGE_ASK.to_string(),
+                })? {
+                    let m = m.trim().to_string();
+                    if !m.is_empty() {
+                        for s in steps.iter_mut() {
+                            if let PipelineStep::Commit { message } = s {
+                                *message = m.clone();
+                            }
+                        }
+                    }
+                }
+                println!(
+                    "{}",
+                    validator.build_preview(&steps, &warnings, &ctx_for_preview, sha7)
+                );
+            }
+            GateResponse::PlanSkipPush => {
+                steps.pop();
+                println!("  {}", crate::copy::PLAN_PUSH_SKIPPED);
+                println!(
+                    "{}",
+                    validator.build_preview(&steps, &warnings, &ctx_for_preview, sha7)
+                );
+            }
+            other => break other,
+        }
+    };
     if !matches!(proceed, GateResponse::Confirmed) {
         // The snapshot was captured before the gate — clean it up since
         // nothing changed.
@@ -4782,6 +4832,112 @@ mod phase13_repair_tests {
         };
         let err = build_undo_intent(&repo, "undo", &gate).unwrap_err();
         assert!(crate::ux::is_canceled(&err), "got: {err}");
+    }
+
+    /// Answers prompts from a queue, in order (multi-step plan interactions).
+    struct SequenceGate(std::cell::RefCell<std::collections::VecDeque<GateResponse>>);
+    impl SequenceGate {
+        fn new(rs: Vec<GateResponse>) -> Self {
+            SequenceGate(std::cell::RefCell::new(rs.into()))
+        }
+    }
+    impl ConfirmationGate for SequenceGate {
+        fn prompt(&self, _gate: &GateType) -> anyhow::Result<GateResponse> {
+            Ok(self
+                .0
+                .borrow_mut()
+                .pop_front()
+                .expect("unexpected extra prompt"))
+        }
+    }
+
+    #[tokio::test]
+    async fn plan_e_edits_the_commit_message_before_running() {
+        let (mut repo, d) = repo_with_commits(1);
+        std::fs::write(d.path().join("f0.txt"), "edited\n").unwrap();
+        let gate = SequenceGate::new(vec![
+            GateResponse::PlanEditMessage,
+            GateResponse::TextProvided("Better message".into()),
+            GateResponse::Confirmed,
+        ]);
+        let steps = vec![
+            PipelineStep::Add { files: vec![] },
+            PipelineStep::Commit {
+                message: "wip".into(),
+            },
+        ];
+        execute_pipeline(&mut repo, steps, &Config::default(), &gate)
+            .await
+            .unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.summary(), Some("Better message"));
+    }
+
+    #[tokio::test]
+    async fn plan_s_skips_the_push_and_commits_locally() {
+        let remote = TempDir::new().unwrap();
+        git(remote.path(), &["init", "--bare", "-b", "main", "."]);
+        let (_r, d) = repo_with_commits(1);
+        git(
+            d.path(),
+            &["remote", "add", "origin", remote.path().to_str().unwrap()],
+        );
+        git(d.path(), &["push", "-q", "-u", "origin", "main"]);
+        let mut repo = Repository::open(d.path()).unwrap();
+        std::fs::write(d.path().join("f0.txt"), "edited\n").unwrap();
+        let gate = SequenceGate::new(vec![GateResponse::PlanSkipPush, GateResponse::Confirmed]);
+        let steps = vec![
+            PipelineStep::Add { files: vec![] },
+            PipelineStep::Commit {
+                message: "local only".into(),
+            },
+            PipelineStep::Push {
+                remote: "origin".into(),
+                branch: "main".into(),
+                set_upstream: false,
+            },
+        ];
+        execute_pipeline(&mut repo, steps, &Config::default(), &gate)
+            .await
+            .unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        assert_eq!(head.summary(), Some("local only"));
+        // The remote still has the old tip: the push was skipped.
+        let remote_repo = Repository::open(remote.path()).unwrap();
+        let remote_tip = remote_repo
+            .find_reference("refs/heads/main")
+            .unwrap()
+            .target()
+            .unwrap();
+        assert_ne!(remote_tip, head.id());
+    }
+
+    #[test]
+    fn plan_keys_offer_edit_and_skip_only_when_they_apply() {
+        use crate::commands::GateResponse as R;
+        use crossterm::event::KeyCode as K;
+        let k = |c, edit, skip| crate::ux::plan_key(c, false, edit, skip);
+        assert!(matches!(
+            k(K::Char('e'), true, false),
+            Some(R::PlanEditMessage)
+        ));
+        assert!(
+            k(K::Char('e'), false, false).is_none(),
+            "no commit step → e does nothing"
+        );
+        assert!(matches!(
+            k(K::Char('s'), false, true),
+            Some(R::PlanSkipPush)
+        ));
+        assert!(k(K::Char('s'), false, false).is_none());
+        assert_eq!(
+            crate::copy::plan_legend(true, true),
+            "[Enter] run · [e] edit message · [s] don't push · [q] cancel"
+        );
+        assert_eq!(
+            crate::copy::plan_legend(false, false),
+            "[Enter] run · [q] cancel"
+        );
     }
 
     #[tokio::test]

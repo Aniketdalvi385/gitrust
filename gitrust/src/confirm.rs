@@ -18,7 +18,10 @@ impl ConfirmationGate for InquireGate {
         match gate {
             GateType::None => Ok(GateResponse::Confirmed),
 
-            GateType::RunPlan => crate::ux::run_plan_keypress(),
+            GateType::RunPlan {
+                can_edit_message,
+                can_skip_push,
+            } => crate::ux::run_plan_keypress(*can_edit_message, *can_skip_push),
 
             GateType::SimpleConfirm { message } => {
                 let confirmed = prompt_result(
@@ -381,7 +384,7 @@ pub struct AutoConfirmGate;
 impl ConfirmationGate for AutoConfirmGate {
     fn prompt(&self, gate: &GateType) -> anyhow::Result<GateResponse> {
         match gate {
-            GateType::None | GateType::RunPlan => Ok(GateResponse::Confirmed),
+            GateType::None | GateType::RunPlan { .. } => Ok(GateResponse::Confirmed),
             GateType::SimpleConfirm { .. } => Ok(GateResponse::Confirmed),
             GateType::FileMultiSelect { classification, .. } => {
                 // Select all related and uncertain files automatically
@@ -488,7 +491,7 @@ impl ScriptedGate {
 impl ConfirmationGate for ScriptedGate {
     fn prompt(&self, gate: &GateType) -> anyhow::Result<GateResponse> {
         match gate {
-            GateType::None | GateType::RunPlan | GateType::SimpleConfirm { .. } => {
+            GateType::None | GateType::RunPlan { .. } | GateType::SimpleConfirm { .. } => {
                 Ok(GateResponse::Confirmed)
             }
             GateType::TypeToConfirm { .. } => {

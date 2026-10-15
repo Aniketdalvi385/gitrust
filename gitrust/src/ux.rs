@@ -47,12 +47,15 @@ pub fn prompt_result<T>(r: Result<T, inquire::InquireError>, what: &str) -> anyh
 // The plan's one-key prompt
 // =============================================================================
 
-/// What a key does at "run this plan?": `Some(Confirmed)` / `Some(Aborted)`,
-/// or `None` to ignore it (any other key — so a stray keystroke never runs a
-/// plan). Matches the printed legend `[Enter] run · [q] cancel`.
+/// What a key does at "run this plan?": run, cancel, edit the commit message
+/// (`e`, only when the plan commits) or drop a trailing push (`s`, only when
+/// the plan ends in one); `None` = ignore (a stray key never runs a plan).
+/// Matches the printed legend, `copy::plan_legend`.
 pub fn plan_key(
     code: crossterm::event::KeyCode,
     ctrl: bool,
+    can_edit_message: bool,
+    can_skip_push: bool,
 ) -> Option<crate::commands::GateResponse> {
     use crate::commands::GateResponse;
     use crossterm::event::KeyCode as K;
@@ -62,6 +65,8 @@ pub fn plan_key(
         K::Char('q') | K::Char('Q') | K::Char('n') | K::Char('N') | K::Esc => {
             Some(GateResponse::Aborted)
         }
+        K::Char('e') | K::Char('E') if can_edit_message => Some(GateResponse::PlanEditMessage),
+        K::Char('s') | K::Char('S') if can_skip_push => Some(GateResponse::PlanSkipPush),
         _ => None,
     }
 }
@@ -82,14 +87,17 @@ impl Drop for RawMode {
 
 /// Wait for one decisive key at the plan prompt. Not a terminal (piped stdin
 /// without `--yes`) → a plain y/n line read, so scripts still work.
-pub fn run_plan_keypress() -> anyhow::Result<crate::commands::GateResponse> {
+pub fn run_plan_keypress(
+    can_edit_message: bool,
+    can_skip_push: bool,
+) -> anyhow::Result<crate::commands::GateResponse> {
     use crate::commands::GateResponse;
     use crossterm::event::{read, Event, KeyEventKind, KeyModifiers};
     use std::io::{IsTerminal, Write};
 
-    let legend = crate::copy::PLAN_KEYMAP_LEGEND;
+    let legend = crate::copy::plan_legend(can_edit_message, can_skip_push);
     if !std::io::stdin().is_terminal() {
-        print!("  {} [y/N] ", legend);
+        print!("  {} [y/N] ", crate::copy::PLAN_KEYMAP_LEGEND);
         std::io::stdout().flush().ok();
         let mut line = String::new();
         std::io::stdin().read_line(&mut line)?;
@@ -99,7 +107,7 @@ pub fn run_plan_keypress() -> anyhow::Result<crate::commands::GateResponse> {
             GateResponse::Aborted
         });
     }
-    print!("  {}  ", crate::copy::style_keys(legend));
+    print!("  {}  ", crate::copy::style_keys(&legend));
     std::io::stdout().flush().ok();
     let response = {
         let _raw = RawMode::on()?;
@@ -108,7 +116,12 @@ pub fn run_plan_keypress() -> anyhow::Result<crate::commands::GateResponse> {
                 if k.kind != KeyEventKind::Press {
                     continue;
                 }
-                if let Some(r) = plan_key(k.code, k.modifiers.contains(KeyModifiers::CONTROL)) {
+                if let Some(r) = plan_key(
+                    k.code,
+                    k.modifiers.contains(KeyModifiers::CONTROL),
+                    can_edit_message,
+                    can_skip_push,
+                ) {
                     break r;
                 }
             }
@@ -788,15 +801,28 @@ mod tests {
     fn plan_keys_do_what_the_legend_says() {
         use crate::commands::GateResponse as R;
         use crossterm::event::KeyCode as K;
-        assert!(matches!(plan_key(K::Enter, false), Some(R::Confirmed)));
-        assert!(matches!(plan_key(K::Char('y'), false), Some(R::Confirmed)));
+        assert!(matches!(
+            plan_key(K::Enter, false, false, false),
+            Some(R::Confirmed)
+        ));
+        assert!(matches!(
+            plan_key(K::Char('y'), false, false, false),
+            Some(R::Confirmed)
+        ));
         for k in [K::Char('q'), K::Char('n'), K::Esc] {
-            assert!(matches!(plan_key(k, false), Some(R::Aborted)), "{:?}", k);
+            assert!(
+                matches!(plan_key(k, false, false, false), Some(R::Aborted)),
+                "{:?}",
+                k
+            );
         }
-        assert!(matches!(plan_key(K::Char('c'), true), Some(R::Aborted)));
+        assert!(matches!(
+            plan_key(K::Char('c'), true, false, false),
+            Some(R::Aborted)
+        ));
         // Anything else is ignored — a stray key never runs a plan.
         for k in [K::Char('x'), K::Char(' '), K::Tab, K::Char('c')] {
-            assert!(plan_key(k, false).is_none(), "{:?}", k);
+            assert!(plan_key(k, false, false, false).is_none(), "{:?}", k);
         }
     }
 

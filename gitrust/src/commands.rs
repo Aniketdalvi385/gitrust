@@ -551,8 +551,12 @@ pub enum GateType {
     /// Simple Y/n prompt, default Y.
     SimpleConfirm { message: String },
     /// "Run this plan?" — one keypress: Enter/y runs, q/n/Esc/Ctrl-C cancels
-    /// (exactly what the plan's legend says). `--yes` confirms it.
-    RunPlan,
+    /// (exactly what the plan's legend says); `e` edits the commit message when
+    /// the plan commits, `s` drops a trailing push. `--yes` confirms it.
+    RunPlan {
+        can_edit_message: bool,
+        can_skip_push: bool,
+    },
     /// File multi-select grouped by confidence.
     /// When `show_all` is false (default), files classified as Unrelated are
     /// hidden from the picker — the user opts in via the `--show-all` CLI flag.
@@ -616,6 +620,10 @@ pub enum GateResponse {
     Aborted,
     /// User picked a choice — index into the original options vector.
     Chose(usize),
+    /// At the plan: edit the commit message, then show the plan again.
+    PlanEditMessage,
+    /// At the plan: drop the trailing push (commit now, push later).
+    PlanSkipPush,
 }
 
 // =============================================================================
