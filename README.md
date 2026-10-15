@@ -186,6 +186,7 @@ gitrust/                     the Rust crate (binary + 24 modules, ~23k LOC)
   src/                       the 5-layer pipeline; kev_ops.json = the 36 operations
   CLAUDE.md                  authoritative architecture reference
 docs/
+  v0.5.0_fix_plan.md         the v0.4.1 acceptance findings: root causes, fixes, order
   kev_migration_research.md  the move to Kev, the fine-tunes, every measurement
   model-card/                the Hugging Face model card
   classifier_eval/           eval sets, harnesses, training data, Colab notebooks
