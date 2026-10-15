@@ -59,9 +59,16 @@ impl FileResolver for TwoPassResolver {
         // Merge filename matches (always "related") with semantic results
         let mut related: Vec<ClassifiedFile> = filename_matches
             .iter()
-            .map(|path| ClassifiedFile {
-                path: path.clone(),
-                reason: "filename match".to_string(),
+            .map(|path| {
+                let change = manifests
+                    .iter()
+                    .find(|m| &m.path == path)
+                    .map(|m| m.change_type.clone())
+                    .unwrap_or(crate::manifest::ChangeType::Modified);
+                ClassifiedFile {
+                    path: path.clone(),
+                    reason: file_reason(Why::NameMatch, feature_hint, &change, None),
+                }
             })
             .collect();
         related.extend(semantic_result.related);
@@ -157,7 +164,7 @@ async fn classify_manifest_via_kev(
         for (f, p) in chunk.iter().zip(probs) {
             let file = ClassifiedFile {
                 path: f.path.clone(),
-                reason: format!("kev p={:.2}", p),
+                reason: file_reason(Why::Band(band(p)), feature, &f.change_type, Some(p)),
             };
             match band(p) {
                 Band::Related => result.related.push(file),
@@ -167,6 +174,42 @@ async fn classify_manifest_via_kev(
         }
     }
     Ok(result)
+}
+
+/// Why a file landed in its bucket — for the picker's per-file reason.
+#[derive(Debug, PartialEq, Eq)]
+enum Why {
+    NameMatch,
+    Band(Band),
+}
+
+/// The picker's per-file reason in plain words: what changed · why it's
+/// grouped there ("edited · name matches “login”"). The model's probability is
+/// appended only under GITRUST_DEBUG.
+fn file_reason(
+    why: Why,
+    feature: &str,
+    change: &crate::manifest::ChangeType,
+    p: Option<f32>,
+) -> String {
+    use crate::manifest::ChangeType as C;
+    let what = match change {
+        C::Added => "new",
+        C::Modified => "edited",
+        C::Deleted => "deleted",
+        C::Renamed => "renamed",
+    };
+    let because = match why {
+        Why::NameMatch => format!("name matches “{}”", feature),
+        Why::Band(Band::Related) => format!("likely part of “{}”", feature),
+        Why::Band(Band::Uncertain) => format!("might be part of “{}” — your call", feature),
+        Why::Band(Band::Unrelated) => "looks unrelated".to_string(),
+    };
+    let dbg = match p {
+        Some(p) if std::env::var("GITRUST_DEBUG").is_ok() => format!("  (p={:.2})", p),
+        _ => String::new(),
+    };
+    format!("{} · {}{}", what, because, dbg)
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -353,6 +396,42 @@ mod tests {
         assert!(errors
             .iter()
             .any(|e| matches!(e, FileValidationError::BinaryFile(_))));
+    }
+
+    #[test]
+    fn test_file_reasons_are_plain_language() {
+        // The picker used to show "kev p=0.77" — a model internal.
+        assert_eq!(
+            file_reason(Why::NameMatch, "login", &ChangeType::Modified, None),
+            "edited · name matches “login”"
+        );
+        assert_eq!(
+            file_reason(
+                Why::Band(Band::Related),
+                "login",
+                &ChangeType::Added,
+                Some(0.77)
+            ),
+            "new · likely part of “login”"
+        );
+        assert_eq!(
+            file_reason(
+                Why::Band(Band::Uncertain),
+                "login",
+                &ChangeType::Modified,
+                Some(0.63)
+            ),
+            "edited · might be part of “login” — your call"
+        );
+        assert_eq!(
+            file_reason(
+                Why::Band(Band::Unrelated),
+                "login",
+                &ChangeType::Deleted,
+                Some(0.1)
+            ),
+            "deleted · looks unrelated"
+        );
     }
 
     #[test]

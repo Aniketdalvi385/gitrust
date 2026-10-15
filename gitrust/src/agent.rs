@@ -2463,8 +2463,10 @@ async fn execute_pipeline(
                         | PipelineStep::DiscardLocal { .. }
                 ) {
                     if let Some(new_dir) = new_trash_dir_since(&trash_before) {
-                        let note =
-                            crate::copy::trash_backup_note(&new_dir, config.trash_retention_days);
+                        let note = crate::copy::trash_backup_note(
+                            &crate::format::tilde_home(&new_dir),
+                            config.trash_retention_days,
+                        );
                         println!("  {}  {}", dim("│"), dim(&note));
                     }
                 }
@@ -3842,7 +3844,18 @@ fn summarize_step(
             }
         }
         P::StashPop => Some("→ Restored stashed changes (stash entry removed)".to_string()),
-        P::Reset { mode, .. } => Some(format!("→ Reset ({:?})", mode).to_lowercase()),
+        P::Reset {
+            mode: ResetMode::Hard,
+            to_oid: None,
+        } => Some("→ Discarded the changes to tracked files".to_string()),
+        P::Reset { mode, .. } => Some(
+            match mode {
+                ResetMode::Soft => "→ Moved the branch back — the changes are staged",
+                ResetMode::Mixed => "→ Moved the branch back — the changes are in your files",
+                ResetMode::Hard => "→ Moved the branch back — the changes were discarded",
+            }
+            .to_string(),
+        ),
         P::Undo {
             undone_summary,
             undone_sha,

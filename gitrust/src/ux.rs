@@ -300,7 +300,11 @@ impl Spinner {
             while !stop2.load(Ordering::Relaxed) {
                 let label = text.lock().map(|t| t.clone()).unwrap_or_default();
                 let secs = started.elapsed().as_secs();
-                let elapsed = if secs >= 2 { format!(" · {}s", secs) } else { String::new() };
+                let elapsed = if secs >= 2 {
+                    format!(" · {}s", secs)
+                } else {
+                    String::new()
+                };
                 let line = format!("{} {}{}", frames[i % frames.len()], label, elapsed);
                 let mut err = std::io::stderr();
                 if plain {

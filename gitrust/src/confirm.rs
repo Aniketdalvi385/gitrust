@@ -188,119 +188,105 @@ fn humanize_age(secs: u64) -> String {
     format!("{} {}{} ago", n, unit, if n == 1 { "" } else { "s" })
 }
 
-/// File multi-select bucketed by classifier confidence:
-///   • Related   — pre-checked
-///   • Uncertain — visible, not pre-checked
-///   • Unrelated — hidden by default (opt in via `--show-all`)
-///
-/// Each row carries the classifier's per-file reason as dim trailing text so
-/// the user can see *why* the file was bucketed without having to ask.
-fn prompt_file_multiselect(
-    classification: &ClassificationResult,
-    show_all: bool,
-) -> anyhow::Result<GateResponse> {
-    let n_related = classification.related.len();
-    let n_uncertain = classification.uncertain.len();
-    let n_unrelated = classification.unrelated.len();
+/// What the file picker shows: one row per file, pre-checked when related.
+struct FilePickerModel {
+    paths: Vec<String>,
+    labels: Vec<String>,
+    defaults: Vec<usize>,
+    header: String,
+    hidden_note: Option<String>,
+}
 
-    // Bucket header — printed once before inquire takes over.
-    println!();
-    println!("Select files to stage");
-    println!("  Related   ({}, pre-checked)", n_related);
-    println!("  Uncertain ({}, visible, not pre-checked)", n_uncertain);
-    if n_unrelated > 0 {
-        if show_all {
-            println!("  Unrelated ({}, shown via --show-all)", n_unrelated);
-        } else {
-            println!(
-                "  Unrelated ({}, hidden · re-run with --show-all to see)",
-                n_unrelated
-            );
-        }
-    }
-    println!();
-
-    let use_color = crate::danger::use_color();
+/// Rows for the file picker (design handoff P5, within one inquire list):
+/// related files pre-checked, then uncertain ones unchecked, then — only with
+/// `--show-all` — the unrelated ones. Each row is the path and, in one aligned
+/// dim column, what changed · why it's there. No bucket tags, no model numbers.
+fn file_picker_model(c: &ClassificationResult, show_all: bool, color: bool) -> FilePickerModel {
     let dim = |s: &str| -> String {
-        if use_color {
+        if color {
             format!("\x1b[2m{}\x1b[0m", s)
         } else {
             s.to_string()
         }
     };
-
-    let mut options: Vec<FileOption> = Vec::new();
-    let mut default_selected: Vec<usize> = Vec::new();
-
-    for f in &classification.related {
-        let idx = options.len();
-        options.push(FileOption {
-            path: f.path.clone(),
-            label: format!("[related]   {}  {}", f.path, dim(&f.reason)),
-        });
-        default_selected.push(idx);
-    }
-
-    for f in &classification.uncertain {
-        options.push(FileOption {
-            path: f.path.clone(),
-            label: format!("[uncertain] {}  {}", f.path, dim(&f.reason)),
-        });
-    }
-
+    let mut rows: Vec<&crate::commands::ClassifiedFile> = Vec::new();
+    rows.extend(c.related.iter());
+    rows.extend(c.uncertain.iter());
     if show_all {
-        for f in &classification.unrelated {
-            options.push(FileOption {
-                path: f.path.clone(),
-                label: format!("[unrelated] {}  {}", f.path, dim(&f.reason)),
-            });
-        }
+        rows.extend(c.unrelated.iter());
     }
+    let width = rows
+        .iter()
+        .map(|f| f.path.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(48);
+    let total = c.related.len() + c.uncertain.len() + c.unrelated.len();
+    let n_hidden = if show_all { 0 } else { c.unrelated.len() };
+    FilePickerModel {
+        paths: rows.iter().map(|f| f.path.clone()).collect(),
+        labels: rows
+            .iter()
+            .map(|f| format!("{:<width$}  {}", f.path, dim(&f.reason), width = width))
+            .collect(),
+        defaults: (0..c.related.len()).collect(),
+        header: format!(
+            "Pick the files for this commit · {} of {} changed file{} pre-selected",
+            c.related.len(),
+            total,
+            if total == 1 { "" } else { "s" }
+        ),
+        hidden_note: (n_hidden > 0).then(|| {
+            format!(
+                "{} other changed file{} look{} unrelated and {} hidden — --show-all lists {}.",
+                n_hidden,
+                if n_hidden == 1 { "" } else { "s" },
+                if n_hidden == 1 { "s" } else { "" },
+                if n_hidden == 1 { "is" } else { "are" },
+                if n_hidden == 1 { "it" } else { "them" },
+            )
+        }),
+    }
+}
 
-    if options.is_empty() {
+fn prompt_file_multiselect(
+    classification: &ClassificationResult,
+    show_all: bool,
+) -> anyhow::Result<GateResponse> {
+    let m = file_picker_model(classification, show_all, crate::danger::use_color());
+    println!();
+    println!("{}", m.header);
+    if let Some(note) = &m.hidden_note {
+        println!("  {}", note);
+    }
+    if m.paths.is_empty() {
         println!("  No files to stage.");
-        if n_unrelated > 0 && !show_all {
-            println!(
-                "  {} file(s) hidden as unrelated — re-run with `--show-all` to see them.",
-                n_unrelated
-            );
-        }
         return Ok(GateResponse::FilesSelected(vec![]));
     }
-
-    let display_labels: Vec<String> = options.iter().map(|o| o.label.clone()).collect();
-
-    let selected = prompt_result(
-        MultiSelect::new(
-            "Select files to stage (Space to toggle, Enter to confirm):",
-            display_labels,
-        )
-        .with_default(&default_selected)
-        .prompt(),
+    // After the pick, echo the chosen paths only.
+    let paths = m.paths.clone();
+    let echo = move |chosen: &[inquire::list_option::ListOption<&String>]| -> String {
+        chosen
+            .iter()
+            .map(|o| paths[o.index].clone())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let chosen = prompt_result(
+        MultiSelect::new("Stage which files?", m.labels.clone())
+            .with_default(&m.defaults)
+            .with_help_message(crate::copy::FILE_PICKER_HELP)
+            .with_formatter(&echo)
+            .with_page_size(12)
+            .raw_prompt(),
         "File selection prompt",
     )?;
-
-    let selected_paths: Vec<String> = selected
-        .iter()
-        .filter_map(|label| {
-            options
-                .iter()
-                .find(|o| &o.label == label)
-                .map(|o| o.path.clone())
-        })
-        .collect();
-
-    if selected_paths.is_empty() {
-        if n_unrelated > 0 && !show_all {
-            println!(
-                "  Nothing staged. {} file(s) hidden as unrelated — re-run with `--show-all` to include them.",
-                n_unrelated
-            );
-        }
-        Ok(GateResponse::Aborted)
-    } else {
-        Ok(GateResponse::FilesSelected(selected_paths))
+    let selected: Vec<String> = chosen.iter().map(|o| m.paths[o.index].clone()).collect();
+    if selected.is_empty() {
+        // Nothing chosen = nothing to commit: back out calmly (exit 1).
+        return crate::ux::canceled();
     }
+    Ok(GateResponse::FilesSelected(selected))
 }
 
 /// Print a beginner-friendly description before a TypeToConfirm prompt.
@@ -349,12 +335,6 @@ fn prompt_type_to_confirm(expected: &str, message: &str) -> anyhow::Result<GateR
         input if input == expected => Ok(GateResponse::Confirmed),
         _ => Ok(GateResponse::Aborted),
     }
-}
-
-/// Internal struct used to keep path + display label together.
-struct FileOption {
-    path: String,
-    label: String,
 }
 
 /// Auto-confirm gate for --yes flag and CI environments.
@@ -635,6 +615,45 @@ mod tests {
         assert!(result.is_err());
         let msg = result.unwrap_err().to_string();
         assert!(msg.contains("type-to-confirm") || msg.contains("destructive"));
+    }
+
+    #[test]
+    fn file_picker_rows_are_plain_and_aligned() {
+        let f = |p: &str, r: &str| ClassifiedFile {
+            path: p.to_string(),
+            reason: r.to_string(),
+        };
+        let c = ClassificationResult {
+            related: vec![f("src/login.rs", "edited · name matches “login”")],
+            uncertain: vec![f(
+                "README.md",
+                "edited · might be part of “login” — your call",
+            )],
+            unrelated: vec![
+                f("notes.txt", "new · looks unrelated"),
+                f("x.rs", "edited · looks unrelated"),
+            ],
+        };
+        let m = file_picker_model(&c, false, false);
+        assert_eq!(m.paths, vec!["src/login.rs", "README.md"]);
+        assert_eq!(m.defaults, vec![0]);
+        assert!(m.header.contains("1 of 4"), "{}", m.header);
+        assert!(m
+            .hidden_note
+            .as_deref()
+            .unwrap()
+            .contains("2 other changed files"));
+        // No bucket tags or model numbers; reasons line up in one column.
+        assert!(m
+            .labels
+            .iter()
+            .all(|l| !l.contains("[related]") && !l.contains("p=")));
+        let col = |l: &String| l.find("edited").unwrap();
+        assert_eq!(col(&m.labels[0]), col(&m.labels[1]), "{:?}", m.labels);
+        // --show-all adds the unrelated rows, unchecked, and drops the note.
+        let all = file_picker_model(&c, true, false);
+        assert_eq!(all.paths.len(), 4);
+        assert!(all.hidden_note.is_none());
     }
 
     #[test]

@@ -69,7 +69,7 @@ pub const PLAN_DONE_FOOTER: &str = "Done";
 /// the wrong thing to point at.)
 pub fn plan_next_hint(commits_made: usize, pushed: bool, ahead: usize) -> String {
     match (commits_made > 0, pushed) {
-        (true, true) => "Next: gitrust \"status\" · changed your mind? gitrust \"undo\" (adds a revert commit, since it's pushed)".to_string(),
+        (true, true) => "Next: gitrust \"status\" · changed your mind? gitrust \"undo\" (reverts it — it's pushed)".to_string(),
         (true, false) if ahead > 0 => "Next: gitrust \"push\" · changed your mind? gitrust \"undo\"".to_string(),
         (true, false) => "Next: gitrust \"status\" · changed your mind? gitrust \"undo\"".to_string(),
         (false, _) => "Next: gitrust \"status\"".to_string(),
@@ -442,6 +442,9 @@ pub const CANCELED_GLYPH: &str = "↪";
 
 /// Help line under every pick-one menu (inquire's default omits Esc).
 pub const CHOICE_HELP: &str = "↑↓ move · Enter choose · Esc cancel";
+/// Help line under the file picker.
+pub const FILE_PICKER_HELP: &str =
+    "↑↓ move · Space toggle · → all · ← none · Enter stage · Esc cancel";
 /// Help line under free-text prompts (branch names, commit messages, URLs…).
 pub const TEXT_PROMPT_HELP: &str = "Enter to continue · Esc to cancel";
 /// Validator message for an empty free-text answer — generic on purpose: the

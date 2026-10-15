@@ -649,7 +649,8 @@ impl Validator for DefaultValidator {
                         });
                     Some(&all_files)
                 }
-                PipelineStep::Add { files } => Some(files),
+                // ≤3 named files are already in the step label — don't list twice.
+                PipelineStep::Add { files } if files.len() > 3 => Some(files),
                 _ => None,
             };
             if let Some(files) = step_files {
@@ -957,11 +958,27 @@ pub fn format_step_label(step: &PipelineStep) -> (&'static str, String) {
         PipelineStep::Checkout { target } => ("checkout", target.clone()),
         PipelineStep::Stash => ("stash", String::new()),
         PipelineStep::StashPop => ("stash pop", String::new()),
-        PipelineStep::Reset { mode, .. } => {
+        // Say what happens to the user's work, not the git mode name.
+        PipelineStep::Reset {
+            mode: ResetMode::Hard,
+            to_oid: None,
+        } => (
+            "discard",
+            "uncommitted changes to tracked files".to_string(),
+        ),
+        PipelineStep::Reset { mode, to_oid } => {
+            let target = to_oid
+                .as_deref()
+                .map(|o| format!(" to {}", &o[..o.len().min(7)]))
+                .unwrap_or_default();
             let detail = match mode {
-                ResetMode::Soft => "soft (keeps staged)".to_string(),
-                ResetMode::Mixed => "mixed (unstages files)".to_string(),
-                ResetMode::Hard => "hard (discards working tree)".to_string(),
+                ResetMode::Soft => format!("move the branch back{} — changes stay staged", target),
+                ResetMode::Mixed => {
+                    format!("move the branch back{} — changes stay in files", target)
+                }
+                ResetMode::Hard => {
+                    format!("move the branch back{} — changes are discarded", target)
+                }
             };
             ("reset", detail)
         }
@@ -1033,7 +1050,7 @@ pub fn format_step_label(step: &PipelineStep) -> (&'static str, String) {
             };
             ("squash", format!("last {} → \"{}\"", n, preview))
         }
-        PipelineStep::Clean { .. } => ("clean", "delete untracked files".to_string()),
+        PipelineStep::Clean { .. } => ("delete", "untracked files".to_string()),
     }
 }
 

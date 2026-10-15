@@ -28,6 +28,15 @@ pub fn format_relative(epoch_secs: i64) -> String {
 /// Returns None for unknown hosts — never guesses.
 ///
 /// Supported hosts: github.com, gitlab.com, bitbucket.org.
+/// Show a path under the home directory as `~/…` (shorter, and the same on
+/// every machine in screenshots and docs).
+pub fn tilde_home(path: &str) -> String {
+    match dirs::home_dir().map(|h| h.to_string_lossy().into_owned()) {
+        Some(h) if !h.is_empty() && path.starts_with(&h) => format!("~{}", &path[h.len()..]),
+        _ => path.to_string(),
+    }
+}
+
 pub fn remote_to_web_url(url: &str) -> Option<String> {
     let url = url.trim();
     let (host, path) = parse_host_and_path(url)?;
