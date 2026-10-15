@@ -127,12 +127,16 @@ Select files to stage                               Pick the files for this comm
   [ ] [uncertain] notes.txt  kev p=0.30             [↑↓ move · Space toggle · → all · ← none · Enter stage · Esc cancel]
 ```
 
-## 5. Deliberate decisions (call them out if you disagree)
+## 5. Deliberate decisions (confirmed by the owner, 2026-10-15)
 
 - **Every back-out exits 1.** Esc, Ctrl-C, `q`, declining a plan, an empty file selection: nothing was
   done, and a not-done operation must not read as success to a script (the same rule already applied
   to refusals and pauses). The message is calm, not an error.
-- **No escape rows in menus**, Esc only — per the design handoff. The help line under every menu says so.
+- **No escape rows in menus** — per the design handoff (owner left this one to us; kept). Esc, `q` and
+  Ctrl-C all cancel a numbered menu and the help line under every menu says so; a "none of these" row
+  would take a number slot, sit among real choices as if it were one, and tempt the model-facing
+  code to treat "none" as an answer.
+- **Push is ⚠ only on a shared branch** (main/master/develop/trunk or someone else's commits).
 - **Type-ahead never confirms a plan.** An Enter pressed before the plan prompt exists arrives as
   Ctrl-J and is ignored; you confirm a plan you have seen.
 - **The model's probability is debug-only.** Users see what GiTrust understood, not how sure the model was.
