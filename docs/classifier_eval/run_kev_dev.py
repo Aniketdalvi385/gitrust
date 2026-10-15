@@ -15,6 +15,8 @@ Guards (both learned the hard way, docs/kev_migration_research.md §10):
 Usage:
   python3 run_kev_dev.py --expect-run jaredpalmer/kev-0.8b@v1.0 --tag stock
   python3 run_kev_dev.py --expect-run runs/gitrust-v1 --tag ft-T1 --fit-temperature
+  python3 run_kev_dev.py --expect-run runs/gitrust-v2 --dev kev_dev_r2.jsonl --tag ft2-T1 \
+      --fit-temperature --grid-max 16     # round 2: the 0.25..4 fit hit its upper edge
 """
 import json, math, os, sys, time, urllib.request
 
@@ -27,6 +29,8 @@ URL = arg("--url", "http://127.0.0.1:8009")
 EXPECT = arg("--expect-run")
 TAG = arg("--tag", "dev")
 FIT = "--fit-temperature" in sys.argv
+DEV = arg("--dev", "kev_dev.jsonl")
+GRID_MAX = float(arg("--grid-max", "4"))
 
 def post(body):
     req = urllib.request.Request(URL + "/v1/systemone", data=json.dumps(body).encode(),
@@ -58,7 +62,7 @@ def main():
         sys.exit("REFUSING: --fit-temperature needs the server at KEV_TEMPERATURE=1.0")
 
     rows = []; t0 = time.time()
-    for line in open(os.path.join(HERE, "kev_dev.jsonl")):
+    for line in open(os.path.join(HERE, DEV)):
         r = json.loads(line); q = r["questions"]["op"]; gold = q.pop("label")
         kind = "in_progress" if "something_else" in q["criteria"] else "routing"
         a = post({"model": "kev-latest", "state": r["state"], "questions": {"op": q}})["answers"]["op"]
@@ -73,10 +77,12 @@ def main():
 
     out = {"run": m["run"], "server_temperature": m["temperature"], "rows": rows}
     if FIT:
-        grid = [0.25 * (16 ** (i / 120)) for i in range(121)]  # 0.25 .. 4, log grid (Kev's own range)
+        span = GRID_MAX / 0.25   # 0.25 .. GRID_MAX, log grid (default 4 = Kev's own range)
+        grid = [0.25 * (span ** (i / 120)) for i in range(121)]
         T = min(grid, key=lambda t: nll(rows, t))
-        print(f"\nfitted temperature T={T:.3f} (min dev NLL over 0.25..4)")
-        for t in (1.0, T):
+        edge = " — AT THE GRID EDGE, widen --grid-max" if T >= grid[-1] * 0.999 else ""
+        print(f"\nfitted temperature T={T:.3f} (min dev NLL over 0.25..{GRID_MAX:g}){edge}")
+        for t in sorted({1.0, 4.0, T}):
             print(f"  T={t:.2f}: NLL={nll(rows, t):.3f}  ECE={ece(rows, t):.3f}")
         out["fitted_temperature"] = T
     else:

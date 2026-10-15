@@ -54,6 +54,9 @@ repo; where a number is a single run on a small set, it is marked as such.
   rebase/cherry-pick control phrasing routed correctly in a real conflicted repo. It exposed a
   vocabulary gap — no "commit everything and push" op (routed to plain `push`) — and a topic-capture
   gap (fixed).
+- **Round 2 (§12.10)** — `gitrust-v2` with a 36th option, `commit_push`: 44-case **41/44** in both
+  states (v1 over the same 36 options: 38/39), all commit-and-push phrasings right, and **0 wrong
+  actions that change anything** through the binary on both sets; new soft misses all land on menus.
 - The architecture thesis survives and sharpens: the model still only *ranks*; deterministic code
   decides, captures every argument, and gates everything destructive. What changed is that the
   thing doing the ranking is now good at ranking.
@@ -536,7 +539,8 @@ add_commit 0.97, quoted message captured, committed; "put my work up on github" 
 
 ### 12.6 Using the fine-tune
 
-`~/.gitrust.toml`: `kev_run = "runs/gitrust-v1"` (resolved inside `kev_dir`). The checkpoint
+`~/.gitrust.toml`: `kev_run = "runs/gitrust-v1"` (resolved inside `kev_dir`) — superseded by
+`runs/gitrust-v2` (§12.10). The checkpoint
 carries its fitted temperature, so no environment variable is needed. The weights exist only on
 this machine (and the Colab download); the binary's default stays the public stock checkpoint
 until the fine-tune is published somewhere `gitrust setup` can fetch it.
@@ -713,6 +717,67 @@ uploaded data is the 36-op set and no eval file was uploaded; step 4 scores stoc
 `kev_dev_r2.jsonl` **and fits the temperature itself**, writing it into `head.pt` with provenance
 (round 1 shipped at T = 1). Expected ~2 h on a T4.
 
+### 12.10 Round 2 results (`gitrust-v2`)
+
+**The run.** `kev_finetune_colab_r2.ipynb`, same flags as round 1, from stock, on
+`kev_train_r2.jsonl` (1,481 records, 36 options). Colab dev check: stock 186/259 (71.8%),
+fine-tuned **241/259 (93.1%)** at T = 1 (locally on MLX: 240/259 — 1 row moved between backends).
+The notebook's temperature fit landed on **4.000, the top of its 0.25–4 grid**; refitted locally over
+0.25–16 (`run_kev_dev.py --grid-max 16`): T = 4.14, NLL 0.447 vs 0.449 at 4.0, ECE 0.031 vs 0.024 —
+no practical difference, so the notebook's 4.0 stays in `head.pt`. Raw (T = 1) v2 is more
+over-confident than v1 was (NLL 1.40 vs 0.80), hence the larger temperature. Dev numbers are not
+comparable with round 1's (different dev set).
+
+**Model level** (36 options everywhere; v1 = `gitrust-v1` asked over the same 36):
+
+| | v1 | **v2** |
+|---|---|---|
+| 44-case clean / dirty | 38 / 39 | **41 / 41** |
+| safety / out-of-scope | 5/5 · 4/4 | 5/5 · 4/4 |
+| order-stable (`/permute`, 6 orders) | 39/44 (35 ops) | 37/44 |
+| eval_set_v2 clean / dirty (56) | 54 / 52 | 54 / 52 |
+| eval_set_v2 routed alone under the policy | 47 / 47, all right | 48 / 47, all right |
+| commit-and-push (S07, 4 rows) | 2 / 4 | **4 / 4** |
+| in-progress (10) | 8 | 8 |
+| Problem B banded (16) | 13 right, 0 wrong (35 ops) | 12 right, 0 wrong |
+
+What moved, v1 → v2:
+- Fixed: "push all docs/api/schema changes" → `scoped_push` (0.57–0.86; v1 chose `commit_push` or
+  `push`). **Caveat:** round 2 trained the "push all {topic} changes" shape with other topics, so
+  this gain on the 44-case set is partly taught, not generalised. "commit everything" → `add_commit`
+  0.88 (v1: `commit_push` 0.51). "commit n push" → `commit_push` 0.63 / 0.60. "nuke the history",
+  "wipe … entire history" (dirty) → `delete_repo` 0.66 / 0.91. "what did i do this week" (clean) →
+  `log`.
+- Regressed: "roll back that last commit i just made" → `revert` 0.56 / 0.61 (v1 `undo` 0.77 /
+  0.68) — the one wrong answer above the destructive bar in the eval rankings; "where am i right
+  now" (dirty) → not-Git 0.83 (v1 0.58); "whats goin on" → not-Git 0.45 / 0.57 (v1 `status`); bare
+  "remotes" (dirty) → `add_remote` 0.48.
+- Unchanged: "psuh" → not-Git (0.23 / 0.34) — typo variants were trained, but "psuh" itself is
+  held out and the model did not generalise to it; "whats conflicting" → `something_else` then
+  `merge_preview` (no "show conflicts" op).
+
+**Whole system through the binary** (`run_binary_policy.py`):
+
+| | v1 (36 ops) clean / dirty | **v2** clean / dirty |
+|---|---|---|
+| 21 non-fast-path v1 queries: acted right¹ | 14 / 13 | 14 / 14 |
+| … refused, right / menu | 1 / 6 · 3 / 5 | 3 / 4 · 3 / 4 |
+| eval_set_v2 (68): acted right / menu | 46 / 10 · 46 / 11 | **48 / 8 · 48 / 9** |
+| wrong action (read-only "whats conflicting" → `merge_preview`) | 1 · 1 | 1 · 1 |
+| **wrong action that changes anything** | **0** | **0** |
+
+¹ incl. "collapse my last few commits": `squash` routed, the count then asked for.
+
+The `revert` regression never acts in the binary: on a real repo its probability falls below the
+destructive bar and "roll back that last commit i just made" becomes a menu (both states); had it
+cleared the bar, the reordered re-ask and `revert`'s own confirmation would still stand between it
+and the repo. "whats goin on" and "where am i right now" become menus, not refusals (both < 0.9).
+
+**Verdict.** v2 is better than v1 on everything the round targeted (commit-and-push, scoped pushes,
+history-wiping, commit vs commit-and-push) and equal elsewhere on the owner's set, with three new
+soft misses that all land on menus. It replaces v1 as the recommended opt-in: `kev_run =
+"runs/gitrust-v2"`. Still not the shipped default — the weights are unpublished.
+
 ## 13. What this changes in the write-up (`writing/`)
 
 - The spine holds and gets sharper: *the intelligence belongs in deterministic layers around the
@@ -747,7 +812,9 @@ uploaded data is the 36-op set and no eval file was uploaded; step 4 scores stoc
   new held-out phrasings, since these eval items cannot be trained on. Add from §12.8: a
   `commit_push` op (commit everything and push — currently routed to plain `push`), typos, and
   "what did i do …" as history. `eval_set_v2.json` is the yardstick and must never be trained on.
-  **Prepared (§12.9):** op wired, data generated, `kev_finetune_colab_r2.ipynb` ready to run.
+  **Done (§12.9–12.10):** `gitrust-v2` trained and measured. Round 3 candidates: undo vs revert for
+  "roll back …", casual status ("whats goin on", "where am i"), typo robustness beyond templates, a
+  "show conflicts" request mid-operation.
 - **Manual acceptance suite** (`GiTrust-test`) needs a v0.4.0 pass. Ollama-specific cases (e.g.
   M-01 "Ollama OFF", `T_OLLAMA` fields, M-02 "LLM-path classification") must be rewritten for Kev,
   and commit tests now require the user to type the message.

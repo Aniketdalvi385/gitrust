@@ -90,7 +90,7 @@ Through v0.3.0 Layer 1 was ⚡ fast-path → ✦ an embedding router over `qwen2
 
 ## Status
 
-**v0.4.0** — Layer 1/2 moved from qwen2.5:3b (Ollama) + embedding router to stock Kev-0.8B; user-written commit messages; deterministic argument capture. Measurements, design rationale and open items: [../docs/kev_migration_research.md](../docs/kev_migration_research.md). A Colab fine-tune (`runs/gitrust-v1`, 91–93% on the 44-case set) is opt-in via `kev_run`; the harness around it adds the second-opinion checks above, the 0.9 refusal bar and the idle shutdown (research doc §12.7).
+**v0.4.0** — Layer 1/2 moved from qwen2.5:3b (Ollama) + embedding router to stock Kev-0.8B; user-written commit messages; deterministic argument capture. Measurements, design rationale and open items: [../docs/kev_migration_research.md](../docs/kev_migration_research.md). Colab fine-tunes are opt-in via `kev_run`: `runs/gitrust-v2` (round 2, 36 options incl. `commit_push`; 41/44 both states) supersedes `runs/gitrust-v1`; the harness around it adds the second-opinion checks above, the 0.9 refusal bar and the idle shutdown (research doc §12.7).
 
 
 **v0.2 (phases 9–14) complete** — history and rationale in [../docs/Build_phases_v3.md](../docs/Build_phases_v3.md) and [../docs/scenario_map.md](../docs/scenario_map.md). Further work is the Tier-2 backlog in the scenario map (interpretation-echo, RemoteRewritten response flow, SafeSwitch, cross-branch pickaxe, multi-restore RecoveryBrowser).
